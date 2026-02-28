@@ -1,0 +1,22 @@
+{
+	"schemaVersion": 1,
+	"id": "${id}",
+	"version": "${version}",
+	"name": "${name}",
+	"description": "Automatically places blocks from loaded .litematic schematics. Supports manual and AutoBuild modes with supply chest restocking.",
+	"authors": [],
+	"contact": {},
+	"environment": "client",
+	"entrypoints": {
+		"client": [
+			"dev.litematicaprinter.LitematicaPrinterMod"
+		]
+	},
+	"mixins": [],
+	"depends": {
+		"fabricloader": ">=0.18.4",
+		"minecraft": "${minecraft}",
+		"java": ">=21",
+		"fabric-api": "*"
+	}
+}
