@@ -36,18 +36,17 @@ import java.nio.file.Path;
 import java.util.*;
 
 /**
- * Automatically places blocks from a loaded {@code .litematic} schematic.
+ * Automatically places blocks from a loaded schematic.
  *
- * <p>Supports two modes:
- * <ul>
- *   <li><b>Manual (AutoBuild OFF)</b> — places blocks only within reach;
- *       the player walks themselves.</li>
- *   <li><b>AutoBuild (ON)</b> — full automation: walks to the next build zone,
+ * Supports two modes:
+ *
+ *   Manual (AutoBuild OFF) — places blocks only within reach;
+ *       the player walks themselves.
+ *   AutoBuild (ON) — full automation: walks to the next build zone,
  *       places blocks, walks to supply chests when inventory runs low,
- *       takes needed items, walks back, and resumes building.</li>
- * </ul>
+ *       takes needed items, walks back, and resumes building.
  *
- * <p>Load/unload and position commands are handled by
+ * Load/unload and position commands are handled by
  * {@link dev.litematicaprinter.command.PrinterCommand PrinterCommand}.
  */
 public class SchematicPrinter {
@@ -72,7 +71,7 @@ public class SchematicPrinter {
     // ── settings (simple fields, configurable via commands) ─────────────
 
     private int bps = 8;
-    private double range = 4.5;
+    private double range = 4.2;
     private boolean swapItems = true;
     private boolean printInAir = false;
     private SortMode sortMode = SortMode.BOTTOM_UP;
@@ -153,6 +152,7 @@ public class SchematicPrinter {
     private void disable() {
         enabled = false;
         saveCheckpoint();
+        PlacementEngine.reset();
         PathWalker.stop();
         autoState = AutoState.IDLE;
 
@@ -219,7 +219,7 @@ public class SchematicPrinter {
     public int getBps()                 { return bps; }
     public void setBps(int bps)        { this.bps = Math.max(1, Math.min(9, bps)); }
     public double getRange()           { return range; }
-    public void setRange(double range) { this.range = Math.max(2.0, Math.min(5.0, range)); }
+    public void setRange(double range) { this.range = Math.max(2.0, Math.min(4.5, range)); }
     public boolean isSwapItems()       { return swapItems; }
     public void setSwapItems(boolean v){ this.swapItems = v; }
     public boolean isPrintInAir()      { return printInAir; }
@@ -243,6 +243,19 @@ public class SchematicPrinter {
         if (mc.player == null || mc.world == null || mc.interactionManager == null) return;
 
         PlacementEngine.setBps(bps);
+
+        // Always drive the multi-tick placement pipeline
+        if (PlacementEngine.isBusy()) {
+            boolean placed = PlacementEngine.tick();
+            if (placed) {
+                blocksPlaced++;
+                noProgressTicks = 0;
+                if (schematicFile != null) {
+                    PrinterCheckpoint.onBlockPlaced(schematicFile, anchor, blocksPlaced, mc.player.getBlockPos());
+                }
+            }
+            return;
+        }
 
         if (autoBuild) {
             tickAutoBuild(mc);
@@ -272,9 +285,9 @@ public class SchematicPrinter {
         if (mc.currentScreen != null) return;
         if (!PlacementEngine.canPlace()) return;
 
-        boolean placed = tryPlaceNextBlock(mc.player, mc.world);
-        if (placed) {
-            noProgressTicks = 0;
+        boolean started = tryPlaceNextBlock(mc.player, mc.world);
+        if (started) {
+            // Pipeline started — block will be placed over next ticks
             return;
         }
 
@@ -653,10 +666,8 @@ public class SchematicPrinter {
             BlockState target = schematic.getBlockState(sx, sy, sz);
 
             if (PlacementEngine.placeBlock(worldPos, target, swapItems)) {
-                blocksPlaced++;
-                if (schematicFile != null) {
-                    PrinterCheckpoint.onBlockPlaced(schematicFile, anchor, blocksPlaced, player.getBlockPos());
-                }
+                // Pipeline started — actual placement happens over the next 2-3 ticks.
+                // Block count and checkpoint are updated in tick() when the place phase fires.
                 return true;
             }
         }

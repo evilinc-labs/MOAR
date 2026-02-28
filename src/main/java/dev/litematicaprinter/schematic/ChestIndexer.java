@@ -17,15 +17,14 @@ import java.util.*;
  * Client-side supply chest indexer that tracks the contents of opened chests
  * (and shulker boxes within them) to enable intelligent restocking.
  *
- * <h3>Why an indexer?</h3>
- * <p>On the client side, you cannot read a chest's inventory without opening
+ * On the client side, you cannot read a chest's inventory without opening
  * it.  This indexer snapshots a chest's contents every time the player opens
  * one of the registered supply chests.  The snapshot includes items held
  * directly in the chest, as well as items inside any shulker boxes found in
  * the chest (read via {@code DataComponentTypes.CONTAINER}).
  *
- * <h3>Thread safety</h3>
- * <p>All methods are called on the client/render thread only.
+ * Thread safety
+ * All methods are called on the client/render thread only.
  */
 public final class ChestIndexer {
 
@@ -74,9 +73,6 @@ public final class ChestIndexer {
      * Scans the currently open chest screen and caches the contents if the
      * chest position matches a registered supply chest.
      *
-     * <p>Call this when a {@link GenericContainerScreenHandler} is detected
-     * during the {@code RESTOCKING} state.
-     *
      * @param chestPos the world position of the chest being opened
      * @param handler  the open container screen handler
      */
@@ -117,8 +113,7 @@ public final class ChestIndexer {
     }
 
     /**
-     * Read a shulker box ItemStack's contents via
-     * {@code DataComponentTypes.CONTAINER}.
+     * Read a shulker box ItemStack's contents via DataComponentTypes.CONTAINER.
      *
      * @return itemId → count for all items inside the shulker
      */
@@ -139,15 +134,13 @@ public final class ChestIndexer {
     /**
      * Find the best supply chest for a set of needed item IDs.
      *
-     * <p>Ranking strategy:
-     * <ol>
-     *   <li>Chests that have been indexed and contain at least one needed item
+     * Ranking strategy:
+     *   Chests that have been indexed and contain at least one needed item
      *       are preferred, sorted by number of matching item types (descending),
-     *       then by distance (ascending).</li>
-     *   <li>Unindexed (never-opened) chests come next, sorted by distance.</li>
-     *   <li>Indexed chests with no matching items are sorted by distance as a
-     *       fallback (the snapshot may be stale).</li>
-     * </ol>
+     *       then by distance (ascending).
+     *   Unindexed (never-opened) chests come next, sorted by distance.
+     *   Indexed chests with no matching items are sorted by distance as a
+     *       fallback (the snapshot may be stale).
      *
      * @param from          player position
      * @param neededItemIds set of item ID strings the player needs
@@ -210,7 +203,7 @@ public final class ChestIndexer {
     }
 
     /**
-     * Get the cached snapshot for a supply chest, or {@code null} if it
+     * Get the cached snapshot for a supply chest, or null if it
      * hasn't been scanned yet.
      */
     public static ChestSnapshot getSnapshot(BlockPos pos) {

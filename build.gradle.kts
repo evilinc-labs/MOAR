@@ -24,9 +24,6 @@ dependencies {
 
     // Fabric API
     modImplementation("net.fabricmc.fabric-api:fabric-api:${property("deps.fabric_api")}")
-
-    // Baritone (cabaletta/baritone) is integrated via reflection at runtime —
-    // no compile-time dependency needed. Users install it separately.
 }
 
 loom {
@@ -79,6 +76,6 @@ publishing {
     }
 
     repositories {
-        // Add your maven repository here if needed
+        // Template
     }
 }
