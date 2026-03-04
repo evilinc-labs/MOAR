@@ -130,6 +130,10 @@ public class SchematicPrinter {
     private int noProgressTicks;
     private Set<Item> lastMissingItems = new HashSet<>();
     private int missingItemMsgCooldown;
+    /** Items the printer has given up restocking — blocks requiring these
+     *  are skipped so the build continues with available materials.
+     *  Cleared on successful restock or when AutoBuild is re-enabled. */
+    private final Set<Item> skippedItems = new HashSet<>();
     private final Set<BlockPos> failedZones = Collections.newSetFromMap(
             new LinkedHashMap<>(32, 0.75f, false) {
                 @Override protected boolean removeEldestEntry(Map.Entry<BlockPos, Boolean> eldest) {
@@ -281,6 +285,7 @@ public class SchematicPrinter {
         stuckCycles = 0;
         restockFailures = 0;
         unreachableChests.clear();
+        skippedItems.clear();
         liquidPass = false;
         triedWaypointRestock = false;
         triedLinearRestock = false;
@@ -697,8 +702,17 @@ public class SchematicPrinter {
                 } else {
                     autoState = AutoState.IDLE;
                     if (statusMessages) {
-                        ChatHelper.info("§aBuild appears complete! §e"
-                                + blocksPlaced + "§a blocks placed.");
+                        if (skippedItems.isEmpty()) {
+                            ChatHelper.info("§aBuild appears complete! §e"
+                                    + blocksPlaced + "§a blocks placed.");
+                        } else {
+                            ChatHelper.info("§aBuild finished with available materials! §e"
+                                    + blocksPlaced + "§a blocks placed."
+                                    + "\n§cMissing materials (§f" + countSkippedBlocks(mc.world)
+                                    + "§c blocks not placed):"
+                                    + "\n§7" + formatMissingItems(skippedItems)
+                                    + "\n§7Get these items and run §f/printer auto§7 to resume.");
+                        }
                     }
                 }
             }
@@ -710,8 +724,9 @@ public class SchematicPrinter {
      * required items are in the player's inventory.
      */
     private void handleMissingItems(MinecraftClient mc) {
-        // If supply chests exist, immediately go restock
-        if (PrinterDatabase.chestCount() > 0) {
+        // If supply chests exist and we haven't exhausted restock attempts,
+        // go restock.
+        if (PrinterDatabase.chestCount() > 0 && restockFailures < MAX_RESTOCK_FAILURES) {
             if (statusMessages && missingItemMsgCooldown <= 0) {
                 ChatHelper.info("§eMissing items — going to restock. Need: "
                         + formatMissingItems(lastMissingItems));
@@ -722,25 +737,17 @@ public class SchematicPrinter {
             return;
         }
 
-        // No supply chests — report what's missing and go idle
+        // Can't restock (no chests or all attempts exhausted) — skip
+        // the missing items and keep building with whatever we have.
+        skippedItems.addAll(lastMissingItems);
         if (statusMessages && missingItemMsgCooldown <= 0) {
-            StringBuilder sb = new StringBuilder("§cOut of materials. Missing: ");
-            int shown = 0;
-            for (Item item : lastMissingItems) {
-                if (shown > 0) sb.append("§7, ");
-                sb.append("§f").append(item.getName().getString());
-                if (++shown >= 5) {
-                    int more = lastMissingItems.size() - shown;
-                    if (more > 0) sb.append(" §7+").append(more).append(" more");
-                    break;
-                }
-            }
-            sb.append("\n§7Add a supply chest with §f/printer supply add §7or get the items manually.");
-            ChatHelper.info(sb.toString());
+            ChatHelper.info("§eSkipping unavailable items, building with what we have."
+                    + "\n§7Skipped: " + formatMissingItems(skippedItems));
             missingItemMsgCooldown = MISSING_MSG_COOLDOWN;
         }
-        autoState = AutoState.IDLE;
+        lastMissingItems.clear();
         noProgressTicks = 0;
+        // Stay in BUILDING — tryPlaceNextBlock will skip these items
     }
 
     /**
@@ -1393,11 +1400,14 @@ public class SchematicPrinter {
             if (restockFailures >= MAX_RESTOCK_FAILURES) {
                 if (statusMessages) {
                     ChatHelper.info("§cCan't reach supply chests after "
-                            + restockFailures + " attempts. Going idle."
-                            + " Move closer or add a reachable chest."
+                            + restockFailures + " attempts."
+                            + " Skipping missing items, building with what we have."
                             + "\n§7Still need: " + formatNeededItemIds(neededItems));
                 }
-                autoState = AutoState.IDLE;
+                // Skip these items and continue building
+                skippedItems.addAll(lastMissingItems);
+                addNeededToSkipped();
+                autoState = AutoState.BUILDING;
             } else {
                 if (statusMessages) {
                     ChatHelper.info("§eSupply chest at §f"
@@ -1465,10 +1475,13 @@ public class SchematicPrinter {
                 restockFailures++;
                 if (restockFailures >= MAX_RESTOCK_FAILURES) {
                     if (statusMessages) {
-                        ChatHelper.info("§cSupply chest didn't have needed items. Going idle."
+                        ChatHelper.info("§cSupply chests don't have needed items."
+                                + " Skipping missing items, building with what we have."
                                 + "\n§7Still need: " + formatNeededItemIds(neededItems));
                     }
-                    autoState = AutoState.IDLE;
+                    skippedItems.addAll(lastMissingItems);
+                    addNeededToSkipped();
+                    autoState = AutoState.BUILDING;
                     noProgressTicks = 0;
                     return;
                 }
@@ -1481,6 +1494,10 @@ public class SchematicPrinter {
 
             // Success — reset failure counter
             restockFailures = 0;
+            // We got items — previously-skipped materials may now be
+            // available, so clear the skip list and let tryPlaceNextBlock
+            // re-evaluate everything.
+            skippedItems.clear();
             // Player is at the supply chest — there's likely flat ground
             // here, so clear the no-space flag for shulker unloading.
             shulkerNoSpaceSkipped = false;
@@ -3206,6 +3223,58 @@ public class SchematicPrinter {
     }
 
     /**
+     * Converts the string item IDs in {@code neededItems} to {@link Item}
+     * objects and adds them to {@code skippedItems}, so the block-skip
+     * filter in {@code tryPlaceNextBlock} will avoid them.
+     */
+    private void addNeededToSkipped() {
+        for (String id : neededItems) {
+            net.minecraft.util.Identifier itemId = Identifier.tryParse(id);
+            if (itemId == null) continue;
+            Item item = Registries.ITEM.get(itemId);
+            if (item != Items.AIR) {
+                skippedItems.add(item);
+            }
+        }
+    }
+
+    /**
+     * Counts the number of schematic blocks that have not been placed and
+     * whose required item is in {@code skippedItems}.  Used to report how
+     * many blocks were left unplaced due to missing materials.
+     */
+    private int countSkippedBlocks(World world) {
+        if (world == null || schematic == null) return 0;
+        int count = 0;
+        for (LitematicaSchematic.Region region : schematic.getRegions()) {
+            for (int y = 0; y < region.absY; y++) {
+                for (int z = 0; z < region.absZ; z++) {
+                    for (int x = 0; x < region.absX; x++) {
+                        BlockState target = region.getBlockState(x, y, z);
+                        if (target.isAir()) continue;
+                        if (!isPlaceable(target) && !isLiquidSource(target)) continue;
+                        if (isAutoCreatedPart(target)) continue;
+
+                        Item reqItem = isLiquidSource(target)
+                                ? getLiquidBucketItem(target)
+                                : target.getBlock().asItem();
+                        if (reqItem == null || !skippedItems.contains(reqItem)) continue;
+
+                        int wx = anchor.getX() + region.originX + x;
+                        int wy = anchor.getY() + region.originY + y;
+                        int wz = anchor.getZ() + region.originZ + z;
+                        if (!world.isChunkLoaded(wx >> 4, wz >> 4)) continue;
+                        if (!isEffectivelyPlaced(world.getBlockState(new BlockPos(wx, wy, wz)), target)) {
+                            count++;
+                        }
+                    }
+                }
+            }
+        }
+        return count;
+    }
+
+    /**
      * Returns {@code true} if the given block state can actually be placed
      * by a player (i.e. has a corresponding {@link BlockItem}).
      * Filters out liquids (water, lava), fire, portals, light blocks, etc.
@@ -4049,6 +4118,16 @@ public class SchematicPrinter {
             if (!BlockDependency.isReadyToPlace(world, worldPos, target)) {
                 dbgDepSkip++;
                 continue;
+            }
+
+            // ── Skip blocks whose materials we already gave up on ───
+            // If restock failed and this item was marked skipped, don't
+            // waste time trying — move on to blocks we CAN place.
+            if (!skippedItems.isEmpty()) {
+                Item reqItem = isLiquidSource(target)
+                        ? getLiquidBucketItem(target)
+                        : target.getBlock().asItem();
+                if (reqItem != null && skippedItems.contains(reqItem)) continue;
             }
 
             // ── liquid source block → bucket placement ──────────────
