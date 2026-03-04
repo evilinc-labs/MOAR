@@ -1,0 +1,66 @@
+name: PR Check
+
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          java-version: '21'
+          distribution: 'temurin'
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          cache-read-only: true
+
+      - name: Grant execute permission
+        run: chmod +x gradlew
+
+      - name: Build all versions
+        id: build
+        run: |
+          ./gradlew buildAndCollect --no-daemon 2>&1 | tee build.log
+          echo "status=${PIPESTATUS[0]}" >> "$GITHUB_OUTPUT"
+
+      - name: Summarize build
+        if: always()
+        run: |
+          echo "## Build Results" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          for ver in 1.21.1 1.21.4 1.21.5 1.21.8 1.21.10; do
+            jar="build/libs/1.0.0/litematica-printer-1.0.0+${ver}.jar"
+            if [ -f "$jar" ]; then
+              size=$(du -h "$jar" | cut -f1)
+              echo "- :white_check_mark: **MC ${ver}** — ${size}" >> "$GITHUB_STEP_SUMMARY"
+            else
+              echo "- :x: **MC ${ver}** — jar not found" >> "$GITHUB_STEP_SUMMARY"
+            fi
+          done
+
+      - name: Check for version-specific issues
+        if: always()
+        run: |
+          # Verify all 5 version jars were produced
+          expected=5
+          actual=$(find build/libs -name '*.jar' ! -name '*-sources.jar' | wc -l)
+          if [ "$actual" -ne "$expected" ]; then
+            echo "::error::Expected $expected version jars but found $actual"
+            exit 1
+          fi
+          echo "All $expected version jars built successfully."

@@ -1,0 +1,77 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          java-version: '21'
+          distribution: 'temurin'
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Grant execute permission
+        run: chmod +x gradlew
+
+      - name: Build all versions
+        run: ./gradlew buildAndCollect --no-daemon
+
+      - name: Collect release jars
+        id: jars
+        run: |
+          mkdir -p staging
+          # Copy only the main jars (not sources) for the release
+          find build/libs -name '*.jar' ! -name '*-sources.jar' -exec cp {} staging/ \;
+          # Also copy sources jars separately
+          find build/libs -name '*-sources.jar' -exec cp {} staging/ \;
+          echo "count=$(ls staging/*.jar 2>/dev/null | wc -l)" >> "$GITHUB_OUTPUT"
+
+      - name: Extract version from tag
+        id: version
+        run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+
+      - name: Generate changelog
+        id: changelog
+        run: |
+          # Get commits since the previous tag
+          PREV_TAG=$(git tag --sort=-creatordate | head -2 | tail -1)
+          if [ -n "$PREV_TAG" ] && [ "$PREV_TAG" != "$GITHUB_REF_NAME" ]; then
+            CHANGES=$(git log --pretty=format:"- %s" "$PREV_TAG".."$GITHUB_REF_NAME" -- \
+              ':!*.md' ':!.github' 2>/dev/null || echo "- Initial release")
+          else
+            CHANGES="- Initial release"
+          fi
+          {
+            echo "changes<<EOF"
+            echo "$CHANGES"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: Litematica Printer v${{ steps.version.outputs.version }}
+          body: |
+            ## Litematica Printer v${{ steps.version.outputs.version }}
+
+            ### Supported Minecraft Versions
+            - 1.21.1, 1.21.4, 1.21.5, 1.21.8, 1.21.10
+
+            ### Changes
+            ${{ steps.changelog.outputs.changes }}
+          files: staging/*.jar
+          fail_on_unmatched_files: true
+          generate_release_notes: false
