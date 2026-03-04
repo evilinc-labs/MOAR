@@ -713,7 +713,8 @@ public class SchematicPrinter {
         // If supply chests exist, immediately go restock
         if (PrinterDatabase.chestCount() > 0) {
             if (statusMessages && missingItemMsgCooldown <= 0) {
-                ChatHelper.info("§eMissing items — going to restock.");
+                ChatHelper.info("§eMissing items — going to restock. Need: "
+                        + formatMissingItems(lastMissingItems));
                 missingItemMsgCooldown = MISSING_MSG_COOLDOWN;
             }
             noProgressTicks = 0;
@@ -1393,11 +1394,19 @@ public class SchematicPrinter {
                 if (statusMessages) {
                     ChatHelper.info("§cCan't reach supply chests after "
                             + restockFailures + " attempts. Going idle."
-                            + " Move closer or add a reachable chest.");
+                            + " Move closer or add a reachable chest."
+                            + "\n§7Still need: " + formatNeededItemIds(neededItems));
                 }
                 autoState = AutoState.IDLE;
             } else {
-                LOGGER.debug("Couldn't reach supply chest, trying another");
+                if (statusMessages) {
+                    ChatHelper.info("§eSupply chest at §f"
+                            + supplyTarget.getX() + " " + supplyTarget.getY()
+                            + " " + supplyTarget.getZ()
+                            + "§e unreachable (attempt " + restockFailures
+                            + "/" + MAX_RESTOCK_FAILURES + ") — trying another."
+                            + "\n§7Looking for: " + formatNeededItemIds(neededItems));
+                }
                 autoState = AutoState.BUILDING;
             }
             noProgressTicks = 0;
@@ -1456,7 +1465,8 @@ public class SchematicPrinter {
                 restockFailures++;
                 if (restockFailures >= MAX_RESTOCK_FAILURES) {
                     if (statusMessages) {
-                        ChatHelper.info("§cSupply chest didn't have needed items. Going idle.");
+                        ChatHelper.info("§cSupply chest didn't have needed items. Going idle."
+                                + "\n§7Still need: " + formatNeededItemIds(neededItems));
                     }
                     autoState = AutoState.IDLE;
                     noProgressTicks = 0;
@@ -2518,7 +2528,8 @@ public class SchematicPrinter {
 
         if (statusMessages) {
             ChatHelper.info("§7Restocking — walking to supply §e"
-                    + nearest.getX() + " " + nearest.getY() + " " + nearest.getZ());
+                    + nearest.getX() + " " + nearest.getY() + " " + nearest.getZ()
+                    + "\n§7Looking for: " + formatNeededItemIds(neededItems));
         }
     }
 
@@ -3148,6 +3159,51 @@ public class SchematicPrinter {
     // ═══════════════════════════════════════════════════════════════════
     //  PLACEMENT HELPERS
     // ═══════════════════════════════════════════════════════════════════
+
+    /**
+     * Formats a {@code Set<Item>} into a readable chat string, showing
+     * up to 5 item names with an overflow count.
+     */
+    private static String formatMissingItems(Set<Item> items) {
+        if (items == null || items.isEmpty()) return "§7(none)";
+        StringBuilder sb = new StringBuilder();
+        int shown = 0;
+        for (Item item : items) {
+            if (shown > 0) sb.append("§7, ");
+            sb.append("§f").append(item.getName().getString());
+            if (++shown >= 5) {
+                int more = items.size() - shown;
+                if (more > 0) sb.append(" §7+").append(more).append(" more");
+                break;
+            }
+        }
+        return sb.toString();
+    }
+
+    /**
+     * Formats a {@code Set<String>} of item IDs (e.g. "minecraft:stone")
+     * into a readable chat string, resolving each to its display name.
+     * Shows up to 5 items with an overflow count.
+     */
+    private static String formatNeededItemIds(Set<String> itemIds) {
+        if (itemIds == null || itemIds.isEmpty()) return "§7(none)";
+        StringBuilder sb = new StringBuilder();
+        int shown = 0;
+        for (String id : itemIds) {
+            net.minecraft.util.Identifier itemId = Identifier.tryParse(id);
+            if (itemId == null) continue;
+            Item item = Registries.ITEM.get(itemId);
+            if (item == Items.AIR) continue;
+            if (shown > 0) sb.append("§7, ");
+            sb.append("§f").append(item.getName().getString());
+            if (++shown >= 5) {
+                int more = itemIds.size() - shown;
+                if (more > 0) sb.append(" §7+").append(more).append(" more");
+                break;
+            }
+        }
+        return shown == 0 ? "§7(unknown items)" : sb.toString();
+    }
 
     /**
      * Returns {@code true} if the given block state can actually be placed
