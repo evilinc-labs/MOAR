@@ -71,6 +71,9 @@ public final class PathWalker {
     /** Ticks per block of distance added to the base timeout. */
     private static final int TICKS_PER_BLOCK = 5;
     private static final int STUCK_THRESHOLD = 200;
+    /** Minimum stuck threshold used for very nearby targets when the
+     *  distance-adaptive scaling kicks in (see {@link #effectiveStuckThreshold()}). */
+    private static final int MIN_STUCK_THRESHOLD = 60;
     /** Shorter threshold for nearby targets — if Baritone can't compute
      *  a path within this many ticks for a target within
      *  {@link #VANILLA_FALLBACK_DIST_SQ}, fall back to vanilla walking. */
@@ -731,9 +734,10 @@ public final class PathWalker {
                 }
             }
 
-            if (noPathTicks >= STUCK_THRESHOLD) {
-                LOGGER.warn("PathWalker[Baritone]: no path progress for {} ticks — route impossible",
-                        noPathTicks);
+            int effectiveThreshold = effectiveStuckThreshold();
+            if (noPathTicks >= effectiveThreshold) {
+                LOGGER.warn("PathWalker[Baritone]: no path progress for {} ticks (threshold={}) — route impossible",
+                        noPathTicks, effectiveThreshold);
                 stuck = true;
                 active = false;
                 noPathTicks = 0;
@@ -1414,5 +1418,28 @@ public final class PathWalker {
      */
     private static int getEffectiveTimeout() {
         return BASE_MAX_TICKS + (int) (initialDistance * TICKS_PER_BLOCK);
+    }
+
+    /**
+     * Compute a distance-adaptive stuck threshold for the current walk.
+     * Baritone's A* should find a path quickly for nearby targets — no
+     * need to wait 10 full seconds.  For targets within 30 blocks, the
+     * threshold is scaled linearly down to {@link #MIN_STUCK_THRESHOLD}.
+     * Beyond 30 blocks, the full {@link #STUCK_THRESHOLD} is used.
+     */
+    private static int effectiveStuckThreshold() {
+        if (target == null) return STUCK_THRESHOLD;
+        MinecraftClient mc = MinecraftClient.getInstance();
+        if (mc.player == null) return STUCK_THRESHOLD;
+        /*? if >=1.21.10 {*//*
+        Vec3d pPos = mc.player.getSyncedPos();
+        *//*?} else {*/
+        Vec3d pPos = mc.player.getPos();
+        /*?}*/
+        double dist = Math.sqrt(pPos.squaredDistanceTo(Vec3d.ofCenter(target)));
+        if (dist >= 30.0) return STUCK_THRESHOLD;
+        // Linear scale: 0 blocks → MIN_STUCK_THRESHOLD, 30 blocks → STUCK_THRESHOLD
+        return Math.max(MIN_STUCK_THRESHOLD,
+                (int) (MIN_STUCK_THRESHOLD + (STUCK_THRESHOLD - MIN_STUCK_THRESHOLD) * dist / 30.0));
     }
 }

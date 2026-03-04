@@ -929,8 +929,13 @@ public class SchematicPrinter {
             } else {
                 walkFailCount++;
                 BlockPos walkTarget = PathWalker.getTarget();
+                boolean pathImpossible = PathWalker.isStuck();
 
-                if (walkFailCount < MAX_WALK_RETRIES) {
+                // Only retry with wider radius if Baritone timed out
+                // rather than declaring the path impossible.  If stuck
+                // (A* found no route), a wider radius won't help — skip
+                // straight to escalation or failure.
+                if (!pathImpossible && walkFailCount < MAX_WALK_RETRIES) {
                     // Retry near the BUILD ZONE (not the standing position
                     // that may be across a gap) with increasing radius.
                     BlockPos retryTarget = lastWalkTargetZone != null
@@ -3414,8 +3419,12 @@ public class SchematicPrinter {
      * failed build zone.
      */
     private boolean isNearFailedZone(BlockPos pos) {
+        // Use the build reach distance as the exclusion radius.
+        // If we can't path to one point, all blocks within our reach
+        // distance of that point are likely unreachable too.
+        double exclusionDist = Math.ceil(range);
         for (BlockPos fz : failedZones) {
-            if (pos.isWithinDistance(fz, 3.0)) return true;
+            if (pos.isWithinDistance(fz, exclusionDist)) return true;
         }
         return false;
     }
