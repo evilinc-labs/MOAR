@@ -50,6 +50,18 @@ public final class LitematicaSchematic {
     private final int dataVersion;
     private final Map<String, Integer> unknownBlocks;
 
+    /**
+     * The offset that was subtracted from all region origins during
+     * normalization (i.e. the original global minimum corner).
+     *
+     * <p>When the anchor comes from Litematica's placement origin
+     * (which refers to the schematic's original reference point, not the
+     * normalized min corner), callers must add this offset to the anchor
+     * so that {@code worldPos - adjustedAnchor} produces normalized
+     * coordinates that {@link #getBlockState} expects.
+     */
+    private final int originOffsetX, originOffsetY, originOffsetZ;
+
     // ── public API ──────────────────────────────────────────────────────
 
     /** Load a {@code .litematic} file and normalize all region origins so the
@@ -125,7 +137,8 @@ public final class LitematicaSchematic {
         }
 
         return new LitematicaSchematic(name, author, sizeX, sizeY, sizeZ, nonAir, regions,
-                schemaVersion, dataVersion, unknownBlocks);
+                schemaVersion, dataVersion, unknownBlocks,
+                globalMinX, globalMinY, globalMinZ);
     }
 
     /**
@@ -183,12 +196,22 @@ public final class LitematicaSchematic {
         return dataVersion > NbtCompat.currentDataVersion();
     }
 
+    /**
+     * Returns the offset that was subtracted during normalization.
+     * Add this to Litematica's placement origin to get the correct
+     * anchor for world ↔ schematic coordinate conversion.
+     */
+    public int getOriginOffsetX() { return originOffsetX; }
+    public int getOriginOffsetY() { return originOffsetY; }
+    public int getOriginOffsetZ() { return originOffsetZ; }
+
     // ── private ctor ────────────────────────────────────────────────────
 
     private LitematicaSchematic(String name, String author, int sizeX, int sizeY, int sizeZ,
                                 int totalNonAir, List<Region> regions,
                                 int schemaVersion, int dataVersion,
-                                Map<String, Integer> unknownBlocks) {
+                                Map<String, Integer> unknownBlocks,
+                                int originOffsetX, int originOffsetY, int originOffsetZ) {
         this.name = name;
         this.author = author;
         this.sizeX = sizeX;
@@ -199,6 +222,9 @@ public final class LitematicaSchematic {
         this.schemaVersion = schemaVersion;
         this.dataVersion = dataVersion;
         this.unknownBlocks = unknownBlocks;
+        this.originOffsetX = originOffsetX;
+        this.originOffsetY = originOffsetY;
+        this.originOffsetZ = originOffsetZ;
     }
 
     // ═══════════════════════════════════════════════════════════════════

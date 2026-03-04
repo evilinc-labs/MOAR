@@ -1,6 +1,6 @@
 # Litematica Printer
 
-A standalone Fabric client mod that automatically places blocks from loaded `.litematic` schematics. For everyone's sake
+A standalone Fabric client mod that automatically places blocks from loaded `.litematic` schematics.
 
 ## Features
 
@@ -8,7 +8,14 @@ A standalone Fabric client mod that automatically places blocks from loaded `.li
 - **AutoBuild Mode** — Fully automated building with zone-based progression, walking between build areas
 - **Baritone Pathfinding** — Optional integration with [Baritone](https://github.com/cabaletta/baritone) for A\* pathfinding navigation; falls back to vanilla straight-line walking when Baritone is not installed
 - **Supply Chest Restocking** — Automatically walks to configured supply chests to restock materials mid-build; indexes chest contents (including shulker boxes) for intelligent chest selection
+- **Shulker Box Unloading** — Automatically places, opens, loots, and breaks shulker boxes grabbed from supply chests; builds temporary platforms when needed and cleans them up afterward
+- **Scaffold Cleanup** — Tracks blocks placed by Baritone during pathfinding (bridges, pillars) and removes them once the build is complete
+- **Self-Correction** — Detects misplaced blocks (wrong orientation, wrong type, foreign blocks) and breaks + replaces them automatically
+- **Smart Tool Selection** — Selects the best tool from inventory when breaking blocks (scaffold cleanup, self-correction) based on mining speed
+- **Block Property Handling** — Correct placement of stairs, slabs, trapdoors (half), doors (facing + hinge side), logs (axis), pillars, and other directional blocks
+- **Liquid Pass** — Places water and lava source blocks after all solid blocks are done to avoid breaking Baritone pathfinding
 - **Schematic Detection** — Detects and loads `.litematic` files from the Litematica schematic directory
+- **Build Checkpoints** — Persists build progress to disk so printing can resume after disconnect or restart
 - **Multi-version Support** — Single codebase targets multiple Minecraft versions via [Stonecutter](https://stonecutter.kikugie.dev/)
 
 ## Supported Minecraft Versions
@@ -69,14 +76,10 @@ All commands use the `/printer` prefix:
 ### Prerequisites
 
 - **JDK 21** or later
-- **Git**
 
-### Clone and Build
+### Build Instructions
 
 ```bash
-git clone https://github.com/your-username/litematica-printer.git
-cd litematica-printer
-
 # Build all versions
 ./gradlew build
 
@@ -109,39 +112,7 @@ To collect all version JARs into one folder:
 | [Fabric Loom](https://github.com/FabricMC/fabric-loom) | 1.14-SNAPSHOT | Minecraft dev toolchain (decompilation, remapping, run configs) |
 | [Gradle](https://gradle.org/) | 9.2.1 | Build automation |
 
-### Project Structure
 
-```
-litematica-printer/
-├── build.gradle.kts              # Per-version build config (dependencies, tasks)
-├── stonecutter.gradle.kts        # Stonecutter parameters and swap tokens
-├── settings.gradle.kts           # Root config — declares all target versions
-├── gradle.properties             # Global mod metadata and shared dependency versions
-├── src/main/
-│   ├── java/dev/litematicaprinter/
-│   │   ├── LitematicaPrinterMod.java    # Mod entrypoint, keybinding, tick loop
-│   │   ├── command/
-│   │   │   └── PrinterCommand.java      # /printer command tree
-│   │   ├── printer/
-│   │   │   └── SchematicPrinter.java    # Core state machine (build, walk, restock)
-│   │   ├── schematic/
-│   │   │   ├── ChestIndexer.java        # Supply chest content indexer (+ shulkers)
-│   │   │   ├── LitematicaDetector.java  # .litematic file discovery
-│   │   │   ├── LitematicaSchematic.java # NBT schematic parser
-│   │   │   ├── PrinterCheckpoint.java   # Build progress tracking
-│   │   │   └── PrinterResourceManager.java  # Supply chest management
-│   │   └── util/
-│   │       ├── ChatHelper.java          # Chat message utilities
-│   │       ├── PathWalker.java          # Navigation (Baritone + vanilla fallback)
-│   │       └── PlacementEngine.java     # Block placement with rate limiting
-│   └── resources/
-│       └── fabric.mod.json              # Mod metadata (templated)
-└── versions/
-    ├── 1.21.1/gradle.properties         # MC 1.21.1 dependency versions
-    ├── 1.21.4/gradle.properties
-    ├── 1.21.5/gradle.properties
-    ├── 1.21.8/gradle.properties
-    └── 1.21.10/gradle.properties
 ```
 
 ### Cross-version Compatibility

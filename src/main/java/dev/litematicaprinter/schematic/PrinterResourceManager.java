@@ -1,93 +1,68 @@
 package dev.litematicaprinter.schematic;
 
-import com.google.gson.Gson;
-import com.google.gson.GsonBuilder;
-import net.fabricmc.loader.api.FabricLoader;
+import dev.litematicaprinter.util.PrinterDatabase;
 import net.minecraft.block.BlockState;
+import net.minecraft.block.Blocks;
+import net.minecraft.block.FluidBlock;
 import net.minecraft.item.BlockItem;
 import net.minecraft.item.Item;
+import net.minecraft.item.Items;
 import net.minecraft.registry.Registries;
 import net.minecraft.util.math.BlockPos;
 import net.minecraft.world.World;
 
-import java.io.Reader;
-import java.io.Writer;
-import java.nio.file.Files;
-import java.nio.file.Path;
 import java.util.*;
 
 /**
- * Manages designated supply-chest positions for the printer's AutoBuild mode.
+ * Manages supply-chest interactions and materials analysis for AutoBuild.
  *
- * <p>Players can mark chests near their build site as "supply chests" so the
- * printer knows where additional blocks are stored.  This is essential for
- * megabase construction where inventory alone is insufficient.
- *
- * <p>Supply chest positions are persisted to
- * {@code litematica-printer/printer_supply.json}.
+ * <p>Supply-chest positions and inventory snapshots are stored in
+ * {@link PrinterDatabase}.  This class provides higher-level operations
+ * like materials analysis that layer on top of the database.
  */
 public final class PrinterResourceManager {
 
     private PrinterResourceManager() {}
 
-    // ── supply chest positions ──────────────────────────────────────────
-
-    private static final List<BlockPos> supplyChests = new ArrayList<>();
-
-    private static final Gson GSON = new GsonBuilder().setPrettyPrinting().create();
-    private static final Path FILE_PATH = FabricLoader.getInstance()
-            .getConfigDir()
-            .resolve("litematica-printer")
-            .resolve("printer_supply.json");
-
-    // ── public API ──────────────────────────────────────────────────────
+    // ── delegated supply-chest API (kept for backward compat) ───────────
 
     public static boolean addSupplyChest(BlockPos pos) {
-        BlockPos immutable = pos.toImmutable();
-        if (supplyChests.contains(immutable)) return false;
-        supplyChests.add(immutable);
-        save();
-        return true;
+        return PrinterDatabase.addChest(pos);
     }
 
     public static boolean removeSupplyChest(BlockPos pos) {
-        boolean removed = supplyChests.remove(pos.toImmutable());
-        if (removed) save();
-        return removed;
+        return PrinterDatabase.removeChest(pos);
     }
 
     public static void clearSupplyChests() {
-        supplyChests.clear();
-        save();
+        PrinterDatabase.clearChests();
     }
 
     public static List<BlockPos> getSupplyChests() {
-        return Collections.unmodifiableList(supplyChests);
+        return PrinterDatabase.getChestPositions();
     }
 
     public static int supplyChestCount() {
-        return supplyChests.size();
+        return PrinterDatabase.chestCount();
     }
 
     /** How few items trigger a restock run. */
     public static final int MIN_SUPPLY_ITEMS = 16;
 
-    /**
-     * Find the best supply chest for the given needed items.
-     *
-     * <p>If chests have been indexed (via {@link ChestIndexer}), prefers
-     * chests that contain the needed items.  Falls back to nearest for
-     * unindexed chests.
-     *
-     * @param from          position to measure distances from
-     * @param neededItemIds item IDs the player needs
-     * @param world         current world
-     * @return best supply chest position, or {@code null} if none exist
-     */
     public static BlockPos findBestSupplyChest(
             BlockPos from, Set<String> neededItemIds, World world) {
+        return PrinterDatabase.findBestChest(from, neededItemIds);
+    }
 
-        return ChestIndexer.findBestChest(from, neededItemIds, supplyChests);
+    /** Load persisted data from disk (supply chest positions + scaffold). */
+    public static void load() {
+        PrinterDatabase.loadChests();
+        PrinterDatabase.loadScaffold();
+    }
+
+    /** Save supply-chest positions to disk. */
+    public static void save() {
+        PrinterDatabase.saveChests();
     }
 
     // ── materials analysis ──────────────────────────────────────────────
@@ -118,8 +93,20 @@ public final class PrinterResourceManager {
                         BlockState target = region.getBlockState(x, y, z);
                         if (target.isAir()) continue;
 
+                        // Fluid source blocks (water/lava) need buckets
+                        if (target.getBlock() instanceof FluidBlock
+                                && target.getFluidState().isStill()) {
+                            Item bucket = fluidBucketItem(target);
+                            if (bucket != null) {
+                                String itemId = Registries.ITEM.getId(bucket).toString();
+                                required.merge(itemId, 1, Integer::sum);
+                                totalBlocks++;
+                            }
+                            continue;
+                        }
+
                         Item item = target.getBlock().asItem();
-                        if (!(item instanceof BlockItem)) continue;
+                        if (item == Items.AIR) continue;
 
                         String itemId = Registries.ITEM.getId(item).toString();
                         required.merge(itemId, 1, Integer::sum);
@@ -146,10 +133,31 @@ public final class PrinterResourceManager {
                         int wy = anchor.getY() + region.originY + y;
                         int wz = anchor.getZ() + region.originZ + z;
 
+                        if (!world.isChunkLoaded(wx >> 4, wz >> 4)) continue;
+
                         BlockState current = world.getBlockState(new BlockPos(wx, wy, wz));
-                        if (current.equals(target)) {
+
+                        // Fluid source blocks — check if same fluid is already present
+                        if (target.getBlock() instanceof FluidBlock
+                                && target.getFluidState().isStill()) {
+                            if (current.getBlock() == target.getBlock()
+                                    && current.getFluidState().isStill()) {
+                                Item bucket = fluidBucketItem(target);
+                                if (bucket != null) {
+                                    String itemId = Registries.ITEM.getId(bucket).toString();
+                                    placed.merge(itemId, 1, Integer::sum);
+                                    placedCount++;
+                                }
+                            }
+                            continue;
+                        }
+
+                        // Use block-type matching: same block present counts as placed.
+                        // Dynamic/neighbor-computed properties (chest type, stair shape,
+                        // fence connections, etc.) don't affect the placed count.
+                        if (current.getBlock() == target.getBlock() && !current.isAir()) {
                             Item item = target.getBlock().asItem();
-                            if (item instanceof BlockItem) {
+                            if (item != Items.AIR) {
                                 String itemId = Registries.ITEM.getId(item).toString();
                                 placed.merge(itemId, 1, Integer::sum);
                                 placedCount++;
@@ -161,7 +169,7 @@ public final class PrinterResourceManager {
         }
 
         // 3. Compute supply inventory from indexed chests
-        Map<String, Integer> inSupply = ChestIndexer.getCombinedInventory();
+        Map<String, Integer> inSupply = PrinterDatabase.getCombinedChestInventory();
 
         // 4. Compute missing = required - placed
         Map<String, Integer> missing = new HashMap<>();
@@ -240,43 +248,17 @@ public final class PrinterResourceManager {
         }
     }
 
-    // ── persistence ─────────────────────────────────────────────────────
 
-    public static void load() {
-        try {
-            if (!Files.exists(FILE_PATH)) return;
-            try (Reader reader = Files.newBufferedReader(FILE_PATH)) {
-                SavedData data = GSON.fromJson(reader, SavedData.class);
-                if (data == null || data.positions == null) return;
-                supplyChests.clear();
-                for (int[] pos : data.positions) {
-                    if (pos.length >= 3) {
-                        supplyChests.add(new BlockPos(pos[0], pos[1], pos[2]));
-                    }
-                }
-            }
-        } catch (Exception e) {
-            e.printStackTrace();
-        }
-    }
 
-    public static void save() {
-        try {
-            Files.createDirectories(FILE_PATH.getParent());
-            SavedData data = new SavedData();
-            data.positions = new ArrayList<>();
-            for (BlockPos pos : supplyChests) {
-                data.positions.add(new int[] { pos.getX(), pos.getY(), pos.getZ() });
-            }
-            try (Writer writer = Files.newBufferedWriter(FILE_PATH)) {
-                GSON.toJson(data, writer);
-            }
-        } catch (Exception e) {
-            e.printStackTrace();
-        }
-    }
+    // ── fluid helpers ───────────────────────────────────────────────────
 
-    private static class SavedData {
-        List<int[]> positions;
+    /**
+     * Returns the bucket item needed to place the given fluid block,
+     * or {@code null} if the block is not a supported fluid.
+     */
+    private static Item fluidBucketItem(BlockState state) {
+        if (state.getBlock() == Blocks.WATER) return Items.WATER_BUCKET;
+        if (state.getBlock() == Blocks.LAVA) return Items.LAVA_BUCKET;
+        return null;
     }
 }

@@ -6,13 +6,19 @@ import dev.litematicaprinter.LitematicaPrinterMod;
 import dev.litematicaprinter.printer.SchematicPrinter;
 import dev.litematicaprinter.schematic.LitematicaDetector;
 import dev.litematicaprinter.schematic.PrinterCheckpoint;
-import dev.litematicaprinter.schematic.ChestIndexer;
 import dev.litematicaprinter.schematic.PrinterResourceManager;
+import dev.litematicaprinter.util.PrinterDatabase;
 import dev.litematicaprinter.util.ChatHelper;
 import net.fabricmc.fabric.api.client.command.v2.ClientCommandManager;
 import net.fabricmc.fabric.api.client.command.v2.ClientCommandRegistrationCallback;
 import net.fabricmc.fabric.api.client.command.v2.FabricClientCommandSource;
+import net.minecraft.block.BarrelBlock;
+import net.minecraft.block.Block;
+import net.minecraft.block.ChestBlock;
+import net.minecraft.block.ShulkerBoxBlock;
 import net.minecraft.client.MinecraftClient;
+import net.minecraft.util.hit.BlockHitResult;
+import net.minecraft.util.hit.HitResult;
 import net.minecraft.util.math.BlockPos;
 
 import java.io.IOException;
@@ -37,6 +43,7 @@ import java.util.Map;
  * /printer materials             – show bill of materials breakdown
  * /printer toggle                – toggle the printer on/off
  * /printer autobuild             – toggle AutoBuild mode
+ * /printer sort [mode]           – set build order (bottom_up/top_down/nearest)
  * /printer supply add            – mark block at feet as supply chest
  * /printer supply add &lt;x&gt; &lt;y&gt; &lt;z&gt; – mark specific pos as supply chest
  * /printer supply remove         – unmark supply chest at feet
@@ -325,6 +332,56 @@ public final class PrinterCommand {
                     })
             );
 
+            // /printer air — toggle air placement (place blocks without adjacent support)
+            root.then(ClientCommandManager.literal("air")
+                    .executes(ctx -> {
+                        SchematicPrinter printer = getPrinter();
+                        boolean newValue = !printer.isPrintInAir();
+                        printer.setPrintInAir(newValue);
+                        ChatHelper.info("Air placement: " + (newValue ? "§aON" : "§cOFF"));
+                        return 1;
+                    })
+            );
+
+            // /printer sort [mode] — set build order (bottom_up, top_down, nearest)
+            root.then(ClientCommandManager.literal("sort")
+                    .executes(ctx -> {
+                        // No argument — cycle through modes
+                        SchematicPrinter printer = getPrinter();
+                        SchematicPrinter.SortMode current = printer.getSortMode();
+                        SchematicPrinter.SortMode next = switch (current) {
+                            case BOTTOM_UP -> SchematicPrinter.SortMode.TOP_DOWN;
+                            case TOP_DOWN  -> SchematicPrinter.SortMode.NEAREST;
+                            case NEAREST   -> SchematicPrinter.SortMode.BOTTOM_UP;
+                        };
+                        printer.setSortMode(next);
+                        ChatHelper.info("Sort mode: §e" + next.name());
+                        return 1;
+                    })
+                    .then(ClientCommandManager.argument("mode", StringArgumentType.word())
+                            .suggests((ctx, builder) -> {
+                                builder.suggest("bottom_up");
+                                builder.suggest("top_down");
+                                builder.suggest("nearest");
+                                return builder.buildFuture();
+                            })
+                            .executes(ctx -> {
+                                SchematicPrinter printer = getPrinter();
+                                String mode = StringArgumentType.getString(ctx, "mode").toUpperCase();
+                                try {
+                                    SchematicPrinter.SortMode sm = SchematicPrinter.SortMode.valueOf(mode);
+                                    printer.setSortMode(sm);
+                                    ChatHelper.info("Sort mode: §e" + sm.name());
+                                    return 1;
+                                } catch (IllegalArgumentException e) {
+                                    ChatHelper.info("§cUnknown sort mode: §7" + mode
+                                            + " §c(use bottom_up, top_down, or nearest)");
+                                    return 0;
+                                }
+                            })
+                    )
+            );
+
             // ── /printer supply ─────────────────────────────────────────
 
             var supply = ClientCommandManager.literal("supply");
@@ -334,7 +391,11 @@ public final class PrinterCommand {
                     .executes(ctx -> {
                         MinecraftClient mc = MinecraftClient.getInstance();
                         if (mc.player == null) return 0;
-                        BlockPos pos = mc.player.getBlockPos();
+                        BlockPos pos = findTargetContainer(mc);
+                        if (pos == null) {
+                            ChatHelper.info("§cNo chest, barrel, or shulker box found. Look at one or stand next to it.");
+                            return 0;
+                        }
                         if (PrinterResourceManager.addSupplyChest(pos)) {
                             ChatHelper.info("§aMarked supply chest at §e"
                                     + pos.getX() + " " + pos.getY() + " " + pos.getZ());
@@ -369,12 +430,16 @@ public final class PrinterCommand {
                     .executes(ctx -> {
                         MinecraftClient mc = MinecraftClient.getInstance();
                         if (mc.player == null) return 0;
-                        BlockPos pos = mc.player.getBlockPos();
+                        BlockPos pos = findTargetContainer(mc);
+                        if (pos == null) {
+                            ChatHelper.info("§cNo supply chest found nearby to remove.");
+                            return 0;
+                        }
                         if (PrinterResourceManager.removeSupplyChest(pos)) {
                             ChatHelper.info("§aRemoved supply chest at §e"
                                     + pos.getX() + " " + pos.getY() + " " + pos.getZ());
                         } else {
-                            ChatHelper.info("§cNo supply chest at your position.");
+                            ChatHelper.info("§cThat container is not marked as a supply chest.");
                         }
                         return 1;
                     })
@@ -401,7 +466,6 @@ public final class PrinterCommand {
             supply.then(ClientCommandManager.literal("clear")
                     .executes(ctx -> {
                         PrinterResourceManager.clearSupplyChests();
-                        ChestIndexer.clearIndex();
                         ChatHelper.info("§aAll supply chest designations cleared.");
                         return 1;
                     })
@@ -417,7 +481,7 @@ public final class PrinterCommand {
                             return 0;
                         }
 
-                        ChestIndexer.IndexSummary summary = ChestIndexer.getSummary();
+                        PrinterDatabase.ChestIndexSummary summary = PrinterDatabase.getChestIndexSummary();
                         ChatHelper.info("§l§6Supply Index Summary");
                         ChatHelper.info("Chests: §e" + summary.totalChests()
                                 + " §7(§a" + summary.indexedChests() + " indexed§7, §c"
@@ -429,7 +493,7 @@ public final class PrinterCommand {
                             ChatHelper.info("Total items available: §a" + summary.totalItems());
 
                             // Show top 10 items in supply
-                            Map<String, Integer> combined = ChestIndexer.getCombinedInventory();
+                            Map<String, Integer> combined = PrinterDatabase.getCombinedChestInventory();
                             List<Map.Entry<String, Integer>> top = combined.entrySet().stream()
                                     .sorted(Map.Entry.<String, Integer>comparingByValue().reversed())
                                     .limit(10)
@@ -479,8 +543,27 @@ public final class PrinterCommand {
         }
 
         try {
+            // Temporarily load with player position; we'll override if
+            // Litematica has a matching placement.
             BlockPos anchor = mc.player.getBlockPos();
             printer.loadSchematic(file, anchor);
+
+            // Try to match Litematica's active placement for this file
+            // so the anchor aligns with where the user placed it.
+            String loadedFile = file.getFileName().toString();
+            List<LitematicaDetector.DetectedPlacement> placements =
+                    SchematicPrinter.detectAllPlacements();
+            for (LitematicaDetector.DetectedPlacement p : placements) {
+                if (p.schematicPath().getFileName().toString().equals(loadedFile)) {
+                    anchor = new BlockPos(
+                            p.originX() + printer.getSchematic().getOriginOffsetX(),
+                            p.originY() + printer.getSchematic().getOriginOffsetY(),
+                            p.originZ() + printer.getSchematic().getOriginOffsetZ());
+                    printer.setAnchor(anchor);
+                    ChatHelper.info("§aMatched Litematica placement.");
+                    break;
+                }
+            }
 
             ChatHelper.info("§aLoaded §f" + printer.getSchematic().getName()
                     + " §7by " + printer.getSchematic().getAuthor());
@@ -520,5 +603,51 @@ public final class PrinterCommand {
 
     private static SchematicPrinter getPrinter() {
         return LitematicaPrinterMod.getPrinter();
+    }
+
+    /**
+     * Finds the container block the player is targeting.
+     *
+     * <p>Priority:
+     * <ol>
+     *   <li>Crosshair target — the block the player is looking at</li>
+     *   <li>Feet position — the block at the player's feet</li>
+     *   <li>Below feet — the block directly below the player</li>
+     * </ol>
+     *
+     * @return the {@link BlockPos} of the nearest container, or {@code null}
+     */
+    private static BlockPos findTargetContainer(MinecraftClient mc) {
+        if (mc.player == null || mc.world == null) return null;
+
+        // 1. Crosshair target — the block the player is looking at
+        if (mc.crosshairTarget instanceof BlockHitResult bhr
+                && mc.crosshairTarget.getType() == HitResult.Type.BLOCK) {
+            BlockPos lookPos = bhr.getBlockPos();
+            if (isContainer(mc.world.getBlockState(lookPos).getBlock())) {
+                return lookPos;
+            }
+        }
+
+        // 2. Feet position
+        BlockPos feet = mc.player.getBlockPos();
+        if (isContainer(mc.world.getBlockState(feet).getBlock())) {
+            return feet;
+        }
+
+        // 3. Below feet (standing on top of a chest)
+        BlockPos below = feet.down();
+        if (isContainer(mc.world.getBlockState(below).getBlock())) {
+            return below;
+        }
+
+        return null;
+    }
+
+    /** Whether the block is a supported container type. */
+    private static boolean isContainer(Block block) {
+        return block instanceof ChestBlock
+                || block instanceof BarrelBlock
+                || block instanceof ShulkerBoxBlock;
     }
 }

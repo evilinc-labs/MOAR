@@ -4,6 +4,7 @@
 	"version": "${version}",
 	"name": "${name}",
 	"description": "Automatically places blocks from loaded .litematic schematics. Supports manual and AutoBuild modes with supply chest restocking.",
+	"license": "AGPL-3.0-only",
 	"authors": [],
 	"contact": {},
 	"environment": "client",
@@ -12,7 +13,9 @@
 			"dev.litematicaprinter.LitematicaPrinterMod"
 		]
 	},
-	"mixins": [],
+	"mixins": [
+		"litematica-printer.mixins.json"
+	],
 	"depends": {
 		"fabricloader": ">=0.18.4",
 		"minecraft": "${minecraft}",

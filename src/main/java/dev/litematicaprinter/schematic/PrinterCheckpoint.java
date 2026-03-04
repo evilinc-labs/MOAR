@@ -5,6 +5,9 @@ import com.google.gson.GsonBuilder;
 import net.fabricmc.loader.api.FabricLoader;
 import net.minecraft.util.math.BlockPos;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 import java.io.Reader;
 import java.io.Writer;
 import java.nio.file.Files;
@@ -21,6 +24,8 @@ import java.nio.file.Path;
 public final class PrinterCheckpoint {
 
     private PrinterCheckpoint() {}
+
+    private static final Logger LOGGER = LoggerFactory.getLogger("LitematicaPrinter");
 
     private static final Gson GSON = new GsonBuilder().setPrettyPrinting().create();
     private static final Path FILE_PATH = FabricLoader.getInstance()
@@ -76,7 +81,7 @@ public final class PrinterCheckpoint {
                 return data;
             }
         } catch (Exception e) {
-            e.printStackTrace();
+            LOGGER.error("Failed to load checkpoint", e);
             return null;
         }
     }
@@ -87,7 +92,7 @@ public final class PrinterCheckpoint {
         try {
             Files.deleteIfExists(FILE_PATH);
         } catch (Exception e) {
-            e.printStackTrace();
+            LOGGER.error("Failed to delete checkpoint", e);
         }
     }
 
@@ -108,7 +113,7 @@ public final class PrinterCheckpoint {
                 GSON.toJson(current, writer);
             }
         } catch (Exception e) {
-            e.printStackTrace();
+            LOGGER.error("Failed to write checkpoint", e);
         }
     }
 
