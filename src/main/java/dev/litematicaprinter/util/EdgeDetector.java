@@ -50,6 +50,10 @@ public final class EdgeDetector {
      */
     private static final double PROBE_MARGIN = 0.30;
 
+    // ── per-tick cache (isNearEdge is called per render frame) ───────
+    private static long   cachedTick   = Long.MIN_VALUE;
+    private static boolean cachedResult = false;
+
     /**
      * Returns {@code true} if the player is near a dangerous platform
      * edge — i.e. there is at least one block column around the
@@ -64,6 +68,12 @@ public final class EdgeDetector {
      * @return {@code true} if the player is near a dangerous ledge
      */
     public static boolean isNearEdge(ClientPlayerEntity player, World world) {
+        // Cache result for the current game tick — this method is called
+        // per render frame via mixin but the answer only changes per tick.
+        long tick = world.getTime();
+        if (tick == cachedTick) return cachedResult;
+        cachedTick = tick;
+
         /*? if >=1.21.10 {*//*
         double px = player.getSyncedPos().x;
         double py = player.getSyncedPos().y;
@@ -89,11 +99,13 @@ public final class EdgeDetector {
         for (int bx = minBx; bx <= maxBx; bx++) {
             for (int bz = minBz; bz <= maxBz; bz++) {
                 if (!hasSafeGround(world, bx, footY, bz)) {
+                    cachedResult = true;
                     return true; // dangerous drop-off found
                 }
             }
         }
 
+        cachedResult = false;
         return false; // all columns have safe ground — no need to sneak
     }
 

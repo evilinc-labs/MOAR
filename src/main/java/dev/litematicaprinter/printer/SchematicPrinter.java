@@ -40,6 +40,7 @@ import net.minecraft.util.math.MathHelper;
 import net.minecraft.util.math.Vec3d;
 import net.minecraft.fluid.FluidState;
 import net.minecraft.world.World;
+import net.minecraft.registry.RegistryKey;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -107,13 +108,16 @@ public class SchematicPrinter {
     private BlockPos anchor;
     private int blocksPlaced;
     private String schematicFile;
+    /** Dimension the schematic was loaded in — auto-build pauses if the
+     *  player switches dimensions (e.g. enters a portal). */
+    private RegistryKey<World> buildDimension;
 
     // ── auto-build state ────────────────────────────────────────────────
 
     private AutoState autoState = AutoState.IDLE;
     private BlockPos lastBuildPos;
     private BlockPos supplyTarget;
-    private List<String> neededItems;
+    private Set<String> neededItems;
     private int restockWaitTicks;
     /** Ticks since the chest screen handler first appeared in RESTOCKING
      *  state.  Used to delay item grabbing until server syncs contents. */
@@ -126,7 +130,12 @@ public class SchematicPrinter {
     private int noProgressTicks;
     private Set<Item> lastMissingItems = new HashSet<>();
     private int missingItemMsgCooldown;
-    private final Set<BlockPos> failedZones = new HashSet<>();
+    private final Set<BlockPos> failedZones = Collections.newSetFromMap(
+            new LinkedHashMap<>(32, 0.75f, false) {
+                @Override protected boolean removeEldestEntry(Map.Entry<BlockPos, Boolean> eldest) {
+                    return size() > 64;
+                }
+            });
     /** Consecutive walk failures — triggers GoalNear fallback. */
     private int walkFailCount;
     private static final int MAX_WALK_RETRIES = 3;
@@ -201,6 +210,17 @@ public class SchematicPrinter {
     /** Delay for server to sync chest contents after screen opens. */
     private static final int CHEST_SYNC_DELAY = 3;
     private static final int MAX_RESTOCK_FAILURES = 6;
+
+    // ── cached schematic scan results ───────────────────────────────
+    /** How often (in ticks) to recompute the expensive full-schematic
+     *  scans for remaining block counts. */
+    private static final int REMAINING_CACHE_TTL = 100; // ~5 seconds
+    private long remainingCacheTick = Long.MIN_VALUE;
+    private int  cachedCountRemaining = -1;
+    private long solidsCacheTick = Long.MIN_VALUE;
+    private boolean cachedHasSolids;
+    private long liquidsCacheTick = Long.MIN_VALUE;
+    private boolean cachedHasLiquids;
 
     // ── toggle / lifecycle ──────────────────────────────────────────────
 
@@ -308,6 +328,8 @@ public class SchematicPrinter {
             this.blocksPlaced = 0;
             this.schematicFile = placement.schematicPath().getFileName().toString();
             this.autoDetected = true;
+            MinecraftClient mc = MinecraftClient.getInstance();
+            this.buildDimension = mc.world != null ? mc.world.getRegistryKey() : null;
             PrinterDatabase.dumpBuildData(); // clear stale scaffold + snapshots from previous build
             return true;
         } catch (IOException e) {
@@ -380,6 +402,8 @@ public class SchematicPrinter {
         this.blocksPlaced = 0;
         this.schematicFile = path.getFileName().toString();
         this.autoDetected = false;
+        MinecraftClient mc = MinecraftClient.getInstance();
+        this.buildDimension = mc.world != null ? mc.world.getRegistryKey() : null;
         PrinterDatabase.dumpBuildData(); // clear stale scaffold + snapshots from previous build
     }
 
@@ -389,6 +413,7 @@ public class SchematicPrinter {
         this.blocksPlaced = 0;
         this.schematicFile = null;
         this.autoDetected = false;
+        this.buildDimension = null;
         PrinterCheckpoint.clear();
         PrinterDatabase.dumpBuildData(); // clear scaffold + stale chest snapshots
         PathWalker.stop();
@@ -458,6 +483,11 @@ public class SchematicPrinter {
             if (placed) {
                 blocksPlaced++;
                 noProgressTicks = 0;
+                // Invalidate cached remaining counts so the next query
+                // reflects the newly placed block promptly.
+                remainingCacheTick = Long.MIN_VALUE;
+                solidsCacheTick = Long.MIN_VALUE;
+                liquidsCacheTick = Long.MIN_VALUE;
                 if (schematicFile != null) {
                     PrinterCheckpoint.onBlockPlaced(schematicFile, anchor, blocksPlaced, mc.player.getBlockPos());
                 }
@@ -479,6 +509,21 @@ public class SchematicPrinter {
     // ═══════════════════════════════════════════════════════════════════
 
     private void tickAutoBuild(MinecraftClient mc) {
+        // ── safety guards: dead player or wrong dimension ───────────
+        if (mc.player == null || mc.world == null) return;
+        if (mc.player.isDead()) {
+            PlacementEngine.reset();
+            PathWalker.stop();
+            return;
+        }
+        if (buildDimension != null && !mc.world.getRegistryKey().equals(buildDimension)) {
+            // Player switched dimensions — pause auto-build silently.
+            // It will resume automatically if they return.
+            PlacementEngine.reset();
+            PathWalker.stop();
+            return;
+        }
+
         switch (autoState) {
             case BUILDING            -> tickBuilding(mc);
             case WALKING_TO_BUILD    -> tickWalking(mc, AutoState.BUILDING);
@@ -1117,8 +1162,8 @@ public class SchematicPrinter {
             double horizDist = Math.sqrt(toBlock.x * toBlock.x + toBlock.z * toBlock.z);
             float breakYaw = (float) (MathHelper.atan2(toBlock.z, toBlock.x) * (180.0 / Math.PI)) - 90.0f;
             float breakPitch = (float) -(MathHelper.atan2(toBlock.y, horizDist) * (180.0 / Math.PI));
-            mc.player.setYaw(breakYaw);
-            mc.player.setPitch(MathHelper.clamp(breakPitch, -90.0f, 90.0f));
+            PlacementEngine.sendLookPacket(mc.player, breakYaw,
+                    MathHelper.clamp(breakPitch, -90.0f, 90.0f));
 
             mc.interactionManager.updateBlockBreakingProgress(scaffoldBreakTarget, Direction.UP);
             mc.player.swingHand(Hand.MAIN_HAND);
@@ -1208,8 +1253,8 @@ public class SchematicPrinter {
         double horizDist = Math.sqrt(toBlock.x * toBlock.x + toBlock.z * toBlock.z);
         float breakYaw = (float) (MathHelper.atan2(toBlock.z, toBlock.x) * (180.0 / Math.PI)) - 90.0f;
         float breakPitch = (float) -(MathHelper.atan2(toBlock.y, horizDist) * (180.0 / Math.PI));
-        mc.player.setYaw(breakYaw);
-        mc.player.setPitch(MathHelper.clamp(breakPitch, -90.0f, 90.0f));
+        PlacementEngine.sendLookPacket(mc.player, breakYaw,
+                MathHelper.clamp(breakPitch, -90.0f, 90.0f));
 
         mc.interactionManager.attackBlock(scaffoldBreakTarget, Direction.UP);
         mc.player.swingHand(Hand.MAIN_HAND);
@@ -1493,11 +1538,10 @@ public class SchematicPrinter {
      */
     private int findShulkerWithNeededItems(ClientPlayerEntity player) {
         if (neededItems == null || neededItems.isEmpty()) return -1;
-        Set<String> needSet = new HashSet<>(neededItems);
         PlayerInventory inv = player.getInventory();
         for (int i = 0; i < 36; i++) {
             ItemStack stack = inv.getStack(i);
-            if (isShulkerBox(stack) && shulkerContainsNeeded(stack, needSet)) {
+            if (isShulkerBox(stack) && shulkerContainsNeeded(stack, neededItems)) {
                 return i;
             }
         }
@@ -1646,8 +1690,8 @@ public class SchematicPrinter {
                 * (180.0 / Math.PI)) - 90.0f;
         float platPitch = (float) -(MathHelper.atan2(toClick.y, horizDist)
                 * (180.0 / Math.PI));
-        player.setYaw(platYaw);
-        player.setPitch(MathHelper.clamp(platPitch, -90.0f, 90.0f));
+        PlacementEngine.sendLookPacket(player, platYaw,
+                MathHelper.clamp(platPitch, -90.0f, 90.0f));
 
         // ── Swap the block into the current hotbar slot ─────────────
         /*? if >=1.21.5 {*//*
@@ -1670,11 +1714,7 @@ public class SchematicPrinter {
         }
 
         // ── Place the block ─────────────────────────────────────────
-        boolean wasAbsoluteSneak = SneakOverride.isForceAbsoluteSneak();
-        boolean wasForceSneak = SneakOverride.isForceSneak();
-        SneakOverride.setForceAbsoluteSneak(false);
-        SneakOverride.setForceSneak(false);
-        player.setSneaking(false);
+        Runnable restoreSneak = PlacementEngine.releaseForInteraction(player);
 
         BlockHitResult hit = new BlockHitResult(
                 clickCenter,
@@ -1683,8 +1723,7 @@ public class SchematicPrinter {
                 false);
         mc.interactionManager.interactBlock(player, Hand.MAIN_HAND, hit);
 
-        if (wasAbsoluteSneak) SneakOverride.setForceAbsoluteSneak(true);
-        if (wasForceSneak) SneakOverride.setForceSneak(true);
+        restoreSneak.run();
 
         // ── Swap original item back if we displaced it ──────────────
         if (blockSlot >= 9) {
@@ -1862,19 +1901,15 @@ public class SchematicPrinter {
                         * (180.0 / Math.PI)) - 90.0f;
                 float placePitch = (float) -(MathHelper.atan2(toTarget.y, horizDist)
                         * (180.0 / Math.PI));
-                player.setYaw(placeYaw);
-                player.setPitch(MathHelper.clamp(placePitch, -90.0f, 90.0f));
+                PlacementEngine.sendLookPacket(player, placeYaw,
+                        MathHelper.clamp(placePitch, -90.0f, 90.0f));
 
                 // Wait one more tick after rotating for the server to
                 // receive the updated look direction.
                 if (shulkerUnloadTicks < 4) return;
 
                 // Release sneak so we place the block, not use the held item
-                boolean wasAbsoluteSneak = SneakOverride.isForceAbsoluteSneak();
-                boolean wasForceSneak = SneakOverride.isForceSneak();
-                SneakOverride.setForceAbsoluteSneak(false);
-                SneakOverride.setForceSneak(false);
-                player.setSneaking(false);
+                Runnable restoreSneak = PlacementEngine.releaseForInteraction(player);
 
                 // Place the shulker on top of the block below the target
                 BlockHitResult hit = new BlockHitResult(
@@ -1885,8 +1920,7 @@ public class SchematicPrinter {
                         false);
                 mc.interactionManager.interactBlock(player, Hand.MAIN_HAND, hit);
 
-                if (wasAbsoluteSneak) SneakOverride.setForceAbsoluteSneak(true);
-                if (wasForceSneak) SneakOverride.setForceSneak(true);
+                restoreSneak.run();
 
                 shulkerUnloadPhase = 3;
                 shulkerUnloadTicks = 0;
@@ -1924,17 +1958,13 @@ public class SchematicPrinter {
                         * (180.0 / Math.PI)) - 90.0f;
                 float openPitch = (float) -(MathHelper.atan2(toShulker.y, horizDist)
                         * (180.0 / Math.PI));
-                player.setYaw(openYaw);
-                player.setPitch(MathHelper.clamp(openPitch, -90.0f, 90.0f));
+                PlacementEngine.sendLookPacket(player, openYaw,
+                        MathHelper.clamp(openPitch, -90.0f, 90.0f));
 
                 // Wait for rotation to propagate to the server
                 if (shulkerUnloadTicks < 3) return;
 
-                boolean wasAbsoluteSneak = SneakOverride.isForceAbsoluteSneak();
-                boolean wasForceSneak = SneakOverride.isForceSneak();
-                SneakOverride.setForceAbsoluteSneak(false);
-                SneakOverride.setForceSneak(false);
-                player.setSneaking(false);
+                Runnable restoreSneak = PlacementEngine.releaseForInteraction(player);
 
                 // Use the face facing the player for a more natural hit
                 Direction hitFace = Direction.getFacing(
@@ -1946,8 +1976,7 @@ public class SchematicPrinter {
                         false);
                 mc.interactionManager.interactBlock(player, Hand.MAIN_HAND, hit);
 
-                if (wasAbsoluteSneak) SneakOverride.setForceAbsoluteSneak(true);
-                if (wasForceSneak) SneakOverride.setForceSneak(true);
+                restoreSneak.run();
 
                 shulkerUnloadPhase = 5;
                 shulkerUnloadTicks = 0;
@@ -1976,12 +2005,11 @@ public class SchematicPrinter {
                     int slotsReserved = 1; // for the shulker item itself
 
                     // Take needed items — shulker boxes always have 27 slots (3×9)
-                    Set<String> needSet = new HashSet<>(neededItems);
                     for (int slot = 0; slot < 27; slot++) {
                         ItemStack stack = shulkerHandler.getSlot(slot).getStack();
                         if (stack.isEmpty()) continue;
                         String itemId = Registries.ITEM.getId(stack.getItem()).toString();
-                        if (needSet.contains(itemId)) {
+                        if (neededItems.contains(itemId)) {
                             // Check if this item would stack with something
                             // already in the player's inventory.
                             boolean wouldStack = false;
@@ -2391,7 +2419,7 @@ public class SchematicPrinter {
         Map<Item, Integer> needed = getNeededItemsNearby(player, world, 500);
         Map<Item, Integer> inventory = PlacementEngine.getInventoryContentsCached();
 
-        neededItems = new ArrayList<>();
+        neededItems = new LinkedHashSet<>();
         for (var entry : needed.entrySet()) {
             int have = inventory.getOrDefault(entry.getKey(), 0);
             if (have < entry.getValue()) {
@@ -2404,9 +2432,7 @@ public class SchematicPrinter {
         // items that are nearby in world space but far in scan order.
         for (Item missing : lastMissingItems) {
             String id = Registries.ITEM.getId(missing).toString();
-            if (!neededItems.contains(id)) {
-                neededItems.add(id);
-            }
+            neededItems.add(id);
         }
 
         if (neededItems.isEmpty()) {
@@ -2436,7 +2462,7 @@ public class SchematicPrinter {
 
         MinecraftClient mc = MinecraftClient.getInstance();
         BlockPos nearest = PrinterDatabase.findBestChest(
-                player.getBlockPos(), new HashSet<>(neededItems), unreachableChests);
+                player.getBlockPos(), neededItems, unreachableChests);
         if (nearest == null) {
             if (statusMessages) {
                 if (!unreachableChests.isEmpty()) {
@@ -2849,22 +2875,31 @@ public class SchematicPrinter {
             }
         }
 
+        // Rotate toward the container so the server accepts the interaction
+        Vec3d eyePos = mc.player.getEyePos();
+        Vec3d chestCenter = Vec3d.ofCenter(chestPos);
+        Vec3d toChest = chestCenter.subtract(eyePos);
+        double horizDist = Math.sqrt(toChest.x * toChest.x + toChest.z * toChest.z);
+        float chestYaw = (float) (MathHelper.atan2(toChest.z, toChest.x)
+                * (180.0 / Math.PI)) - 90.0f;
+        float chestPitch = (float) -(MathHelper.atan2(toChest.y, horizDist)
+                * (180.0 / Math.PI));
+        PlacementEngine.sendLookPacket(mc.player, chestYaw,
+                MathHelper.clamp(chestPitch, -90.0f, 90.0f));
+
         // Release sneak overrides before interacting — if the player is
         // sneaking, interactBlock bypasses block use (chest open) and
         // tries to place the held item instead.
-        boolean wasAbsoluteSneak = SneakOverride.isForceAbsoluteSneak();
-        boolean wasForceSneak = SneakOverride.isForceSneak();
-        SneakOverride.setForceAbsoluteSneak(false);
-        SneakOverride.setForceSneak(false);
-        mc.player.setSneaking(false);
+        Runnable restoreSneak = PlacementEngine.releaseForInteraction(mc.player);
 
+        Direction hitFace = Direction.getFacing(
+                (float) -toChest.x, (float) -toChest.y, (float) -toChest.z);
         BlockHitResult hit = new BlockHitResult(
-                Vec3d.ofCenter(chestPos), Direction.UP, chestPos, false);
+                chestCenter, hitFace, chestPos, false);
         ActionResult result = mc.interactionManager.interactBlock(mc.player, Hand.MAIN_HAND, hit);
 
         // Restore sneak overrides if they were active
-        if (wasAbsoluteSneak) SneakOverride.setForceAbsoluteSneak(true);
-        if (wasForceSneak) SneakOverride.setForceSneak(true);
+        restoreSneak.run();
 
         return result.isAccepted();
     }
@@ -2906,7 +2941,6 @@ public class SchematicPrinter {
                                  GenericContainerScreenHandler handler) {
         if (neededItems == null || neededItems.isEmpty()) return;
 
-        Set<String> needSet = new HashSet<>(neededItems);
         int chestSlots = handler.getRows() * 9;
 
         // ── Pass 0: return unneeded shulkers to the chest ───────────
@@ -2921,7 +2955,7 @@ public class SchematicPrinter {
             if (stack.isEmpty()) continue;
             if (!isShulkerBox(stack)) continue;
             // Keep shulkers that still have items we need
-            if (shulkerContainsNeeded(stack, needSet)) continue;
+            if (shulkerContainsNeeded(stack, neededItems)) continue;
             // Deposit this shulker back into the chest
             mc.interactionManager.clickSlot(
                     handler.syncId, slot, 0,
@@ -2934,7 +2968,7 @@ public class SchematicPrinter {
             if (stack.isEmpty()) continue;
 
             String itemId = Registries.ITEM.getId(stack.getItem()).toString();
-            if (needSet.contains(itemId) && !isShulkerBox(stack)) {
+            if (neededItems.contains(itemId) && !isShulkerBox(stack)) {
                 mc.interactionManager.clickSlot(
                         handler.syncId, slot, 0,
                         SlotActionType.QUICK_MOVE, player);
@@ -2949,7 +2983,7 @@ public class SchematicPrinter {
             ItemStack stack = handler.getSlot(slot).getStack();
             if (stack.isEmpty()) continue;
 
-            if (isShulkerBox(stack) && shulkerContainsNeeded(stack, needSet)) {
+            if (isShulkerBox(stack) && shulkerContainsNeeded(stack, neededItems)) {
                 mc.interactionManager.clickSlot(
                         handler.syncId, slot, 0,
                         SlotActionType.QUICK_MOVE, player);
@@ -3140,6 +3174,14 @@ public class SchematicPrinter {
      */
     private boolean hasRemainingLiquids(World world) {
         if (schematic == null || anchor == null) return false;
+        long tick = world.getTime();
+        if (tick - liquidsCacheTick < REMAINING_CACHE_TTL) return cachedHasLiquids;
+        liquidsCacheTick = tick;
+        cachedHasLiquids = hasRemainingLiquidsUncached(world);
+        return cachedHasLiquids;
+    }
+
+    private boolean hasRemainingLiquidsUncached(World world) {
         for (LitematicaSchematic.Region region : schematic.getRegions()) {
             for (int y = 0; y < region.absY; y++) {
                 for (int z = 0; z < region.absZ; z++) {
@@ -3168,6 +3210,14 @@ public class SchematicPrinter {
      */
     private boolean hasRemainingSolids(World world) {
         if (schematic == null || anchor == null) return false;
+        long tick = world.getTime();
+        if (tick - solidsCacheTick < REMAINING_CACHE_TTL) return cachedHasSolids;
+        solidsCacheTick = tick;
+        cachedHasSolids = hasRemainingSolidsUncached(world);
+        return cachedHasSolids;
+    }
+
+    private boolean hasRemainingSolidsUncached(World world) {
         for (LitematicaSchematic.Region region : schematic.getRegions()) {
             for (int y = 0; y < region.absY; y++) {
                 for (int z = 0; z < region.absZ; z++) {
@@ -3853,7 +3903,7 @@ public class SchematicPrinter {
 
         if (candidates.isEmpty()) {
             // Debug output (rate-limited to once per 5 s / 100 ticks)
-            if (statusMessages && placeDebugCooldown <= 0) {
+            if (LOGGER.isDebugEnabled() && statusMessages && placeDebugCooldown <= 0) {
                 placeDebugCooldown = 100;
                 StringBuilder sb = new StringBuilder("[PlaceDbg] ");
                 sb.append("0 candidates. ").append(dbgTotal).append(" unplaced schematic blocks nearby. ");
@@ -4008,7 +4058,7 @@ public class SchematicPrinter {
         }
 
         // Debug output when candidates exist but no placement started
-        if (statusMessages && !candidates.isEmpty() && placeDebugCooldown <= 0) {
+        if (LOGGER.isDebugEnabled() && statusMessages && !candidates.isEmpty() && placeDebugCooldown <= 0) {
             placeDebugCooldown = 100;
             StringBuilder sb = new StringBuilder("[PlaceDbg] ");
             sb.append(candidates.size()).append(" candidates, none placed. ");
@@ -4041,6 +4091,12 @@ public class SchematicPrinter {
         MinecraftClient mc = MinecraftClient.getInstance();
         if (mc.player == null || mc.world == null) return -1;
 
+        // Return cached value if computed recently
+        long tick = mc.world.getTime();
+        if (tick - remainingCacheTick < REMAINING_CACHE_TTL && cachedCountRemaining >= 0) {
+            return cachedCountRemaining;
+        }
+
         World world = mc.world;
         int remaining = 0;
 
@@ -4065,10 +4121,10 @@ public class SchematicPrinter {
                 }
             }
         }
+        remainingCacheTick = tick;
+        cachedCountRemaining = remaining;
         return remaining;
-    }
-
-    public static List<String> listSchematics() {
+    }    public static List<String> listSchematics() {
         List<String> names = new ArrayList<>();
         Path dir = getSchematicsDir();
         if (!Files.isDirectory(dir)) return names;
@@ -4078,7 +4134,9 @@ public class SchematicPrinter {
                 String fname = entry.getFileName().toString();
                 names.add(fname.substring(0, fname.length() - ".litematic".length()));
             }
-        } catch (IOException ignored) {}
+        } catch (IOException e) {
+            LOGGER.warn("Failed to list schematics directory", e);
+        }
         return names;
     }
 
@@ -4103,6 +4161,8 @@ public class SchematicPrinter {
         this.anchor = data.anchorPos();
         this.blocksPlaced = data.blocksPlaced;
         this.schematicFile = schematicPath.getFileName().toString();
+        MinecraftClient mc = MinecraftClient.getInstance();
+        this.buildDimension = mc.world != null ? mc.world.getRegistryKey() : null;
     }
 
     public String getSchematicFile() { return schematicFile; }

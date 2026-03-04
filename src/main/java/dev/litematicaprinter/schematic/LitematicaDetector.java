@@ -109,7 +109,13 @@ public final class LitematicaDetector {
 
                 if (!entry.has("schematic")) continue;
                 String schematicStr = entry.get("schematic").getAsString();
-                Path schematicPath = Path.of(schematicStr);
+                Path schematicPath = Path.of(schematicStr).normalize();
+
+                // Validate file extension to prevent loading non-schematic files
+                if (!schematicPath.toString().endsWith(".litematic")) {
+                    LOGGER.warn("Skipping placement — not a .litematic file: {}", schematicStr);
+                    continue;
+                }
 
                 if (!Files.exists(schematicPath)) {
                     LOGGER.debug("Skipping placement — schematic file not found: {}", schematicStr);

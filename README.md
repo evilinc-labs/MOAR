@@ -1,22 +1,46 @@
-# Litematica Printer
+# Smartmatica
 
-A standalone Fabric client mod that automatically places blocks from loaded `.litematic` schematics.
+A standalone Fabric client mod that automatically places blocks from loaded `.litematic` schematics. Built and designed for all, for everyone's sake. I missed a public Litematica printer, didn't you?
+
+## Disclaimer
+**THIS IS IN BETA!!**
+It isn't perfect, it will make mistakes, but what matters is that it works. We ask that if there are any discrepancies, that you create an issue for bug tracking. In addition to this, you are also more than welcome to make a pull request if you see any places where it can be better!
+
+**Important Things To Know**
+- We recommend using Baritone if you want automatic building.
+  - The vanilla walking is bare-bones and (probably) broken. The printing functions should work fine without automatic building regardless, however, if there are issues, please make a note and we will investigate.
+
+**If You Fork**
+This is under a GPL v3 license, meaning that the fork must be public and must indicate the changes used. You cannot obfuscate the code and you cannot gatekeep. This includes if you implement it into your own client.
+
+If you find a fork or branch that is in violation of the license, please inform us immediately!
 
 ## Features
 
-- **Manual Mode** — Toggle the printer to place blocks from the loaded schematic within reach
-- **AutoBuild Mode** — Fully automated building with zone-based progression, walking between build areas
-- **Baritone Pathfinding** — Optional integration with [Baritone](https://github.com/cabaletta/baritone) for A\* pathfinding navigation; falls back to vanilla straight-line walking when Baritone is not installed
-- **Supply Chest Restocking** — Automatically walks to configured supply chests to restock materials mid-build; indexes chest contents (including shulker boxes) for intelligent chest selection
-- **Shulker Box Unloading** — Automatically places, opens, loots, and breaks shulker boxes grabbed from supply chests; builds temporary platforms when needed and cleans them up afterward
-- **Scaffold Cleanup** — Tracks blocks placed by Baritone during pathfinding (bridges, pillars) and removes them once the build is complete
-- **Self-Correction** — Detects misplaced blocks (wrong orientation, wrong type, foreign blocks) and breaks + replaces them automatically
-- **Smart Tool Selection** — Selects the best tool from inventory when breaking blocks (scaffold cleanup, self-correction) based on mining speed
-- **Block Property Handling** — Correct placement of stairs, slabs, trapdoors (half), doors (facing + hinge side), logs (axis), pillars, and other directional blocks
-- **Liquid Pass** — Places water and lava source blocks after all solid blocks are done to avoid breaking Baritone pathfinding
-- **Schematic Detection** — Detects and loads `.litematic` files from the Litematica schematic directory
-- **Build Checkpoints** — Persists build progress to disk so printing can resume after disconnect or restart
-- **Multi-version Support** — Single codebase targets multiple Minecraft versions via [Stonecutter](https://stonecutter.kikugie.dev/)
+- **Manual Mode**
+  - Toggle the printer to place blocks from the loaded schematic within reach
+- **AutoBuild Mode**
+  - Fully automated building with zone-based progression, walking between build areas
+- **Baritone Pathfinding**
+  - Integration with [Baritone](https://github.com/cabaletta/baritone) for pathfinding navigation; falls back to vanilla straight-line walking when Baritone is not installed
+- **Supply Chest Restocking**
+  - Automatically walks to configured supply chests to restock materials mid-build; indexes chest contents (including shulker boxes) for intelligent chest selection
+- **Shulker Box Unloading**
+  - Automatically places, opens, loots, and breaks shulker boxes grabbed from supply chests; builds temporary platforms when needed and cleans them up afterward
+- **Scaffold Cleanup**
+  - Tracks blocks placed by Baritone during pathfinding (bridges, pillars) and removes them once the build is complete
+- **Self-Correction**
+  - Detects misplaced blocks (wrong orientation, wrong type, foreign blocks) and breaks + replaces them automatically
+- **Smart Tool Selection**
+  - Selects the best tool from inventory when breaking blocks (scaffold cleanup, self-correction) based on mining speed, so you don't have to babysit (often)
+- **Block Property Handling**
+  - Correct placement of stairs, slabs, trapdoors (half), doors (facing + hinge side), logs (axis), pillars, and other directional blocks
+- **Liquid Pass**
+  - Places water and lava source blocks **after** all solid blocks are done to avoid breaking Baritone
+- **Schematic Detection**
+  - Detects and loads `.litematic` files from the Litematica schematic directory
+- **Build Checkpoints**
+  - Persists build progress to disk so printing can resume after disconnect or restart
 
 ## Supported Minecraft Versions
 
@@ -48,7 +72,7 @@ A standalone Fabric client mod that automatically places blocks from loaded `.li
 
 1. Install [Fabric Loader](https://fabricmc.net/use/) for your Minecraft version
 2. Download [Fabric API](https://modrinth.com/mod/fabric-api) and place it in your `mods/` folder
-3. Download the Litematica Printer `.jar` for your MC version and place it in your `mods/` folder
+3. Download the Smartmatica `.jar` for your MC version and place it in your `mods/` folder
 4. *(Optional)* Install [Baritone](https://github.com/cabaletta/baritone/releases) (Fabric build) for proper pathfinding
 
 ## Usage
@@ -61,15 +85,24 @@ A standalone Fabric client mod that automatically places blocks from loaded `.li
 
 All commands use the `/printer` prefix:
 
-- `/printer start` — Start printing
-- `/printer stop` — Stop printing
-- `/printer auto` — Toggle AutoBuild mode
-- `/printer supply add` — Register the chest you're looking at as a supply chest
-- `/printer supply list` — List all registered supply chests
-- `/printer supply scan` — Show indexed supply inventory (item counts, shulker boxes found)
-- `/printer supply clear` — Remove all supply chests
-- `/printer status` — Show current printer status
-- `/printer materials` — Bill of materials with supply inventory cross-reference
+- `/printer start`
+  - Start printing
+- `/printer stop`
+  - Stop printing
+- `/printer auto`
+  - Toggle AutoBuild mode
+- `/printer supply add`
+  - Register the chest you're looking at as a supply chest
+- `/printer supply list`
+  - List all registered supply chests
+- `/printer supply scan`
+  - Show indexed supply inventory (item counts, shulker boxes found)
+- `/printer supply clear`
+  - Remove all supply chests
+- `/printer status`
+  - Show current printer status
+- `/printer materials`
+  - Bill of materials with supply inventory cross-reference
 
 ## Building from Source
 

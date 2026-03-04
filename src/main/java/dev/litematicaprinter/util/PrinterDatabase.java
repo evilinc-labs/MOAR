@@ -136,7 +136,7 @@ public final class PrinterDatabase {
 
     // ── 2a: supply chest positions (persisted) ──────────────────────────
 
-    private static final List<BlockPos> chestPositions = new ArrayList<>();
+    private static final Set<BlockPos> chestPositions = new LinkedHashSet<>();
 
     private static final Gson GSON = new GsonBuilder().setPrettyPrinting().create();
     private static final Path CHEST_FILE = FabricLoader.getInstance()
@@ -147,8 +147,7 @@ public final class PrinterDatabase {
     /** Register a chest position. Returns false if already registered. */
     public static boolean addChest(BlockPos pos) {
         BlockPos immutable = pos.toImmutable();
-        if (chestPositions.contains(immutable)) return false;
-        chestPositions.add(immutable);
+        if (!chestPositions.add(immutable)) return false;
         saveChests();
         return true;
     }
@@ -172,7 +171,7 @@ public final class PrinterDatabase {
 
     /** Unmodifiable view of all registered chest positions. */
     public static List<BlockPos> getChestPositions() {
-        return Collections.unmodifiableList(chestPositions);
+        return List.copyOf(chestPositions);
     }
 
     public static int chestCount() {
@@ -209,8 +208,14 @@ public final class PrinterDatabase {
         }
     }
 
-    /** BlockPos → last-known inventory snapshot. */
-    private static final Map<BlockPos, ChestSnapshot> chestSnapshots = new LinkedHashMap<>();
+    /** BlockPos → last-known inventory snapshot.  Capped at 256 entries
+     *  (evicts the oldest snapshot when full). */
+    private static final int MAX_SNAPSHOTS = 256;
+    private static final Map<BlockPos, ChestSnapshot> chestSnapshots = new LinkedHashMap<>(32, 0.75f, false) {
+        @Override protected boolean removeEldestEntry(Map.Entry<BlockPos, ChestSnapshot> eldest) {
+            return size() > MAX_SNAPSHOTS;
+        }
+    };
 
     public static void putSnapshot(BlockPos pos, ChestSnapshot snapshot) {
         chestSnapshots.put(pos.toImmutable(), snapshot);

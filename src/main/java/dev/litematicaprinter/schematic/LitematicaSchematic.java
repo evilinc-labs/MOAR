@@ -66,8 +66,12 @@ public final class LitematicaSchematic {
 
     /** Load a {@code .litematic} file and normalize all region origins so the
      *  minimum corner of the bounding box sits at (0, 0, 0). */
+    /** Max decompressed NBT size — prevents zip-bomb schematics from
+     *  exhausting heap.  256 MB is generous for any real build. */
+    private static final long MAX_NBT_BYTES = 256L * 1024 * 1024;
+
     public static LitematicaSchematic load(Path path) throws IOException {
-        NbtCompound root = NbtIo.readCompressed(path, NbtSizeTracker.ofUnlimitedBytes());
+        NbtCompound root = NbtIo.readCompressed(path, NbtSizeTracker.of(MAX_NBT_BYTES));
 
         // ── schema & data version ───────────────────────────────────────
         int schemaVersion = NbtCompat.getInt(root, "Version", -1);

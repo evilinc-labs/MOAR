@@ -21,6 +21,7 @@ import net.minecraft.util.PlayerInput;
 *//*?} else {*/
 import net.minecraft.network.packet.c2s.play.ClientCommandC2SPacket;
 /*?}*/
+import net.minecraft.network.packet.c2s.play.PlayerMoveC2SPacket;
 import net.minecraft.screen.slot.SlotActionType;
 import net.minecraft.util.ActionResult;
 import net.minecraft.util.Hand;
@@ -33,7 +34,9 @@ import net.minecraft.util.shape.VoxelShapes;
 import net.minecraft.world.World;
 
 import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.Map;
+import java.util.Random;
 import java.util.Set;
 
 /**
@@ -92,8 +95,14 @@ public final class PlacementEngine {
     private static final int  MAX_BREAKING_TICKS = 200;
     /** Ticks to wait after breaking before re-placing (item pickup). */
     private static int        postBreakWait;
-    /** Tracks how many correction attempts have been made per position. */
-    private static final Map<BlockPos, Integer> correctionAttempts = new HashMap<>();
+    /** Tracks how many correction attempts have been made per position.
+     *  Bounded to 128 entries — oldest are evicted automatically. */
+    private static final int MAX_CORRECTION_ENTRIES = 128;
+    private static final Map<BlockPos, Integer> correctionAttempts = new LinkedHashMap<>(32, 0.75f, false) {
+        @Override protected boolean removeEldestEntry(Map.Entry<BlockPos, Integer> eldest) {
+            return size() > MAX_CORRECTION_ENTRIES;
+        }
+    };
     /** Max correction attempts before skipping a position permanently. */
     private static final int MAX_CORRECTION_ATTEMPTS = 2;
 
@@ -106,6 +115,7 @@ public final class PlacementEngine {
 
     // ── rate limiter ────────────────────────────────────────────────────
 
+    private static final Random JITTER_RNG = new Random();
     private static int    bps               = 8;
     private static long   lastPlacementNano = 0;
 
@@ -123,7 +133,10 @@ public final class PlacementEngine {
         if (phase != PlacePhase.IDLE) return false;
         long nowNano = System.nanoTime();
         long intervalNano = 1_000_000_000L / bps;
-        return (nowNano - lastPlacementNano) >= intervalNano;
+        // ±25% jitter so the placement cadence doesn't form a
+        // machine-perfect pattern detectable by timing analysis.
+        long jitter = (long) (intervalNano * (JITTER_RNG.nextDouble() * 0.5 - 0.25));
+        return (nowNano - lastPlacementNano) >= (intervalNano + jitter);
     }
 
     public static boolean isBusy() {
@@ -180,14 +193,9 @@ public final class PlacementEngine {
         correctionAttempts.clear();
     }
 
-    /** Prune completed entries from correctionAttempts if map is large. */
+    /** Prune completed entries from correctionAttempts. */
     public static void pruneCompletedCorrections() {
-        if (correctionAttempts.size() < 100) return; // not worth scanning
         correctionAttempts.values().removeIf(v -> v >= MAX_CORRECTION_ATTEMPTS);
-        // If still huge after removing maxed-out entries, trim oldest
-        if (correctionAttempts.size() > 500) {
-            correctionAttempts.clear();
-        }
     }
 
     // ── per-tick inventory cache ────────────────────────────────────────
@@ -260,6 +268,10 @@ public final class PlacementEngine {
                 mc.player.setYaw(targetYaw);
                 mc.player.setPitch(targetPitch);
             }
+
+            // Send the final rotation to the server so it's in sync
+            // before the placement packet arrives next tick.
+            sendLookPacket(mc.player, mc.player.getYaw(), mc.player.getPitch());
 
             // Send sneak packet this tick (will interact next tick)
             if (pendingNeedsSneak) {
@@ -455,8 +467,7 @@ public final class PlacementEngine {
         float breakYaw = (float) (MathHelper.atan2(toBlock.z, toBlock.x) * (180.0 / Math.PI)) - 90.0f;
         float breakPitch = (float) -(MathHelper.atan2(toBlock.y, horizDist) * (180.0 / Math.PI));
 
-        mc.player.setYaw(breakYaw);
-        mc.player.setPitch(MathHelper.clamp(breakPitch, -90.0f, 90.0f));
+        sendLookPacket(mc.player, breakYaw, breakPitch);
 
         // Continue breaking — send break progress packets
         Direction breakFace = Direction.UP;
@@ -781,8 +792,7 @@ public final class PlacementEngine {
         float breakYaw = (float) (MathHelper.atan2(toBlock.z, toBlock.x) * (180.0 / Math.PI)) - 90.0f;
         float breakPitch = (float) -(MathHelper.atan2(toBlock.y, horizDist) * (180.0 / Math.PI));
 
-        player.setYaw(breakYaw);
-        player.setPitch(MathHelper.clamp(breakPitch, -90.0f, 90.0f));
+        sendLookPacket(player, breakYaw, breakPitch);
 
         // Start the breaking process
         mc.interactionManager.attackBlock(target, Direction.UP);
@@ -863,6 +873,60 @@ public final class PlacementEngine {
     }
 
     // ═══════════════════════════════════════════════════════════════════
+    //  LOOK PACKET (keeps server rotation in sync with client)
+    // ═══════════════════════════════════════════════════════════════════
+
+    /**
+     * Sets the entity yaw/pitch AND sends a look-only movement packet so
+     * the server's view of the player rotation matches the client before
+     * any interaction/action packets that follow in the same tick.
+     */
+    public static void sendLookPacket(ClientPlayerEntity player, float yaw, float pitch) {
+        pitch = MathHelper.clamp(pitch, -90.0f, 90.0f);
+        player.setYaw(yaw);
+        player.setPitch(pitch);
+        /*? if >=1.21.4 {*//*
+        player.networkHandler.sendPacket(
+                new PlayerMoveC2SPacket.LookAndOnGround(yaw, pitch,
+                        player.isOnGround(), player.horizontalCollision));
+        *//*?} else {*/
+        player.networkHandler.sendPacket(
+                new PlayerMoveC2SPacket.LookAndOnGround(yaw, pitch,
+                        player.isOnGround()));
+        /*?}*/
+    }
+
+    // ═══════════════════════════════════════════════════════════════════
+    //  SNEAK INTERACTION HELPER
+    // ═══════════════════════════════════════════════════════════════════
+
+    /**
+     * Temporarily releases sneak overrides and sends a server-synced
+     * release packet so that block-use interactions (opening chests,
+     * placing shulkers) are accepted.
+     *
+     * @return a {@link Runnable} that restores the prior sneak state
+     *         and re-sends the press packet if applicable
+     */
+    public static Runnable releaseForInteraction(ClientPlayerEntity player) {
+        boolean wasAbsoluteSneak = SneakOverride.isForceAbsoluteSneak();
+        boolean wasForceSneak = SneakOverride.isForceSneak();
+        SneakOverride.setForceAbsoluteSneak(false);
+        SneakOverride.setForceSneak(false);
+        player.setSneaking(false);
+        if (wasAbsoluteSneak || wasForceSneak) {
+            releaseSneakPacket();
+        }
+        return () -> {
+            if (wasAbsoluteSneak) SneakOverride.setForceAbsoluteSneak(true);
+            if (wasForceSneak) SneakOverride.setForceSneak(true);
+            if (wasAbsoluteSneak || wasForceSneak) {
+                pressSneakPacket(player);
+            }
+        };
+    }
+
+    // ═══════════════════════════════════════════════════════════════════
     //  SNEAK PACKET HELPERS (separated for cross-tick timing)
     // ═══════════════════════════════════════════════════════════════════
 
@@ -915,8 +979,7 @@ public final class PlacementEngine {
             newPitch = savedPitch;
         }
 
-        player.setYaw(newYaw);
-        player.setPitch(MathHelper.clamp(newPitch, -90.0f, 90.0f));
+        sendLookPacket(player, newYaw, newPitch);
     }
 
     // ── inventory helpers ───────────────────────────────────────────────
