@@ -205,9 +205,16 @@ public final class PlacementEngine {
         correctionAttempts.clear();
     }
 
-    /** Prune completed entries from correctionAttempts. */
+    /** Prune stale entries from correctionAttempts.
+     *  Entries that have reached MAX_CORRECTION_ATTEMPTS are "give-up"
+     *  markers and must be KEPT so the engine doesn't re-attempt them.
+     *  Only entries below the threshold (i.e. intermediate attempts for
+     *  positions that were successfully corrected and later dirtied again)
+     *  are eligible for pruning. */
     public static void pruneCompletedCorrections() {
-        correctionAttempts.values().removeIf(v -> v >= MAX_CORRECTION_ATTEMPTS);
+        // Remove entries whose positions now match the schematic (successful
+        // corrections), keeping give-up markers intact.
+        correctionAttempts.values().removeIf(v -> v < MAX_CORRECTION_ATTEMPTS);
     }
 
     // ── per-tick inventory cache ────────────────────────────────────────
@@ -1730,6 +1737,25 @@ public final class PlacementEngine {
             return requireSolidFace(world, target, Direction.DOWN);
         }
 
+        // Hoppers — facing is determined by clicked face, NOT player yaw.
+        //  HOPPER_FACING = output direction.  Clicking a face places the
+        //  hopper with output toward that face (or DOWN for top/bottom).
+        if (block instanceof HopperBlock) {
+            if (desired.contains(Properties.HOPPER_FACING)) {
+                Direction facing = desired.get(Properties.HOPPER_FACING);
+                if (facing == Direction.DOWN) {
+                    // DOWN hopper — click any horizontal face or below,
+                    // NOT the top face (clicking TOP makes it face down
+                    // anyway, but prefer a solid neighbor).
+                    return findPlacementFace(world, target);
+                } else {
+                    // Horizontal hopper — must click the face in the
+                    // output direction so MC assigns that facing.
+                    return requireSolidFace(world, target, facing);
+                }
+            }
+        }
+
         // ── Stairs / Slabs / Trapdoors — prefer side faces ────────────
         //  When clicking top face → always BOTTOM half; when clicking
         //  bottom face → always TOP half.  Only side faces allow the
@@ -1867,6 +1893,13 @@ public final class PlacementEngine {
         if (desired.contains(Properties.ROTATION)
                 && existing.contains(Properties.ROTATION)) {
             if (!existing.get(Properties.ROTATION).equals(desired.get(Properties.ROTATION))) {
+                return true;
+            }
+        }
+        // Hoppers — HOPPER_FACING (DOWN + 4 horizontal)
+        if (desired.contains(Properties.HOPPER_FACING)
+                && existing.contains(Properties.HOPPER_FACING)) {
+            if (existing.get(Properties.HOPPER_FACING) != desired.get(Properties.HOPPER_FACING)) {
                 return true;
             }
         }

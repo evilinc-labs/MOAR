@@ -28,8 +28,14 @@ jobs:
       - name: Grant execute permission
         run: chmod +x gradlew
 
-      - name: Clean & build all versions
-        run: ./gradlew clean buildAndCollect --no-daemon
+      - name: Clean
+        run: ./gradlew clean --no-daemon
+
+      - name: Build all versions
+        run: ./gradlew buildAndCollect --no-daemon
+
+      - name: List build output
+        run: find build/libs -name '*.jar' | sort
 
       - name: Extract version from tag
         id: version
