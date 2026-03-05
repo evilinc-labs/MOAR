@@ -37,6 +37,7 @@ import net.minecraft.world.World;
 
 import java.util.HashMap;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.Random;
 import java.util.Set;
@@ -76,6 +77,10 @@ public final class PlacementEngine {
     private static boolean    pendingNeedsSneak;
     /** When true, place against the target itself (no adjacent block). */
     private static boolean    pendingAirPlace;
+    /** True while {@link #tickPlaceSingleTick()} is driving the pipeline.
+     *  Suppresses redundant flying packets inside {@link #tickPlace()} and
+     *  {@link #tickFinish()} to avoid GrimAC timer violations. */
+    private static boolean    singleTickInProgress;
     /** The item that must be in the player's hand when the placement
      *  packet is sent.  Verified in tickPlace to prevent wrong-block
      *  bugs when the hotbar slot changes between ROTATING and PLACING. */
@@ -231,6 +236,7 @@ public final class PlacementEngine {
         pendingFace = null;
         pendingNeedsSneak = false;
         pendingAirPlace = false;
+        singleTickInProgress = false;
         pendingItem = null;
         correctionTarget = null;
         correctionDesired = null;
@@ -288,7 +294,7 @@ public final class PlacementEngine {
      * Tick the placement pipeline.  Must be called every client tick while
      * the printer is active.
      *
-     * <p>For non-liquid block placements the entire rotate → place → finish
+     * For non-liquid block placements the entire rotate → place → finish
      * sequence is collapsed into a <b>single tick</b> so that the server
      * receives the rotation and interaction packets together.  GrimAC
      * validates that these arrive on the same server tick — the old
@@ -298,7 +304,7 @@ public final class PlacementEngine {
      * use the multi-tick pipeline because they rely on client-side state
      * that must persist across ticks.
      *
-     * @return {@code true} on the tick a block was actually placed
+     * @return true on the tick a block was actually placed
      */
     public static boolean tick() {
         return switch (phase) {
@@ -319,7 +325,7 @@ public final class PlacementEngine {
         };
     }
 
-    // ── single-tick placement (GrimAC-safe) ─────────────────────────────
+    // ── single-tick placement ─────────────────────────────
 
     /**
      * Drives the rotate → place → finish phases in a single tick so all
@@ -335,8 +341,9 @@ public final class PlacementEngine {
         // server-only look packets without moving the client camera.
         boolean wasSilent = silentRotation;
         silentRotation = true;
+        singleTickInProgress = true;
 
-        // ── rotate (server-side only) ───────────────────────────────
+        // ── rotate ───────────────────────────────────────────────────
         sendSilentLookPacket(mc.player, targetYaw, targetPitch);
         if (pendingNeedsSneak) {
             pressSneakPacket(mc.player);
@@ -351,6 +358,7 @@ public final class PlacementEngine {
             tickFinish();
         }
 
+        singleTickInProgress = false;
         silentRotation = wasSilent;
         return placed;
     }
@@ -493,10 +501,29 @@ public final class PlacementEngine {
             hitResult = new BlockHitResult(hitPos, clickSide, neighbor, false);
         }
 
+        // ── Reach validation ────────────────────────────────────────
+        // Verify the actual hit position is within interaction range
+        // before sending the packet.  GriefKit2 uses 5.154 + 0.1 margin;
+        // we use 4.5 (vanilla reach) + a small margin to match vanilla
+        // behavior and stay well under GrimAC's FarPlace check.
+        {
+            double reachSq = 4.5 * 4.5;
+            if (eyePos.squaredDistanceTo(hitResult.getPos()) > reachSq) {
+                // Hit position is beyond reach — abort placement.
+                phase = PlacePhase.IDLE;
+                pendingTarget = null;
+                pendingDesired = null;
+                return false;
+            }
+        }
+
         // In silent-rotation mode, re-send the server-side look just
         // before the interact packet so the server's view of the player
         // rotation matches the placement direction on the same tick.
-        if (silentRotation) {
+        // Skip when called from tickPlaceSingleTick — a flying packet
+        // was already sent and duplicating it causes GrimAC CheckTimer
+        // violations (each flying packet counts as a server tick).
+        if (silentRotation && !singleTickInProgress) {
             sendSilentLookPacket(player, placeYaw, placePitch);
         }
 
@@ -551,13 +578,16 @@ public final class PlacementEngine {
         if (pendingNeedsSneak) {
             phase = PlacePhase.FINISHING;
         } else {
-            // Restore look direction (skip in silent mode — camera was never moved)
-            if (!silentRotation) {
-                restoreLook(player);
-            } else {
-                // Send the player's real rotation back to the server so
-                // subsequent movement packets are consistent.
-                sendSilentLookPacket(player, player.getYaw(), player.getPitch());
+            // Restore look direction.
+            // Skip when called from tickPlaceSingleTick — the next natural
+            // client tick flying packet will restore the rotation without
+            // adding an extra flying packet that bloats the timer budget.
+            if (!singleTickInProgress) {
+                if (!silentRotation) {
+                    restoreLook(player);
+                } else {
+                    sendSilentLookPacket(player, player.getYaw(), player.getPitch());
+                }
             }
             phase = PlacePhase.IDLE;
             pendingTarget = null;
@@ -581,11 +611,16 @@ public final class PlacementEngine {
             } else {
                 releaseSneakPacket();
             }
-            if (!silentRotation) {
-                restoreLook(mc.player);
-            } else {
-                // Resync the server with the player's real rotation.
-                sendSilentLookPacket(mc.player, mc.player.getYaw(), mc.player.getPitch());
+            // Restore look direction.
+            // Skip when called from tickPlaceSingleTick — the next
+            // natural client tick handles rotation restore, avoiding
+            // an extra flying packet that triggers timer violations.
+            if (!singleTickInProgress) {
+                if (!silentRotation) {
+                    restoreLook(mc.player);
+                } else {
+                    sendSilentLookPacket(mc.player, mc.player.getYaw(), mc.player.getPitch());
+                }
             }
         }
         phase = PlacePhase.IDLE;
@@ -759,39 +794,47 @@ public final class PlacementEngine {
 
         if (!selectItem(player, mc, requiredItem, allowSwap)) return false;
 
+        // ── 1b. entity collision check ──────────────────────────────────
+        //  Verify no entity occupies the target position, and that the
+        //  block can physically be placed there.  Matches the canPlace()
+        //  pattern used by both GriefKit2 and Highway-Gooner to avoid
+        //  wasting rate-limit tokens on unplaceable positions.
+        if (!world.canPlace(desired, target,
+                net.minecraft.block.ShapeContext.absent())) {
+            return false;
+        }
+        {
+            net.minecraft.util.math.Box placeBox =
+                    net.minecraft.util.math.Box.from(Vec3d.ofCenter(target));
+            List<net.minecraft.entity.Entity> entities =
+                    world.getOtherEntities(null, placeBox);
+            for (net.minecraft.entity.Entity entity : entities) {
+                if (!entity.isSpectator() && entity.isAlive()) {
+                    return false;
+                }
+            }
+        }
+
         // ── 2. find an adjacent face to click ───────────────────────────
         //  For pillar blocks (logs, quartz pillars, etc.), prefer clicking
         //  a face whose axis matches the desired axis property.
         Direction face = findOrientedPlacementFace(world, target, desired);
-        boolean airPlace = (face == null);
+
+        if (face == null) {
+            // No adjacent solid block to click against.  Air placements
+            // are immediately rejected by GrimAC's AirLiquidPlace check
+            // (cancelvl=0) because the packet's block position points to
+            // an air block.  Skip this block — the bottom-up sort order
+            // ensures we'll retry once neighboring blocks are placed.
+            return false;
+        }
 
         Vec3d eyePos = player.getEyePos();
         float desiredYaw;
         float desiredPitch;
         boolean needsSneak = false;
 
-        if (airPlace) {
-            // No adjacent face available — fall back to air placement.
-            // Point toward the target block's center and use insideBlock=true.
-            face = Direction.UP; // placeholder direction
-            Vec3d hitPos = Vec3d.ofCenter(target);
-            Vec3d toHit = hitPos.subtract(eyePos);
-            double horizDist = Math.sqrt(toHit.x * toHit.x + toHit.z * toHit.z);
-            desiredYaw = (float) (MathHelper.atan2(toHit.z, toHit.x) * (180.0 / Math.PI)) - 90.0f;
-            desiredPitch = (float) -(MathHelper.atan2(toHit.y, horizDist) * (180.0 / Math.PI));
-
-            // Override yaw for blocks that use the player's horizontal facing
-            Float facingYaw = getRequiredYaw(desired);
-            if (facingYaw != null) {
-                desiredYaw = facingYaw;
-                desiredPitch = computePitchToward(eyePos, hitPos);
-            }
-            // Override pitch for 6-dir blocks facing UP/DOWN
-            Float facingPitch = getRequiredPitch(desired);
-            if (facingPitch != null) {
-                desiredPitch = facingPitch;
-            }
-        } else {
+        {
             BlockPos neighbor = target.offset(face);
             Block neighborBlock = world.getBlockState(neighbor).getBlock();
             needsSneak = isInteractive(neighborBlock);
@@ -833,11 +876,16 @@ public final class PlacementEngine {
         pendingTarget = target.toImmutable();
         pendingDesired = desired;
         pendingFace = face;
-        pendingAirPlace = airPlace;
+        pendingAirPlace = false;
         pendingNeedsSneak = needsSneak;
         pendingItem = requiredItem;
-        targetYaw = desiredYaw;
-        targetPitch = MathHelper.clamp(desiredPitch, -90.0f, 90.0f);
+        // Snap to mouse-sensitivity GCD so the rotation delta looks
+        // reachable with the player's input device.  Both GriefKit2 and
+        // Highway-Gooner apply the same transformation.
+        targetYaw = snapToMouseGCD(desiredYaw, player.getYaw());
+        targetPitch = MathHelper.clamp(
+                snapToMouseGCD(desiredPitch, player.getPitch()),
+                -90.0f, 90.0f);
         savedYaw = player.getYaw();
         savedPitch = player.getPitch();
         rotateTicks = 0;
@@ -938,8 +986,10 @@ public final class PlacementEngine {
         pendingAirPlace = false;  // liquids never air-place
         pendingNeedsSneak = needsSneak;
         pendingItem = bucketItem;
-        targetYaw = desiredYaw;
-        targetPitch = MathHelper.clamp(desiredPitch, -90.0f, 90.0f);
+        targetYaw = snapToMouseGCD(desiredYaw, player.getYaw());
+        targetPitch = MathHelper.clamp(
+                snapToMouseGCD(desiredPitch, player.getPitch()),
+                -90.0f, 90.0f);
         savedYaw = player.getYaw();
         savedPitch = player.getPitch();
         rotateTicks = 0;
@@ -2046,6 +2096,29 @@ public final class PlacementEngine {
         Vec3d diff = target.subtract(eye);
         double horizDist = Math.sqrt(diff.x * diff.x + diff.z * diff.z);
         return (float) -(MathHelper.atan2(diff.y, horizDist) * (180.0 / Math.PI));
+    }
+
+    /**
+     * Snaps a rotation angle to the nearest value reachable by the
+     * player's current mouse sensitivity.
+     *
+     * <p>The Minecraft client quantises yaw/pitch deltas to multiples
+     * of a step size derived from the sensitivity slider.  GrimAC's
+     * {@code SensitivityProcessor} flags rotations whose delta from
+     * the previous server rotation isn't an integer multiple of this
+     * step (the "Greatest Common Divisor" check).  Both GriefKit2 and
+     * Highway-Gooner apply the same formula.
+     *
+     * @param desired        the desired angle (degrees)
+     * @param serverCurrent  the server's current value for this axis
+     * @return the closest GCD-aligned angle to {@code desired}
+     */
+    private static float snapToMouseGCD(float desired, float serverCurrent) {
+        MinecraftClient mc = MinecraftClient.getInstance();
+        double sens = mc.options.getMouseSensitivity().getValue();
+        double gcd = Math.pow(sens * 0.6 + 0.2, 3.0) * 1.2;
+        if (gcd < 0.001) return desired;            // zero-sensitivity guard
+        return (float) (desired - (desired - serverCurrent) % gcd);
     }
 
     // ── placement face finding ──────────────────────────────────────────
