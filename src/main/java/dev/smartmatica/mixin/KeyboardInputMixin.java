@@ -1,6 +1,6 @@
-package dev.litematicaprinter.mixin;
+package dev.smartmatica.mixin;
 
-import dev.litematicaprinter.util.SneakOverride;
+import dev.smartmatica.util.SneakOverride;
 import net.minecraft.client.input.Input;
 import net.minecraft.client.input.KeyboardInput;
 /*? if >=1.21.4 {*//*
@@ -12,13 +12,13 @@ import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 
 /**
- * Injects at the <b>tail</b> of {@link KeyboardInput#tick} — right after
+ * Injects at the tail of {@link KeyboardInput#tick} — right after
  * the physical keyboard state has been polled — so we can override the
  * sneak input before MC's movement code reads it.
  *
- * <p>This mirrors Baritone's {@code InputOverrideHandler} approach: the
+ * This mirrors Baritone's {@code InputOverrideHandler} approach: the
  * only reliable way to force sneak during movement processing is to patch
- * the {@link Input} fields <i>after</i> keyboard polling but <i>before</i>
+ * the {@link Input} fields after keyboard polling but before
  * the movement tick that consumes them.
  */
 @Mixin(KeyboardInput.class)

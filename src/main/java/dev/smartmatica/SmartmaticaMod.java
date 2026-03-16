@@ -1,8 +1,8 @@
-package dev.litematicaprinter;
+package dev.smartmatica;
 
-import dev.litematicaprinter.command.PrinterCommand;
-import dev.litematicaprinter.printer.SchematicPrinter;
-import dev.litematicaprinter.schematic.PrinterResourceManager;
+import dev.smartmatica.command.PrinterCommand;
+import dev.smartmatica.printer.SchematicPrinter;
+import dev.smartmatica.schematic.PrinterResourceManager;
 import net.fabricmc.api.ClientModInitializer;
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
 import net.fabricmc.fabric.api.client.keybinding.v1.KeyBindingHelper;
@@ -19,7 +19,7 @@ import org.slf4j.LoggerFactory;
  * Smartmatica — a standalone Fabric mod that automatically places
  * blocks from loaded {@code .litematic} schematics.
  */
-public class LitematicaPrinterMod implements ClientModInitializer {
+public class SmartmaticaMod implements ClientModInitializer {
 
     public static final String MOD_ID = "smartmatica";
     public static final Logger LOGGER = LoggerFactory.getLogger("Smartmatica");

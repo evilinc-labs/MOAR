@@ -1,16 +1,16 @@
-package dev.litematicaprinter.printer;
+package dev.smartmatica.printer;
 
-import dev.litematicaprinter.schematic.LitematicaDetector;
-import dev.litematicaprinter.schematic.LitematicaSchematic;
-import dev.litematicaprinter.schematic.ChestIndexer;
-import dev.litematicaprinter.schematic.PrinterCheckpoint;
-import dev.litematicaprinter.schematic.PrinterResourceManager;
-import dev.litematicaprinter.util.BlockDependency;
-import dev.litematicaprinter.util.ChatHelper;
-import dev.litematicaprinter.util.PathWalker;
-import dev.litematicaprinter.util.PlacementEngine;
-import dev.litematicaprinter.util.PrinterDatabase;
-import dev.litematicaprinter.util.SneakOverride;
+import dev.smartmatica.schematic.LitematicaDetector;
+import dev.smartmatica.schematic.LitematicaSchematic;
+import dev.smartmatica.schematic.ChestIndexer;
+import dev.smartmatica.schematic.PrinterCheckpoint;
+import dev.smartmatica.schematic.PrinterResourceManager;
+import dev.smartmatica.util.BlockDependency;
+import dev.smartmatica.util.ChatHelper;
+import dev.smartmatica.util.PathWalker;
+import dev.smartmatica.util.PlacementEngine;
+import dev.smartmatica.util.PrinterDatabase;
+import dev.smartmatica.util.SneakOverride;
 import net.minecraft.block.*;
 import net.minecraft.block.enums.BedPart;
 import net.minecraft.block.enums.DoubleBlockHalf;
@@ -63,7 +63,7 @@ import java.util.*;
  *       takes needed items, walks back, and resumes building.
  *
  * Load/unload and position commands are handled by
- * {@link dev.litematicaprinter.command.PrinterCommand PrinterCommand}.
+ * {@link dev.smartmatica.command.PrinterCommand PrinterCommand}.
  */
 public class SchematicPrinter {
 
@@ -90,7 +90,7 @@ public class SchematicPrinter {
 
     // settings
 
-    private int bps = 4;
+    private int bps = 13;
     private double range = 4.2;
     private boolean swapItems = true;
     private boolean printInAir = true;
@@ -623,7 +623,7 @@ public class SchematicPrinter {
     // settings accessors
 
     public int getBps()                 { return bps; }
-    public void setBps(int bps)        { this.bps = Math.max(1, Math.min(9, bps)); }
+    public void setBps(int bps)        { this.bps = Math.max(1, Math.min(20, bps)); }
     public double getRange()           { return range; }
     public void setRange(double range) { this.range = Math.max(2.0, Math.min(4.5, range)); }
     public boolean isSwapItems()       { return swapItems; }
@@ -661,8 +661,7 @@ public class SchematicPrinter {
 
         // In manual mode, use silent rotation to avoid camera jerk and
         // conflicting rotation states that cause server rubberbanding.
-        // Also cap BPS to 4 — manual mode shares the connection with the
-        // player's own interactions so a lower budget is safer.
+        // Forward BPS to the placement engine.
         PlacementEngine.setBps(bps);
         if (autoBuild) {
             PlacementEngine.setSilentRotation(false);
@@ -1308,10 +1307,10 @@ public class SchematicPrinter {
     /**
      * Scans blocks near the player and records any that Baritone likely
      * placed as scaffold.  A block is considered scaffold if:
-     * <ol>
-     *   <li>it matches one of Baritone's acceptable throwaway items, AND</li>
-     *   <li>the schematic expects air (or nothing) at that position.</li>
-     * </ol>
+     * 
+     *     - it matches one of Baritone's acceptable throwaway items, AND
+     *     - the schematic expects air (or nothing) at that position.
+     * 
      * Called periodically during placement walks so scaffold blocks are
      * tracked as they appear.
      */
@@ -1357,13 +1356,13 @@ public class SchematicPrinter {
      * Breaks scaffold blocks one at a time.  When all tracked scaffold
      * has been removed, transitions to {@link AutoState#IDLE}.
      *
-     * <p>Flow:
-     * <ol>
-     *   <li>If no target, pick the next scaffold position from the database.</li>
-     *   <li>If out of reach, walk to it via Baritone.</li>
-     *   <li>Look at it and begin breaking (attackBlock + updateBlockBreakingProgress).</li>
-     *   <li>Once broken (world block is air), remove from DB and pick next.</li>
-     * </ol>
+     * Flow:
+     * 
+     *     - If no target, pick the next scaffold position from the database.
+     *     - If out of reach, walk to it via Baritone.
+     *     - Look at it and begin breaking (attackBlock + updateBlockBreakingProgress).
+     *     - Once broken (world block is air), remove from DB and pick next.
+     * 
      */
     private void tickCleaningScaffold(MinecraftClient mc) {
         if (mc.player == null || mc.interactionManager == null || mc.world == null) return;
@@ -1850,7 +1849,7 @@ public class SchematicPrinter {
      * needed when the player is on a narrow pillar or 1-block ledge
      * where {@link #findShulkerPlaceSpot} returns {@code null}.
      *
-     * <p>Searches for an air block at the same Y level as the block the
+     * Searches for an air block at the same Y level as the block the
      * player is standing on, adjacent to any solid block (so we have a
      * face to place against).  Then swaps a solid block from inventory
      * into the hotbar and places it via {@code interactBlock}.
@@ -2578,17 +2577,17 @@ public class SchematicPrinter {
     }
 
     /**
-     * Finds the <b>lowest</b> unbuilt block in the schematic that is above
+     * Finds the lowest unbuilt block in the schematic that is above
      * the player's current reach — used to determine where Baritone should
      * path to next.
      *
-     * <p>By targeting the lowest unreached Y-level, the player moves up
+     * By targeting the lowest unreached Y-level, the player moves up
      * incrementally: go up a few layers, build what's there (bottom-up),
      * then move up again when the next layer is above reach.  This
      * avoids pathing to the very top of an unbuilt schematic where
      * there's nothing to stand on.
      *
-     * <p>Among blocks at the target Y, the closest (by horizontal
+     * Among blocks at the target Y, the closest (by horizontal
      * distance) is returned so the path is near the action.
      */
     private BlockPos findHighBuildZone(ClientPlayerEntity player, World world) {
@@ -2778,23 +2777,23 @@ public class SchematicPrinter {
      * Computes intermediate waypoints between the player and a supply
      * chest using known positions from the {@link PrinterDatabase}.
      *
-     * <p>The database already tracks two classes of known-reachable
+     * The database already tracks two classes of known-reachable
      * positions:
-     * <ul>
-     *   <li><b>Other supply chests</b> — ground-level, previously
+ *
+     *     - Other supply chests — ground-level, previously
      *       accessible container positions.  Excellent stepping stones
-     *       because they're typically in walkable areas.</li>
-     *   <li><b>Scaffold blocks</b> — Baritone-placed blocks that form
+     *       because they're typically in walkable areas.
+     *     - Scaffold blocks — Baritone-placed blocks that form
      *       pillars or bridges between the build site and ground level.
-     *       These trace the path Baritone used to reach elevated areas.</li>
-     * </ul>
+     *       These trace the path Baritone used to reach elevated areas.
+ *
      *
-     * <p>All database positions are pooled as candidates, then a greedy
+     * All database positions are pooled as candidates, then a greedy
      * nearest-neighbour chain is built from the player toward the target
      * chest.  Each hop advances toward the destination, and only
      * candidates that make meaningful forward progress are selected.
      *
-     * <p>The last entry is always the chest position itself.
+     * The last entry is always the chest position itself.
      *
      * @param from  player's current position
      * @param to    supply chest position
@@ -2923,19 +2922,19 @@ public class SchematicPrinter {
      * journey into waypoint legs if the distance or elevation change
      * is too large for a single Baritone A* search.
      *
-     * <p>This is the "Baritone extender".  For vertical-dominant paths
-     * (e.g. player at Y=-57, target at Y=-25) it uses a <b>two-phase</b>
+     * This is the "Baritone extender".  For vertical-dominant paths
+     * (e.g. player at Y=-57, target at Y=-25) it uses a two-phase
      * approach instead of 3D interpolation (which produces mid-air
      * waypoints that Baritone can't reach):
-     * <ol>
-     *   <li><b>Horizontal phase</b> — walk along the ground to the XZ
-     *       column directly below/above the target.</li>
-     *   <li><b>Vertical phase</b> — pillar up or descend in 8-block
+     * 
+     *     - Horizontal phase — walk along the ground to the XZ
+     *       column directly below/above the target.
+     *     - Vertical phase — pillar up or descend in 8-block
      *       steps, each directly above/below the last.  Baritone only
-     *       needs to pillar/drop a few blocks per leg.</li>
-     * </ol>
+     *       needs to pillar/drop a few blocks per leg.
+     * 
      *
-     * <p>For horizontal-dominant paths the simpler linear-interpolation
+     * For horizontal-dominant paths the simpler linear-interpolation
      * approach is used, since waypoints stay near ground level.
      *
      * @param player   the client player
@@ -3340,15 +3339,15 @@ public class SchematicPrinter {
     }
 
     /**
-     * Scans the schematic for unbuilt non-air blocks in <b>unloaded</b>
+     * Scans the schematic for unbuilt non-air blocks in unloaded
      * chunks.  Returns the nearest such position so the player can walk
      * toward it, causing the chunk to load and enabling placement.
      *
-     * <p>This is the key to supporting 500×500+ builds: once all loaded
+     * This is the key to supporting 500×500+ builds: once all loaded
      * chunks are built, the player walks toward the closest unloaded
      * part of the schematic and the cycle repeats.
      *
-     * <p>We cannot verify world state for unloaded chunks, so we
+     * We cannot verify world state for unloaded chunks, so we
      * conservatively assume any non-air schematic block in an unloaded
      * chunk still needs to be placed.
      */
@@ -3607,11 +3606,11 @@ public class SchematicPrinter {
      * Returns {@code true} if this block state is an auto-created part that
      * should NOT be individually placed.  These blocks are created by
      * Minecraft automatically when the primary part is placed.
-     * <ul>
-     *   <li>Door upper half — created when placing lower half</li>
-     *   <li>Bed head — created when placing foot</li>
-     *   <li>Tall plant upper — created when placing lower half</li>
-     * </ul>
+ *
+     *     - Door upper half — created when placing lower half
+     *     - Bed head — created when placing foot
+     *     - Tall plant upper — created when placing lower half
+ *
      */
     private static boolean isAutoCreatedPart(BlockState state) {
         Block block = state.getBlock();
@@ -3637,22 +3636,22 @@ public class SchematicPrinter {
      * Returns {@code true} if the existing block state is "effectively placed"
      * relative to the desired state.  This ignores neighbor-computed dynamic
      * properties that the player cannot control during placement:
-     * <ul>
-     *   <li>Stairs: {@code STAIR_SHAPE} (computed from adjacent stairs)</li>
-     *   <li>Doors: {@code OPEN}, {@code POWERED}, {@code DOOR_HINGE}</li>
-     *   <li>Fences: connection booleans (N/S/E/W)</li>
-     *   <li>Walls: connection heights + UP</li>
-     *   <li>Chests: {@code CHEST_TYPE} (single ↔ double)</li>
-     *   <li>Panes (glass panes, iron bars): connections are neighbor-computed</li>
-     *   <li>Fence gates: OPEN, POWERED, IN_WALL are dynamic; FACING matters</li>
-     *   <li>Redstone wire: connections + power level</li>
-     *   <li>Mushroom blocks: face booleans are neighbor-computed</li>
-     *   <li>Vines: face booleans are neighbor-computed</li>
-     *   <li>Chorus plant: connections are neighbor-computed</li>
-     *   <li>Tripwire: ATTACHED, POWERED, DISARMED are dynamic</li>
-     *   <li>Tall plants: any matching type is sufficient</li>
-     *   <li>Snow: LAYERS is placement-specific</li>
-     * </ul>
+ *
+     *     - Stairs: {@code STAIR_SHAPE} (computed from adjacent stairs)
+     *     - Doors: {@code OPEN}, {@code POWERED}, {@code DOOR_HINGE}
+     *     - Fences: connection booleans (N/S/E/W)
+     *     - Walls: connection heights + UP
+     *     - Chests: {@code CHEST_TYPE} (single ↔ double)
+     *     - Panes (glass panes, iron bars): connections are neighbor-computed
+     *     - Fence gates: OPEN, POWERED, IN_WALL are dynamic; FACING matters
+     *     - Redstone wire: connections + power level
+     *     - Mushroom blocks: face booleans are neighbor-computed
+     *     - Vines: face booleans are neighbor-computed
+     *     - Chorus plant: connections are neighbor-computed
+     *     - Tripwire: ATTACHED, POWERED, DISARMED are dynamic
+     *     - Tall plants: any matching type is sufficient
+     *     - Snow: LAYERS is placement-specific
+ *
      */
     private static boolean isEffectivelyPlaced(BlockState existing, BlockState desired) {
         if (existing.equals(desired)) return true;
@@ -3800,14 +3799,14 @@ public class SchematicPrinter {
      * Finds a safe ground-level position near {@code target} where the
      * player can stand and still be within placement reach.
      *
-     * <p>Checks in a spiral outward from the target, looking for a spot
+     * Checks in a spiral outward from the target, looking for a spot
      * that has:
-     * <ul>
-     *   <li>Solid (non-air, non-liquid) ground directly below</li>
-     *   <li>Air (or replaceable) at feet and head level</li>
-     *   <li>Not an unbuilt schematic block (so the player doesn't
-     *       stand inside blocks that need placing)</li>
-     * </ul>
+ *
+     *     - Solid (non-air, non-liquid) ground directly below
+     *     - Air (or replaceable) at feet and head level
+     *     - Not an unbuilt schematic block (so the player doesn't
+     *       stand inside blocks that need placing)
+ *
      *
      * @return a suitable {@link BlockPos} for the player's feet, or
      *         {@code null} if none was found
@@ -3911,7 +3910,7 @@ public class SchematicPrinter {
      * {@code from} to {@code to} at the same Y level (or {@code to.getY()})
      * and checks that every intermediate block has solid ground beneath it.
      *
-     * <p>This is NOT full pathfinding — it just detects obvious air gaps
+     * This is NOT full pathfinding — it just detects obvious air gaps
      * (chasms, 1-block holes) between two positions.  If the positions
      * are on different Y levels, the check uses the destination Y since
      * that's where the player would need to stand.
@@ -3999,7 +3998,7 @@ public class SchematicPrinter {
      * Returns {@code true} if placing a block at {@code pos} would seal
      * the player's last walkable horizontal exit.
      *
-     * <p>Only relevant when the candidate block is in the player's
+     * Only relevant when the candidate block is in the player's
      * "exit ring" — one of the 4 cardinal neighbours at feet or head
      * level.  If placing it would drop the exit count from ≥1 to 0,
      * the placement is vetoed.
@@ -4042,11 +4041,11 @@ public class SchematicPrinter {
     }
 
     /**
-     * Returns {@code true} if the player currently has <em>no</em>
+     * Returns {@code true} if the player currently has no
      * walkable horizontal exit (all 4 cardinal directions are blocked
      * at either feet or head level by solid blocks).
      *
-     * <p>Fluids do NOT count as entrapment — the player can swim
+     * Fluids do NOT count as entrapment — the player can swim
      * through water/lava even though it's undesirable.  Only solid
      * blocks that physically prevent horizontal movement trigger this.
      */
@@ -4066,7 +4065,7 @@ public class SchematicPrinter {
 
     /**
      * Returns {@code true} if the given feet position has at least one
-     * horizontal exit direction that is currently clear <em>and</em>
+     * horizontal exit direction that is currently clear and
      * will remain clear after the schematic is fully built (i.e. the
      * exit blocks are not unbuilt schematic positions).
      */
@@ -4117,7 +4116,7 @@ public class SchematicPrinter {
      * solid ground, passable feet/head, and not inside the schematic's
      * unbuilt footprint.
      *
-     * <p>Unlike {@link #findStandingPosition}, this accepts positions in
+     * Unlike {@link #findStandingPosition}, this accepts positions in
      * or near water — the goal is escaping solid entrapment, and
      * swimming through water is acceptable.
      *

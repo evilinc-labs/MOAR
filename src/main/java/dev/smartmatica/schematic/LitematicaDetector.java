@@ -1,4 +1,4 @@
-package dev.litematicaprinter.schematic;
+package dev.smartmatica.schematic;
 
 import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
@@ -23,13 +23,13 @@ import java.util.List;
 /**
  * Detects schematics that Litematica currently has loaded/placed in the world.
  *
- * <p>Litematica persists its active placements in JSON files under
+ * Litematica persists its active placements in JSON files under
  * {@code config/litematica/}.  The per-dimension files follow the pattern
  * {@code litematica_<profile>_dim_<dimension>.json} and contain an array
  * of placement entries with the schematic file path, world-space origin,
  * and enabled flag.
  *
- * <p>This class scans those files to find enabled placements, allowing the
+ * This class scans those files to find enabled placements, allowing the
  * printer to auto-detect what the user has loaded in Litematica
  * without requiring a separate load step.
  */
@@ -56,10 +56,10 @@ public final class LitematicaDetector {
 
     /**
      * Scan all Litematica per-dimension config files and return every
-     * <b>enabled</b> schematic placement whose {@code .litematic} file
+     * enabled schematic placement whose {@code .litematic} file
      * still exists on disk.
      *
-     * <p>Tries Litematica's in-memory state first (via reflection), then
+     * Tries Litematica's in-memory state first (via reflection), then
      * falls back to parsing on-disk JSON configs.
      *
      * @return list of detected placements (may be empty, never null)
@@ -107,7 +107,7 @@ public final class LitematicaDetector {
      * This works immediately when the user loads/moves a schematic in
      * Litematica, without waiting for a config save.
      *
-     * <p>Reflection chain:
+     * Reflection chain:
      * {@code DataManager.getSchematicPlacementManager()
      *     .getAllSchematicsPlacements() → List<SchematicPlacement>}
      * Each {@code SchematicPlacement} has {@code getOrigin()},
@@ -239,7 +239,7 @@ public final class LitematicaDetector {
      * transparent overlays exist at their exact world positions in this
      * synthetic world.
      *
-     * <p>The method scans blocks near the player in the SchematicWorld,
+     * The method scans blocks near the player in the SchematicWorld,
      * finds non-air ones, and correlates them against the loaded
      * schematic to compute the anchor offset.  This does not depend on
      * Litematica's placement origin logic at all.

@@ -11,7 +11,7 @@
 	"environment": "client",
 	"entrypoints": {
 		"client": [
-			"dev.litematicaprinter.LitematicaPrinterMod"
+			"dev.smartmatica.SmartmaticaMod"
 		]
 	},
 	"mixins": [

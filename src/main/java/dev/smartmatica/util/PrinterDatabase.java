@@ -1,4 +1,4 @@
-package dev.litematicaprinter.util;
+package dev.smartmatica.util;
 
 import com.google.gson.Gson;
 import com.google.gson.GsonBuilder;
@@ -17,14 +17,14 @@ import java.util.*;
 /**
  * Centralised database for the Smartmatica mod.
  *
- * <h2>Tables</h2>
- * <ol>
- *   <li><b>Chest index table</b> — registered supply-chest positions
+ * Tables
+ * 
+ *     - Chest index table — registered supply-chest positions
  *       (persisted to disk) and their cached inventory snapshots
- *       (in-memory only, rebuilt each session by opening chests).</li>
- * </ol>
+ *       (in-memory only, rebuilt each session by opening chests).
+ * 
  *
- * <p>Supply-chest positions are persisted to
+ * Supply-chest positions are persisted to
  * {@code config/smartmatica/printer_supply.json}.
  * Chest snapshots are ephemeral (in-memory only).
  */
@@ -44,7 +44,7 @@ public final class PrinterDatabase {
      * {@code allowPlace} pathfinding; they are non-schematic blocks
      * that should be cleaned up after the build completes.
      *
-     * <p>Persisted to {@link #SCAFFOLD_FILE} so scaffold data survives
+     * Persisted to {@link #SCAFFOLD_FILE} so scaffold data survives
      * game restarts and the cleanup job can resume.
      */
     private static final Map<BlockPos, String> scaffoldTable = new LinkedHashMap<>();
@@ -238,7 +238,7 @@ public final class PrinterDatabase {
     /**
      * Find the best supply chest for a set of needed item IDs.
      *
-     * <p>Ranking: indexed chests with matching items (by match count
+     * Ranking: indexed chests with matching items (by match count
      * then distance) → unindexed chests (by distance) → indexed chests
      * with no matches (by distance, snapshot may be stale).
      */
@@ -478,7 +478,7 @@ public final class PrinterDatabase {
     /**
      * Dump (clear) all build-session data — scaffold + chest snapshots.
      * Called when a build is completed or the printer is fully reset.
-     * Supply-chest positions are <b>not</b> cleared (they're persistent
+     * Supply-chest positions are not cleared (they're persistent
      * configuration, not per-build data).
      */
     public static void dumpBuildData() {

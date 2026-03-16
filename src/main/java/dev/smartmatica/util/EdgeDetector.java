@@ -1,4 +1,4 @@
-package dev.litematicaprinter.util;
+package dev.smartmatica.util;
 
 import net.minecraft.client.network.ClientPlayerEntity;
 import net.minecraft.util.math.BlockPos;
@@ -7,27 +7,27 @@ import net.minecraft.world.World;
 
 /**
  * Scans the blocks around a player's hitbox to determine whether they
- * are near a <b>dangerous</b> platform edge (a position where the
+ * are near a dangerous platform edge (a position where the
  * ground drops away by 3+ blocks, enough to take fall damage).
  *
- * <p>Used by the sneak system to avoid forcing sneak speed when the
+ * Used by the sneak system to avoid forcing sneak speed when the
  * player is safely in the middle of a flat platform — sneak is only
  * engaged when the player is within ~0.3 blocks of a ledge where
  * MC's {@code clipAtLedge()} is needed to prevent falling.
  *
- * <h3>Algorithm</h3>
+ * Algorithm
  * The player hitbox is 0.6×1.8×0.6 (centred on X/Z).
  * We expand the hitbox by a small margin and then iterate over
- * <b>every block column</b> that the expanded bounding box overlaps.
- * If <b>any</b> column has no solid ground within 3 blocks below foot
+ * every block column that the expanded bounding box overlaps.
+ * If any column has no solid ground within 3 blocks below foot
  * level, the player is near a dangerous edge and should sneak.
  *
- * <p>Unlike the previous 8-point sampling approach, this grid scan
+ * Unlike the previous 8-point sampling approach, this grid scan
  * has no blind spots — it catches concave inner corners (e.g. cross-
  * or L-shaped platforms) where discrete probe points could miss the
  * gap between two arms.
  *
- * <h3>Why 3 blocks?</h3>
+ * Why 3 blocks?
  * Falls of 1–2 blocks deal no damage and are trivially recoverable.
  * Only falls of 3+ blocks are dangerous (4+ blocks deal damage).
  * Checking 3 levels avoids false positives from small gaps in
@@ -59,7 +59,7 @@ public final class EdgeDetector {
      * edge — i.e. there is at least one block column around the
      * expanded hitbox that has a 3+ block drop beneath it.
      *
-     * <p>When this returns {@code false}, the player is safely on solid
+     * When this returns {@code false}, the player is safely on solid
      * ground (or only near small 1–2 block step-downs), and sneaking is
      * unnecessary.
      *
@@ -114,7 +114,7 @@ public final class EdgeDetector {
      * given (x, z) column within 3 blocks below the foot level.  This
      * means a fall of at most 2 blocks (non-damaging) — safe to walk.
      *
-     * <p>Checks: footY, footY−1, footY−2.  A 3+ block drop means no
+     * Checks: footY, footY−1, footY−2.  A 3+ block drop means no
      * solid ground in this range and the player could take fall damage.
      */
     private static boolean hasSafeGround(World world, int x, int y, int z) {

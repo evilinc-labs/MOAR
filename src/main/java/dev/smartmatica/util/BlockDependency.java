@@ -1,4 +1,4 @@
-package dev.litematicaprinter.util;
+package dev.smartmatica.util;
 
 import net.minecraft.block.*;
 import net.minecraft.block.enums.BlockFace;
@@ -11,32 +11,30 @@ import net.minecraft.util.shape.VoxelShapes;
 import net.minecraft.world.World;
 
 /**
- * Determines block placement dependencies &mdash; whether a block needs an
- * adjacent support block to be placed (e.g.&nbsp;torches need a floor or wall,
+ * Determines block placement dependencies -- whether a block needs an
+ * adjacent support block to be placed (e.g. torches need a floor or wall,
  * ladders need a wall behind them, lanterns can hang from the ceiling).
  *
- * <p>Used by the placement queue to skip blocks whose support requirements
+ * Used by the placement queue to skip blocks whose support requirements
  * are not yet met, avoiding wasted placement attempts and false
- * &ldquo;missing item&rdquo; reports.  Support blocks (stone, planks, etc.)
+ * "missing item" reports. Support blocks (stone, planks, etc.)
  * are freestanding and always placed first, building up the structure that
  * dependent blocks (torches, signs, flowers, rails, etc.) attach to.
  *
- * <h3>Dependency tiers</h3>
- * <ul>
- *   <li><b>Tier&nbsp;0 &mdash; Freestanding:</b> stone, planks, glass, slabs,
- *       stairs, logs, concrete, etc.  No adjacent support needed.</li>
- *   <li><b>Tier&nbsp;1 &mdash; Floor-dependent:</b> torches (standing), signs
+ * Dependency tiers:
+ *   Tier 0 -- Freestanding: stone, planks, glass, slabs,
+ *       stairs, logs, concrete, etc. No adjacent support needed.
+ *   Tier 1 -- Floor-dependent: torches (standing), signs
  *       (standing), flowers, saplings, carpet, pressure plates, rails,
  *       redstone wire, repeaters, comparators, doors, beds, tall plants,
- *       candles, flower pots, sea pickles, skulls (standing).</li>
- *   <li><b>Tier&nbsp;2 &mdash; Wall-dependent:</b> wall torches, wall signs,
- *       wall banners, ladders, wall skulls, tripwire hooks.  Requires a
- *       solid block on the face the block is attached to.</li>
- *   <li><b>Tier&nbsp;3 &mdash; Ceiling-dependent:</b> hanging signs, hanging
- *       lanterns, ceiling buttons / levers.</li>
- *   <li><b>Tier&nbsp;4 &mdash; Multi-face:</b> vines (attach to one or more
- *       wall faces, or hang from block above).  Handled separately.</li>
- * </ul>
+ *       candles, flower pots, sea pickles, skulls (standing).
+ *   Tier 2 -- Wall-dependent: wall torches, wall signs,
+ *       wall banners, ladders, wall skulls, tripwire hooks. Requires a
+ *       solid block on the face the block is attached to.
+ *   Tier 3 -- Ceiling-dependent: hanging signs, hanging
+ *       lanterns, ceiling buttons / levers.
+ *   Tier 4 -- Multi-face: vines (attach to one or more
+ *       wall faces, or hang from block above). Handled separately.
  */
 public final class BlockDependency {
 
@@ -51,11 +49,11 @@ public final class BlockDependency {
      * {@link Direction#DOWN} for floor-placed blocks, the wall direction
      * for wall torches), or {@code null} if the block is freestanding.
      *
-     * <p>For blocks with variable attachment (buttons, levers), the
+     * For blocks with variable attachment (buttons, levers), the
      * direction is determined from block state properties.
      *
-     * <p><b>Note:</b> Vines are not handled here because they can attach
-     * to multiple faces.  Use {@link #isReadyToPlace} instead.
+     * Note: Vines are not handled here because they can attach
+     * to multiple faces. Use {@link #isReadyToPlace} instead.
      */
     public static Direction getRequiredSupport(BlockState state) {
         Block block = state.getBlock();
@@ -210,13 +208,13 @@ public final class BlockDependency {
 
     /**
      * Returns {@code true} if this block's placement dependencies are
-     * satisfied in the current world state.  Freestanding blocks always
+     * satisfied in the current world state. Freestanding blocks always
      * return {@code true}.
      *
-     * <p>For blocks that need support (torches, ladders, flowers, etc.),
+     * For blocks that need support (torches, ladders, flowers, etc.),
      * this checks whether the required adjacent block exists and is solid.
      *
-     * <p>Special case: {@link VineBlock} can attach to multiple faces —
+     * Special case: {@link VineBlock} can attach to multiple faces --
      * returns {@code true} if at least one attached face has support.
      */
     public static boolean isReadyToPlace(World world, BlockPos pos,
@@ -236,10 +234,8 @@ public final class BlockDependency {
 
     /**
      * Returns the dependency tier of a block state.
-     * <ul>
-     *   <li><b>0</b> — freestanding (no dependency)</li>
-     *   <li><b>1</b> — needs adjacent support</li>
-     * </ul>
+     *   0 -- freestanding (no dependency)
+     *   1 -- needs adjacent support
      * Used in comparator tie-breaking to prioritize freestanding blocks.
      */
     public static int getTier(BlockState state) {

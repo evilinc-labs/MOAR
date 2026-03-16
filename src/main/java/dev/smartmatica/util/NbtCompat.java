@@ -1,4 +1,4 @@
-package dev.litematicaprinter.util;
+package dev.smartmatica.util;
 
 import net.minecraft.SharedConstants;
 import net.minecraft.nbt.NbtCompound;
@@ -8,7 +8,7 @@ import net.minecraft.nbt.NbtList;
 /**
  * Compatibility layer for {@link NbtCompound} access across Minecraft versions.
  *
- * <p>Starting with Minecraft 1.21.5, many {@code NbtCompound} getters
+ * Starting with Minecraft 1.21.5, many {@code NbtCompound} getters
  * return {@link java.util.Optional} instead of raw values, and
  * {@code contains(String, int)} was replaced with {@code contains(String)}.
  * This class provides a stable API that works on both old and new versions,

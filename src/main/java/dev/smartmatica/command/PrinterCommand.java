@@ -1,14 +1,14 @@
-package dev.litematicaprinter.command;
+package dev.smartmatica.command;
 
 import com.mojang.brigadier.arguments.IntegerArgumentType;
 import com.mojang.brigadier.arguments.StringArgumentType;
-import dev.litematicaprinter.LitematicaPrinterMod;
-import dev.litematicaprinter.printer.SchematicPrinter;
-import dev.litematicaprinter.schematic.LitematicaDetector;
-import dev.litematicaprinter.schematic.PrinterCheckpoint;
-import dev.litematicaprinter.schematic.PrinterResourceManager;
-import dev.litematicaprinter.util.PrinterDatabase;
-import dev.litematicaprinter.util.ChatHelper;
+import dev.smartmatica.SmartmaticaMod;
+import dev.smartmatica.printer.SchematicPrinter;
+import dev.smartmatica.schematic.LitematicaDetector;
+import dev.smartmatica.schematic.PrinterCheckpoint;
+import dev.smartmatica.schematic.PrinterResourceManager;
+import dev.smartmatica.util.PrinterDatabase;
+import dev.smartmatica.util.ChatHelper;
 import net.fabricmc.fabric.api.client.command.v2.ClientCommandManager;
 import net.fabricmc.fabric.api.client.command.v2.ClientCommandRegistrationCallback;
 import net.fabricmc.fabric.api.client.command.v2.FabricClientCommandSource;
@@ -31,14 +31,14 @@ import java.util.Map;
  * Registers all {@code /printer} client commands using Fabric API's
  * client command system.
  *
- * <pre>
+ * 
  * /printer load &lt;file&gt;          – load a .litematic and anchor at current pos
  * /printer unload                – unload the current schematic
  * /printer here                  – re-anchor at current position
  * /printer pos &lt;x&gt; &lt;y&gt; &lt;z&gt;      – set anchor to specific coordinates
  * /printer status                – show progress info
  * /printer list                  – show available schematics
- * /printer detect                – detect &amp; load Litematica's active placement
+ * /printer detect                – detect & load Litematica's active placement
  * /printer resume                – restore from last checkpoint
  * /printer materials             – show bill of materials breakdown
  * /printer toggle                – toggle the printer on/off
@@ -51,7 +51,7 @@ import java.util.Map;
  * /printer supply list           – show all designated supply chests
  * /printer supply clear          – remove all supply chest designations
  * /printer supply scan           – show supply chest index summary
- * </pre>
+ * 
  */
 public final class PrinterCommand {
 
@@ -675,18 +675,18 @@ public final class PrinterCommand {
     }
 
     private static SchematicPrinter getPrinter() {
-        return LitematicaPrinterMod.getPrinter();
+        return SmartmaticaMod.getPrinter();
     }
 
     /**
      * Finds the container block the player is targeting.
      *
-     * <p>Priority:
-     * <ol>
-     *   <li>Crosshair target — the block the player is looking at</li>
-     *   <li>Feet position — the block at the player's feet</li>
-     *   <li>Below feet — the block directly below the player</li>
-     * </ol>
+     * Priority:
+     * 
+     *     - Crosshair target — the block the player is looking at
+     *     - Feet position — the block at the player's feet
+     *     - Below feet — the block directly below the player
+     * 
      *
      * @return the {@link BlockPos} of the nearest container, or {@code null}
      */

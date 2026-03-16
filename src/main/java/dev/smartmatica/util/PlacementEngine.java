@@ -1,4 +1,4 @@
-package dev.litematicaprinter.util;
+package dev.smartmatica.util;
 
 import net.minecraft.block.*;
 import net.minecraft.block.enums.BedPart;
@@ -92,23 +92,23 @@ public final class PlacementEngine {
     public static boolean isSilentRotation() { return silentRotation; }
 
     private static final Random JITTER_RNG = new Random();
-    private static final int   WINDOW_SIZE = 8;
-    private static final long  WINDOW_MS   = 425;
+    private static final int   WINDOW_SIZE = 6;
+    private static final long  WINDOW_MS   = 300;
 
-    private static final int  BATCH_MAX         = 9;
-    private static final long BATCH_COOLDOWN_MS = 310L;
+    private static final int  BATCH_MAX         = 20;
+    private static final long BATCH_COOLDOWN_MS = 300L;
     private static long       lastBatchMs       = 0L;
 
     private static final long[] placeHistory = new long[WINDOW_SIZE];
     private static int          historyIdx   = 0;
 
-    /** Per-block cadence floor — the minimum gap (in ns) between any two
-     *  consecutive placements.  Derived from the user-facing BPS setting. */
-    private static int    bps               = 4;
+    /** Per-block cadence floor -- the minimum gap (in ns) between any two
+     *  consecutive placements. Derived from the user-facing BPS setting. */
+    private static int    bps               = 13;
     private static long   lastPlacementNano = 0;
 
     public static void setBps(int value) {
-        bps = Math.max(1, Math.min(9, value));
+        bps = Math.max(1, Math.min(20, value));
     }
 
     public static int getBps() { return bps; }

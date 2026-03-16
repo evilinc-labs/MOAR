@@ -1,6 +1,6 @@
-package dev.litematicaprinter.schematic;
+package dev.smartmatica.schematic;
 
-import dev.litematicaprinter.util.PrinterDatabase;
+import dev.smartmatica.util.PrinterDatabase;
 import net.minecraft.block.ShulkerBoxBlock;
 import net.minecraft.component.DataComponentTypes;
 import net.minecraft.component.type.ContainerComponent;
@@ -19,13 +19,13 @@ import java.util.*;
  * (and shulker boxes within them) and stores snapshots in
  * {@link PrinterDatabase}.
  *
- * <p>On the client side you cannot read a chest's inventory without opening
+ * On the client side you cannot read a chest's inventory without opening
  * it.  This class snapshots the contents every time the player opens one of
  * the registered supply chests.  The snapshot includes items held directly
  * in the chest, as well as items inside any shulker boxes found in the
  * chest (read via {@code DataComponentTypes.CONTAINER}).
  *
- * <p>Thread safety: all methods are called on the client/render thread only.
+ * Thread safety: all methods are called on the client/render thread only.
  */
 public final class ChestIndexer {
 

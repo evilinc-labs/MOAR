@@ -1,4 +1,4 @@
-package dev.litematicaprinter.util;
+package dev.smartmatica.util;
 
 import net.minecraft.block.Block;
 import net.minecraft.block.BlockState;
@@ -27,7 +27,7 @@ import java.util.List;
 /**
  * Movement controller that walks the player toward a target position.
  *
- * <p>When Baritone is installed, delegates pathfinding to Baritone's A*
+ * When Baritone is installed, delegates pathfinding to Baritone's A*
  * engine via reflection — no compile-time Baritone dependency required.
  * When Baritone is absent, falls back to vanilla key simulation with
  * straight-line walking, auto-jumping, and stuck detection.
@@ -146,7 +146,7 @@ public final class PathWalker {
 
     /** Items reserved for the schematic build — keyed by Item, value
      *  is the count still needed.  {@link #configureThrowawayFromInventory}
-     *  only offers blocks the player has <em>in excess</em> of these
+     *  only offers blocks the player has in excess of these
      *  quantities so Baritone doesn't waste building materials as
      *  scaffold. */
     private static java.util.Map<Item, Integer> reservedItems = java.util.Collections.emptyMap();
@@ -189,7 +189,7 @@ public final class PathWalker {
     }
 
     /**
-     * Start walking <b>adjacent</b> to the given position (next to it, not on
+     * Start walking adjacent to the given position (next to it, not on
      * top of it).  Useful for navigating to chests or interactable blocks.
      * Falls back to {@link #walkTo(BlockPos)} when Baritone is not available.
      */
@@ -233,11 +233,11 @@ public final class PathWalker {
      * Walk to within {@code radius} blocks of the given position with
      * Baritone's {@code allowPlace} and {@code allowParkour} enabled.
      *
-     * <p>This lets Baritone pillar-up, bridge across gaps, and use
+     * This lets Baritone pillar-up, bridge across gaps, and use
      * parkour jumps to reach elevated or otherwise unreachable targets
      * — replacing the custom scaffolding system entirely.
      *
-     * <p>Placement settings are enabled before the path starts and
+     * Placement settings are enabled before the path starts and
      * automatically restored when pathing completes (via
      * {@link #tickBaritone()}).
      */
@@ -313,7 +313,7 @@ public final class PathWalker {
      * the player's feet.  Each block break causes a safe 1-block
      * fall.  This bypasses Baritone entirely — no pathfinding needed.
      *
-     * <p>Continues until the player reaches {@code targetY} or
+     * Continues until the player reaches {@code targetY} or
      * encounters a gap where falling would exceed 3 blocks (unsafe).
      *
      * @param targetY  the Y level to descend to
@@ -348,12 +348,12 @@ public final class PathWalker {
     /**
      * Walk to a destination via a list of intermediate waypoints.
      *
-     * <p>Baritone navigates to each waypoint in order using GoalNear
+     * Baritone navigates to each waypoint in order using GoalNear
      * with the given {@code radius}.  When a waypoint is reached, the
      * next one is automatically started.  When the final waypoint is
      * reached, {@code arrived} is set to {@code true}.
      *
-     * <p>If Baritone fails to reach any waypoint, the walker stops
+     * If Baritone fails to reach any waypoint, the walker stops
      * normally (arrived=false) so the caller can handle the failure.
      *
      * @param waypoints  ordered list of positions to visit; the last
@@ -445,7 +445,7 @@ public final class PathWalker {
      * Walk to a destination via intermediate waypoints with Baritone's
      * {@code allowPlace} and {@code allowParkour} enabled for every leg.
      *
-     * <p>This combines the waypoint chain with placement mode so
+     * This combines the waypoint chain with placement mode so
      * Baritone can bridge gaps, pillar up/down, and parkour-jump on
      * each leg — essential for reaching supply chests at different
      * elevations from the build area.
@@ -1014,7 +1014,7 @@ public final class PathWalker {
          * Save the current allowPlace/allowParkour/throwawayItems values
          * and enable placement so Baritone can pillar-up and parkour-jump.
          *
-         * <p>Also restricts throwaway items to cheap scaffold materials
+         * Also restricts throwaway items to cheap scaffold materials
          * so Baritone doesn't waste valuable building materials.
          */
         @SuppressWarnings("unchecked")
@@ -1045,15 +1045,15 @@ public final class PathWalker {
 
         /**
          * Scan the player's inventory for block items and add those
-         * with <em>surplus</em> quantities to Baritone's
+         * with surplus quantities to Baritone's
          * {@code acceptableThrowawayItems} list.
          *
-         * <p>"Surplus" means the player holds more of that item than
+         * "Surplus" means the player holds more of that item than
          * what is reserved for the schematic build (set via
          * {@link PathWalker#setReservedItems}).  This prevents
          * Baritone from wasting blocks the printer still needs.
          *
-         * <p>Must be called <b>after</b> {@link #enablePlacement()}
+         * Must be called after {@link #enablePlacement()}
          * so that the original list is saved first.
          */
         @SuppressWarnings("unchecked")
@@ -1236,7 +1236,7 @@ public final class PathWalker {
          * whether actively walking a path segment or computing the
          * next one.  This is the correct "is Baritone busy?" check.
          *
-         * <p>{@link #isPathing()} only checks if a path segment is
+         * {@link #isPathing()} only checks if a path segment is
          * being executed right now, which returns false during A*
          * recomputation pauses between segments.
          */

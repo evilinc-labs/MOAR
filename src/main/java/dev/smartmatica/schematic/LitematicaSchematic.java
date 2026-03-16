@@ -1,6 +1,6 @@
-package dev.litematicaprinter.schematic;
+package dev.smartmatica.schematic;
 
-import dev.litematicaprinter.util.NbtCompat;
+import dev.smartmatica.util.NbtCompat;
 import net.minecraft.block.Block;
 import net.minecraft.block.BlockState;
 import net.minecraft.block.Blocks;
@@ -29,12 +29,12 @@ import java.util.Set;
  * Parses Litematica {@code .litematic} files and provides
  * block-state lookups by coordinate.
  *
- * <p>Supports schema versions 5, 6, and 7.  Schematics created in newer
+ * Supports schema versions 5, 6, and 7.  Schematics created in newer
  * Minecraft versions are handled gracefully: unknown blocks are replaced
  * with air and reported, unknown properties fall back to defaults.
  *
- * <p>The file format is gzip-compressed NBT with regions containing palettized,
- * bit-packed block state arrays.  Entries in the packed long array <b>can</b>
+ * The file format is gzip-compressed NBT with regions containing palettized,
+ * bit-packed block state arrays.  Entries in the packed long array can
  * span two consecutive longs (unlike Minecraft 1.16+ chunk storage).
  */
 public final class LitematicaSchematic {
@@ -54,7 +54,7 @@ public final class LitematicaSchematic {
      * The offset that was subtracted from all region origins during
      * normalization (i.e. the original global minimum corner).
      *
-     * <p>When the anchor comes from Litematica's placement origin
+     * When the anchor comes from Litematica's placement origin
      * (which refers to the schematic's original reference point, not the
      * normalized min corner), callers must add this offset to the anchor
      * so that {@code worldPos - adjustedAnchor} produces normalized

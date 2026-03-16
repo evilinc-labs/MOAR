@@ -1,4 +1,4 @@
-package dev.litematicaprinter.util;
+package dev.smartmatica.util;
 
 import net.minecraft.client.MinecraftClient;
 import net.minecraft.text.MutableText;
@@ -10,7 +10,7 @@ import net.minecraft.util.Formatting;
 /**
  * Simple chat helper — sends prefixed messages to the player's chat HUD.
  *
- * <p>Format: {@code [Printer] message} or {@code [Printer] [Label] message}.
+ * Format: {@code [Printer] message} or {@code [Printer] [Label] message}.
  */
 public final class ChatHelper {
 

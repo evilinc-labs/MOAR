@@ -1,6 +1,6 @@
-package dev.litematicaprinter.schematic;
+package dev.smartmatica.schematic;
 
-import dev.litematicaprinter.util.PrinterDatabase;
+import dev.smartmatica.util.PrinterDatabase;
 import net.minecraft.block.BlockState;
 import net.minecraft.block.Blocks;
 import net.minecraft.block.FluidBlock;
@@ -16,7 +16,7 @@ import java.util.*;
 /**
  * Manages supply-chest interactions and materials analysis for AutoBuild.
  *
- * <p>Supply-chest positions and inventory snapshots are stored in
+ * Supply-chest positions and inventory snapshots are stored in
  * {@link PrinterDatabase}.  This class provides higher-level operations
  * like materials analysis that layer on top of the database.
  */

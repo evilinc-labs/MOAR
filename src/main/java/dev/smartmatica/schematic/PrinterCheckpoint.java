@@ -1,4 +1,4 @@
-package dev.litematicaprinter.schematic;
+package dev.smartmatica.schematic;
 
 import com.google.gson.Gson;
 import com.google.gson.GsonBuilder;
@@ -17,7 +17,7 @@ import java.nio.file.Path;
  * Persists schematic printer state so printing can resume after a
  * disconnect, crash, or client restart.
  *
- * <p>Data is written to {@code smartmatica/printer_checkpoint.json}
+ * Data is written to {@code smartmatica/printer_checkpoint.json}
  * and includes the schematic filename, anchor position, session
  * block count, and the player's last known position.
  */
