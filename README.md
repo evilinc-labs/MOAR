@@ -4,7 +4,10 @@ A standalone Fabric client mod for automated block placement, spawn-proofing, an
 
 > **Early Version Advisory** — It works, but expect rough edges. File an issue for bugs or open a PR to improve things.
 
-## Featurets
+## Fork / Pull Request Information
+If you'd like to contribute, please clone the repository, create a new branch, and make your pull request to the **SANDBOX** branch. **PULL REQUESTS MADE TO MAIN WILL BE DENIED.**
+
+## Features
 
 ### Schematic Printer
 - **Manual mode** — toggle to place blocks from a loaded `.litematic` within reach
