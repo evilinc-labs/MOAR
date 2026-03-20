@@ -14,15 +14,8 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.*;
 
-/**
- * Centralised database for scaffold tracking in the MOAR mod.
- *
- * Scaffold block positions are persisted to
- * {@code config/moar/printer_scaffold.json}.
- *
- * Supply-chest management has been moved to
- * {@link dev.moar.chest.ChestManager}.
- */
+// Scaffold tracking database. Persists to config/moar/printer_scaffold.json.
+// Supply-chest management lives in ChestManager.
 public final class PrinterDatabase {
 
     private PrinterDatabase() {}
@@ -34,15 +27,10 @@ public final class PrinterDatabase {
     //  SCAFFOLD TRACKING — blocks placed by Baritone during pathfinding
     // ═══════════════════════════════════════════════════════════════════
 
-    /**
-     * Map of scaffold block positions → block item ID (e.g.
-     * {@code "minecraft:cobblestone"}).  Baritone places these via
-     * {@code allowPlace} pathfinding; they are non-schematic blocks
-     * that should be cleaned up after the build completes.
-     *
-     * Persisted to {@link #SCAFFOLD_FILE} so scaffold data survives
-     * game restarts and the cleanup job can resume.
-     */
+    // Map of scaffold positions -> block item ID (e.g. "minecraft:cobblestone").
+    // Baritone places these via allowPlace pathfinding; they should be cleaned
+    // up after the build.
+    // Persisted so scaffold data survives restarts.
     private static final Map<BlockPos, String> scaffoldTable = new LinkedHashMap<>();
 
     private static final Path SCAFFOLD_FILE = FabricLoader.getInstance()
@@ -50,17 +38,10 @@ public final class PrinterDatabase {
             .resolve("moar")
             .resolve("printer_scaffold.json");
 
-    /** True when the scaffold table has been modified since the last
-     *  disk write.  Checked by {@link #flushScaffoldIfDirty()}. */
+    /** True when scaffold table modified since last disk write. */
     private static boolean scaffoldDirty;
 
-    /**
-     * Record a scaffold block position together with its block item ID.
-     *
-     * @param pos    world position
-     * @param itemId registry ID of the block's item form
-     *               (e.g. {@code "minecraft:cobblestone"})
-     */
+    /** Record a scaffold block position with its block item ID. */
     public static void addScaffold(BlockPos pos, String itemId) {
         scaffoldTable.put(pos.toImmutable(), itemId);
         scaffoldDirty = true;
@@ -101,10 +82,7 @@ public final class PrinterDatabase {
         return scaffoldTable.containsKey(pos);
     }
 
-    /**
-     * Returns the stored block item ID for a scaffold position, or
-     * {@code null} if the position is not tracked.
-     */
+    // Returns the stored block item ID for a scaffold position, or null if not tracked.
     public static String getScaffoldBlockId(BlockPos pos) {
         return scaffoldTable.get(pos);
     }

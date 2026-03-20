@@ -57,7 +57,7 @@ public final class PathWalker {
         }
     }
 
-    /** Returns {@code true} if Baritone is present at runtime. */
+    /** Returns true if Baritone is present at runtime. */
     public static boolean isBaritoneAvailable() {
         return BARITONE_AVAILABLE;
     }
@@ -66,17 +66,17 @@ public final class PathWalker {
 
     private static final double ARRIVAL_DIST_SQ = 2.5 * 2.5;
     private static final double ARRIVAL_Y_TOLERANCE = 3.0;
-    /** Base timeout — extended dynamically by distance (see {@link #getEffectiveTimeout()}). */
+    /** Base timeout — extended dynamically by distance (see getEffectiveTimeout()). */
     private static final int BASE_MAX_TICKS = 6000;   // 5 min base
     /** Ticks per block of distance added to the base timeout. */
     private static final int TICKS_PER_BLOCK = 5;
     private static final int STUCK_THRESHOLD = 200;
     /** Minimum stuck threshold used for very nearby targets when the
-     *  distance-adaptive scaling kicks in (see {@link #effectiveStuckThreshold()}). */
+     *  distance-adaptive scaling kicks in (see effectiveStuckThreshold()). */
     private static final int MIN_STUCK_THRESHOLD = 60;
     /** Shorter threshold for nearby targets — if Baritone can't compute
      *  a path within this many ticks for a target within
-     *  {@link #VANILLA_FALLBACK_DIST_SQ}, fall back to vanilla walking. */
+     *  VANILLA_FALLBACK_DIST_SQ, fall back to vanilla walking. */
     private static final int VANILLA_FALLBACK_TICKS = 40;  // 2 seconds
     /** Max squared distance for vanilla fallback (10 blocks). */
     private static final double VANILLA_FALLBACK_DIST_SQ = 10.0 * 10.0;
@@ -95,8 +95,8 @@ public final class PathWalker {
     private static boolean stuck;
     private static int ticksWalking;
     /** Consecutive ticks where Baritone's process is active (has a goal)
-     *  but {@code isPathing()} is false (not executing any path step).
-     *  When this exceeds {@link #STUCK_THRESHOLD}, Baritone is stuck
+     *  but isPathing() is false (not executing any path step).
+     *  When this exceeds STUCK_THRESHOLD, Baritone is stuck
      *  trying to compute an impossible route. */
     private static int noPathTicks;
 
@@ -112,10 +112,10 @@ public final class PathWalker {
 
     /** GoalNear radius for the current walk — used for the arrival
      *  check so we accept arrival within the same range that Baritone
-     *  targets.  Zero means use the tight {@link #ARRIVAL_DIST_SQ}. */
+     *  targets.  Zero means use the tight ARRIVAL_DIST_SQ. */
     private static int goalRadius = 0;
 
-    /** When {@code >= -64}, we're navigating to a Y-level rather than
+    /** When >= -64, we're navigating to a Y-level rather than
      *  an XZ position.  Arrival is based on Y only. */
     private static int yLevelTarget = Integer.MIN_VALUE;
 
@@ -135,17 +135,17 @@ public final class PathWalker {
 
     /** Waypoint queue — intermediate destinations to reach before the
      *  final target.  Each waypoint is navigated to in order; when the
-     *  last waypoint is reached, {@code arrived} is set to true. */
+     *  last waypoint is reached, arrived is set to true. */
     private static final Deque<BlockPos> waypointQueue = new ArrayDeque<>();
     /** Per-waypoint GoalNear radii.  When non-empty, each element
-     *  corresponds to the next waypoint in {@link #waypointQueue}.
-     *  If empty, {@link #waypointRadius} is used for all legs. */
+     *  corresponds to the next waypoint in waypointQueue.
+     *  If empty, waypointRadius is used for all legs. */
     private static final Deque<Integer> waypointRadiusQueue = new ArrayDeque<>();
     /** Radius used for each waypoint leg (GoalNear). */
     private static int waypointRadius = 4;
 
     /** Items reserved for the schematic build — keyed by Item, value
-     *  is the count still needed.  {@link #configureThrowawayFromInventory}
+     *  is the count still needed.  configureThrowawayFromInventory
      *  only offers blocks the player has in excess of these
      *  quantities so Baritone doesn't waste building materials as
      *  scaffold. */
@@ -157,7 +157,7 @@ public final class PathWalker {
      * that only surplus blocks are offered to Baritone as throwaway.
      *
      * @param needed  map of Item → count needed for the build, or
-     *                {@code null} to clear
+     *                null to clear
      */
     public static void setReservedItems(java.util.Map<Item, Integer> needed) {
         reservedItems = needed != null ? needed : java.util.Collections.emptyMap();
@@ -191,7 +191,7 @@ public final class PathWalker {
     /**
      * Start walking adjacent to the given position (next to it, not on
      * top of it).  Useful for navigating to chests or interactable blocks.
-     * Falls back to {@link #walkTo(BlockPos)} when Baritone is not available.
+     * Falls back to walkTo(BlockPos) when Baritone is not available.
      */
     public static void walkToAdjacent(BlockPos pos) {
         if (BARITONE_AVAILABLE) {
@@ -208,7 +208,7 @@ public final class PathWalker {
     }
 
     /**
-     * Start walking to within {@code radius} blocks of the given position.
+     * Start walking to within radius blocks of the given position.
      * Uses Baritone's GoalNear to find a standable position nearby without
      * trying to path directly to or onto the target block.
      */
@@ -230,8 +230,8 @@ public final class PathWalker {
     }
 
     /**
-     * Walk to within {@code radius} blocks of the given position with
-     * Baritone's {@code allowPlace} and {@code allowParkour} enabled.
+     * Walk to within radius blocks of the given position with
+     * Baritone's allowPlace and allowParkour enabled.
      *
      * This lets Baritone pillar-up, bridge across gaps, and use
      * parkour jumps to reach elevated or otherwise unreachable targets
@@ -239,7 +239,7 @@ public final class PathWalker {
      *
      * Placement settings are enabled before the path starts and
      * automatically restored when pathing completes (via
-     * {@link #tickBaritone()}).
+     * tickBaritone()).
      */
     public static void walkToWithPlacement(BlockPos pos, int radius) {
         walkToWithPlacement(pos, radius, null);
@@ -313,7 +313,7 @@ public final class PathWalker {
      * the player's feet.  Each block break causes a safe 1-block
      * fall.  This bypasses Baritone entirely — no pathfinding needed.
      *
-     * Continues until the player reaches {@code targetY} or
+     * Continues until the player reaches targetY or
      * encounters a gap where falling would exceed 3 blocks (unsafe).
      *
      * @param targetY  the Y level to descend to
@@ -349,9 +349,9 @@ public final class PathWalker {
      * Walk to a destination via a list of intermediate waypoints.
      *
      * Baritone navigates to each waypoint in order using GoalNear
-     * with the given {@code radius}.  When a waypoint is reached, the
+     * with the given radius.  When a waypoint is reached, the
      * next one is automatically started.  When the final waypoint is
-     * reached, {@code arrived} is set to {@code true}.
+     * reached, arrived is set to true.
      *
      * If Baritone fails to reach any waypoint, the walker stops
      * normally (arrived=false) so the caller can handle the failure.
@@ -443,7 +443,7 @@ public final class PathWalker {
 
     /**
      * Walk to a destination via intermediate waypoints with Baritone's
-     * {@code allowPlace} and {@code allowParkour} enabled for every leg.
+     * allowPlace and allowParkour enabled for every leg.
      *
      * This combines the waypoint chain with placement mode so
      * Baritone can bridge gaps, pillar up/down, and parkour-jump on
@@ -857,7 +857,7 @@ public final class PathWalker {
      * method, and constructor references are resolved at runtime.
      * Reflection handles are cached in a static initializer for performance.
      * If reflection setup fails (e.g. incompatible Baritone version),
-     * {@code ready} is set to {@code false} and all methods become no-ops.
+     * ready is set to false and all methods become no-ops.
      */
     private static final class BaritoneDelegate {
 
@@ -1046,14 +1046,14 @@ public final class PathWalker {
         /**
          * Scan the player's inventory for block items and add those
          * with surplus quantities to Baritone's
-         * {@code acceptableThrowawayItems} list.
+         * acceptableThrowawayItems list.
          *
          * "Surplus" means the player holds more of that item than
          * what is reserved for the schematic build (set via
-         * {@link PathWalker#setReservedItems}).  This prevents
+         * PathWalker#setReservedItems).  This prevents
          * Baritone from wasting blocks the printer still needs.
          *
-         * Must be called after {@link #enablePlacement()}
+         * Must be called after enablePlacement()
          * so that the original list is saved first.
          */
         @SuppressWarnings("unchecked")
@@ -1106,7 +1106,7 @@ public final class PathWalker {
 
         /**
          * Restore allowPlace/allowParkour/throwawayItems to the values
-         * saved by {@link #enablePlacement()}.
+         * saved by enablePlacement().
          */
         static void restorePlacement() {
             if (!settingsReady) return;
@@ -1231,12 +1231,12 @@ public final class PathWalker {
         }
 
         /**
-         * Returns {@code true} if the CustomGoalProcess is still in
+         * Returns true if the CustomGoalProcess is still in
          * control — i.e. Baritone is still working toward the goal,
          * whether actively walking a path segment or computing the
          * next one.  This is the correct "is Baritone busy?" check.
          *
-         * {@link #isPathing()} only checks if a path segment is
+         * isPathing() only checks if a path segment is
          * being executed right now, which returns false during A*
          * recomputation pauses between segments.
          */
@@ -1424,8 +1424,8 @@ public final class PathWalker {
      * Compute a distance-adaptive stuck threshold for the current walk.
      * Baritone's A* should find a path quickly for nearby targets — no
      * need to wait 10 full seconds.  For targets within 30 blocks, the
-     * threshold is scaled linearly down to {@link #MIN_STUCK_THRESHOLD}.
-     * Beyond 30 blocks, the full {@link #STUCK_THRESHOLD} is used.
+     * threshold is scaled linearly down to MIN_STUCK_THRESHOLD.
+     * Beyond 30 blocks, the full STUCK_THRESHOLD is used.
      */
     private static int effectiveStuckThreshold() {
         if (target == null) return STUCK_THRESHOLD;

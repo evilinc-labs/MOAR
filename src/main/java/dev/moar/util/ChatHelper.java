@@ -7,11 +7,7 @@ import net.minecraft.text.Text;
 import net.minecraft.text.TextColor;
 import net.minecraft.util.Formatting;
 
-/**
- * Simple chat helper — sends prefixed messages to the player's chat HUD.
- *
- * Format: {@code [Printer] message} or {@code [Printer] [Label] message}.
- */
+// Sends prefixed chat messages: [Printer] message or [Printer] [Label] message.
 public final class ChatHelper {
 
     private static final String PREFIX_NAME = "Printer";

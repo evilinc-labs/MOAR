@@ -5,15 +5,9 @@ import net.minecraft.nbt.NbtCompound;
 import net.minecraft.nbt.NbtElement;
 import net.minecraft.nbt.NbtList;
 
-/**
- * Compatibility layer for {@link NbtCompound} access across Minecraft versions.
- *
- * Starting with Minecraft 1.21.5, many {@code NbtCompound} getters
- * return {@link java.util.Optional} instead of raw values, and
- * {@code contains(String, int)} was replaced with {@code contains(String)}.
- * This class provides a stable API that works on both old and new versions,
- * using Stonecutter version predicates internally.
- */
+// Compatibility layer for NbtCompound access across MC versions.
+// 1.21.5+ returns Optional from getters and changed contains() signature.
+// This class provides a stable API using Stonecutter version predicates.
 public final class NbtCompat {
 
     private NbtCompat() {}
@@ -27,7 +21,7 @@ public final class NbtCompat {
         /*?}*/
     }
 
-    /** Get an int value, returning {@code defaultValue} if absent. */
+    /** Get an int value, returning defaultValue if absent. */
     public static int getInt(NbtCompound nbt, String key, int defaultValue) {
         /*? if >=1.21.5 {*//*
         return nbt.getInt(key).orElse(defaultValue);
@@ -41,7 +35,7 @@ public final class NbtCompat {
         return getInt(nbt, key, 0);
     }
 
-    /** Get a string value, returning {@code defaultValue} if absent. */
+    /** Get a string value, returning defaultValue if absent. */
     public static String getString(NbtCompound nbt, String key, String defaultValue) {
         /*? if >=1.21.5 {*//*
         return nbt.getString(key).orElse(defaultValue);

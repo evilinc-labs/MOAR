@@ -27,31 +27,7 @@ import java.nio.file.Path;
 import java.util.List;
 import java.util.Map;
 
-/**
- * Registers all {@code /printer} client commands using Fabric API's
- * client command system.
- *
- * 
- * /printer load &lt;file&gt;          – load a .litematic and anchor at current pos
- * /printer unload                – unload the current schematic
- * /printer here                  – re-anchor at current position
- * /printer pos &lt;x&gt; &lt;y&gt; &lt;z&gt;      – set anchor to specific coordinates
- * /printer status                – show progress info
- * /printer list                  – show available schematics
- * /printer detect                – detect & load Litematica's active placement
- * /printer resume                – restore from last checkpoint
- * /printer materials             – show bill of materials breakdown
- * /printer toggle                – toggle the printer on/off
- * /printer autobuild             – toggle AutoBuild mode
- * /printer air                    – toggle air placement * /printer speed [1-20]           -- set placement speed (blocks per second) * /printer sort [mode]           – set build order (bottom_up/top_down/nearest)
- * /printer supply add            – mark block at feet as supply chest
- * /printer supply add &lt;x&gt; &lt;y&gt; &lt;z&gt; – mark specific pos as supply chest
- * /printer supply remove         – unmark supply chest at feet
- * /printer supply list           – show all designated supply chests
- * /printer supply clear          – remove all supply chest designations
- * /printer supply scan           – show supply chest index summary
- * 
- */
+// Registers all /printer client commands.
 public final class PrinterCommand {
 
     private PrinterCommand() {}
@@ -693,18 +669,7 @@ public final class PrinterCommand {
         return MoarMod.getPrinter();
     }
 
-    /**
-     * Finds the container block the player is targeting.
-     *
-     * Priority:
-     * 
-     *     - Crosshair target — the block the player is looking at
-     *     - Feet position — the block at the player's feet
-     *     - Below feet — the block directly below the player
-     * 
-     *
-     * @return the {@link BlockPos} of the nearest container, or {@code null}
-     */
+    // Finds the container block the player is targeting (crosshair > feet > below).
     private static BlockPos findTargetContainer(MinecraftClient mc) {
         if (mc.player == null || mc.world == null) return null;
 

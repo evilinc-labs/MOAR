@@ -35,36 +35,11 @@ import java.time.format.DateTimeFormatter;
 import java.util.*;
 import java.util.stream.Collectors;
 
-/**
- * Automatic stash inventory scanner.
- *
- * <p>The user defines a stash region with {@code /stash pos1} and
- * {@code /stash pos2}.  The scanner finds all containers (chests,
- * barrels, shulker boxes, hoppers) inside the region, walks to each
- * using Baritone, opens it, reads its contents — including nested
- * shulker box inventories — and builds a full index.</p>
- *
- * <p>If the region is larger than the client's render distance, the
- * scanner breaks the work into <em>zones</em> and uses incremental
- * waypoint walking (the same technique the printer uses for megabase
- * builds) to cover the full area progressively.</p>
- *
- * <h3>State machine</h3>
- * <pre>
- * IDLE → ZONE_SCANNING → WALKING → OPENING → READING → (next, or WALKING_TO_ZONE → repeat)
- * </pre>
- *
- * <h3>Usage</h3>
- * <pre>
- *   /stash pos1 [x y z]     — set corner 1 (default: player position)
- *   /stash pos2 [x y z]     — set corner 2
- *   /stash scan              — start scanning the defined region
- *   /stash stop              — abort scanning
- *   /stash status            — show index summary
- *   /stash export            — export CSV
- *   /stash clear             — clear the index
- * </pre>
- */
+// Scans containers (chests, barrels, shulkers, hoppers) in a pos1/pos2 region,
+// walks to each via Baritone, reads contents, and builds a full inventory index.
+// Breaks large regions into zones with incremental waypoint walking.
+//
+// States: IDLE -> ZONE_SCANNING -> WALKING -> OPENING -> READING -> (repeat or WALKING_TO_ZONE)
 public final class StashManager {
 
     private static final Logger LOGGER = LoggerFactory.getLogger("MOAR/Stash");
@@ -295,10 +270,7 @@ public final class StashManager {
 
     // ── State handlers ──────────────────────────────────────────────────
 
-    /**
-     * Scan all <em>loaded</em> chunks within the region for containers.
-     * Chunks we've already scanned in a previous pass are skipped.
-     */
+    // Scan loaded chunks within the region for containers (skips already-scanned chunks).
     private void tickZoneScanning(MinecraftClient mc) {
         World world = mc.world;
         List<BlockPos> containers = new ArrayList<>();
@@ -708,11 +680,7 @@ public final class StashManager {
 
     // ── CSV export ──────────────────────────────────────────────────────
 
-    /**
-     * Export the current stash index to a CSV file.
-     *
-     * @return the path to the created CSV file, or null on error
-     */
+    // Export the current stash index to a CSV file. Returns the path, or null on error.
     public Path exportCsv() {
         if (index.isEmpty()) {
             ChatHelper.labelled("Stash", "§cNo stash data to export. Run /stash scan first.");

@@ -44,17 +44,9 @@ public final class BlockDependency {
     //  PUBLIC API
     // ═══════════════════════════════════════════════════════════════════
 
-    /**
-     * Returns the direction from which the block requires support (e.g.
-     * {@link Direction#DOWN} for floor-placed blocks, the wall direction
-     * for wall torches), or {@code null} if the block is freestanding.
-     *
-     * For blocks with variable attachment (buttons, levers), the
-     * direction is determined from block state properties.
-     *
-     * Note: Vines are not handled here because they can attach
-     * to multiple faces. Use {@link #isReadyToPlace} instead.
-     */
+    // Returns the direction from which the block requires support (e.g.
+    // DOWN for floor blocks, wall direction for wall torches), or null
+    // if freestanding. Vines are not handled here (use isReadyToPlace).
     public static Direction getRequiredSupport(BlockState state) {
         Block block = state.getBlock();
 
@@ -206,17 +198,8 @@ public final class BlockDependency {
         return null;
     }
 
-    /**
-     * Returns {@code true} if this block's placement dependencies are
-     * satisfied in the current world state. Freestanding blocks always
-     * return {@code true}.
-     *
-     * For blocks that need support (torches, ladders, flowers, etc.),
-     * this checks whether the required adjacent block exists and is solid.
-     *
-     * Special case: {@link VineBlock} can attach to multiple faces --
-     * returns {@code true} if at least one attached face has support.
-     */
+    // True if placement dependencies are satisfied. Freestanding blocks always true.
+    // Vines: true if at least one attached face has support.
     public static boolean isReadyToPlace(World world, BlockPos pos,
                                           BlockState target) {
         Block block = target.getBlock();
@@ -247,21 +230,14 @@ public final class BlockDependency {
     //  INTERNAL HELPERS
     // ═══════════════════════════════════════════════════════════════════
 
-    /**
-     * Checks whether the block at {@code pos} is solid (non-replaceable
-     * with a non-empty collision shape).
-     */
+    // True if block at pos is solid (non-replaceable with collision shape).
     private static boolean isSolidAt(World world, BlockPos pos) {
         BlockState state = world.getBlockState(pos);
         return !state.isReplaceable()
                 && state.getOutlineShape(world, pos) != VoxelShapes.empty();
     }
 
-    /**
-     * Vines can attach to one or more wall faces, or hang from the bottom
-     * of a block above.  Returns {@code true} if at least one attachment
-     * point has solid support.
-     */
+    // Vines attach to wall faces or hang from above. True if any attachment has support.
     private static boolean hasVineSupport(World world, BlockPos pos,
                                            BlockState state) {
         if (hasVineFace(world, pos, state, Properties.NORTH, Direction.NORTH)) return true;
@@ -272,10 +248,7 @@ public final class BlockDependency {
         return isSolidAt(world, pos.up());
     }
 
-    /**
-     * Returns {@code true} if the vine is attached to the given face AND
-     * there is a solid block in that direction.
-     */
+    // True if the vine is attached to the given face AND that face has a solid block.
     private static boolean hasVineFace(World world, BlockPos pos,
                                         BlockState state,
                                         Property<Boolean> prop,

@@ -18,21 +18,11 @@ import net.minecraft.world.World;
 
 import java.util.*;
 
-/**
- * SpawnProofer — scans an area for blocks where hostile mobs can spawn
- * (block light level 0 on a solid, spawnable surface) and automatically
- * places user-selected light sources to eliminate dark spots.
- *
- * Since 1.18, hostile mobs only spawn at block light level 0 in the
- * Overworld. A single torch (luminance 14) covers a 14-block taxicab
- * radius, but occlusion from walls/ceilings reduces effective range.
- * This module queries the client world's lighting engine directly to
- * find dark, spawnable positions and greedily places light sources to
- * cover the largest number of remaining dark spots.
- *
- * Lifecycle: create instance, configure via setters, call {@link #tick()}
- * every client tick while active.
- */
+// Scans an area for dark spawnable surfaces (block light 0) and places
+// light sources to eliminate mob spawn points. Uses a greedy solver for
+// optimal placement coverage.
+//
+// Lifecycle: configure corners + light source, call tick() every client tick.
 public class SpawnProofer {
 
     // ── State machine ───────────────────────────────────────────────────
@@ -459,9 +449,9 @@ public class SpawnProofer {
     /**
      * Place a light source at the current target.
      *
-     * The {@code placementQueue} contains final placement positions
+     * The placementQueue contains final placement positions
      * (where the light source block goes), NOT dark-surface positions.
-     * The greedy solver already validated each via {@link #canPlaceLightAt}.
+     * The greedy solver already validated each via canPlaceLightAt.
      */
     private void tickPlacing(MinecraftClient mc) {
         if (PlacementEngine.isBusy()) {

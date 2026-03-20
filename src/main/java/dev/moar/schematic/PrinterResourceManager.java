@@ -18,7 +18,7 @@ import java.util.*;
  * Manages supply-chest interactions and materials analysis for AutoBuild.
  *
  * Supply-chest positions and inventory snapshots are managed by
- * {@link dev.moar.chest.ChestManager}.  This class provides
+ * dev.moar.chest.ChestManager.  This class provides
  * higher-level operations like materials analysis that layer on top.
  */
 public final class PrinterResourceManager {
@@ -255,7 +255,7 @@ public final class PrinterResourceManager {
 
     /**
      * Returns the bucket item needed to place the given fluid block,
-     * or {@code null} if the block is not a supported fluid.
+     * or null if the block is not a supported fluid.
      */
     private static Item fluidBucketItem(BlockState state) {
         if (state.getBlock() == Blocks.WATER) return Items.WATER_BUCKET;

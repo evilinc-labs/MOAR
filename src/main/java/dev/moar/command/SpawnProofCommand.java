@@ -51,9 +51,7 @@ public final class SpawnProofCommand {
         ClientCommandRegistrationCallback.EVENT.register((dispatcher, registryAccess) -> {
             var root = ClientCommandManager.literal("spawnproof");
 
-            // Root-level help — shown when user types /spawnproof
-            // without a subcommand.  Also ensures Brigadier always
-            // lists this command in tab-completion suggestions.
+            // Root-level help and tab-completion entry.
             root.executes(ctx -> {
                 ChatHelper.labelled("SpawnProof", "§7Available subcommands:");
                 ChatHelper.labelled("SpawnProof", "  §f/spawnproof pos1 §7[x y z] §8— set corner 1");

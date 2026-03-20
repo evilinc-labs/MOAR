@@ -64,7 +64,7 @@ import java.util.*;
  *       takes needed items, walks back, and resumes building.
  *
  * Load/unload and position commands are handled by
- * {@link dev.moar.command.PrinterCommand PrinterCommand}.
+ * PrinterCommand.
  */
 public class SchematicPrinter {
 
@@ -464,10 +464,10 @@ public class SchematicPrinter {
      * If a schematic is already loaded, look for a matching Litematica
      * placement (by filename) and update the anchor to match its
      * world-space origin.  This fixes misalignment when the schematic
-     * was loaded via {@code /printer load} (which uses the player's
+     * was loaded via /printer load (which uses the player's
      * feet position) or when the user moved the placement in Litematica.
      *
-     * @return {@code true} if the anchor was updated
+     * @return true if the anchor was updated
      */
     private boolean trySyncAnchor() {
         if (schematic == null || schematicFile == null) return false;
@@ -1129,9 +1129,9 @@ public class SchematicPrinter {
      * the player can actually place (has the items for).
      * Computes a safe standing position near the target — a spot with
      * solid ground, clear head room, and not inside the schematic's
-     * unbuilt footprint — then navigates there with {@code walkTo}.
+     * unbuilt footprint — then navigates there with walkTo.
      *
-     * @return {@code true} if a zone was found and navigation started
+     * @return true if a zone was found and navigation started
      */
     private boolean tryWalkToNextZone(MinecraftClient mc) {
         BlockPos nextZone = findNextBuildZone(mc.player, mc.world);
@@ -1543,7 +1543,7 @@ public class SchematicPrinter {
 
     /**
      * Breaks scaffold blocks one at a time.  When all tracked scaffold
-     * has been removed, transitions to {@link AutoState#IDLE}.
+     * has been removed, transitions to AutoState#IDLE.
      *
      * Flow:
      * 
@@ -2036,14 +2036,14 @@ public class SchematicPrinter {
      * Attempts to place a solid block adjacent to the player's standing
      * position to create a platform for shulker box placement.  This is
      * needed when the player is on a narrow pillar or 1-block ledge
-     * where {@link #findShulkerPlaceSpot} returns {@code null}.
+     * where findShulkerPlaceSpot returns null.
      *
      * Searches for an air block at the same Y level as the block the
      * player is standing on, adjacent to any solid block (so we have a
      * face to place against).  Then swaps a solid block from inventory
-     * into the hotbar and places it via {@code interactBlock}.
+     * into the hotbar and places it via interactBlock.
      *
-     * @return {@code true} if a block was placed (caller should wait
+     * @return true if a block was placed (caller should wait
      *         a few ticks for server sync before retrying spot search)
      */
     private boolean tryBuildShulkerPlatform(ClientPlayerEntity player,
@@ -2752,7 +2752,7 @@ public class SchematicPrinter {
     }
 
     /**
-     * Returns {@code true} if the world block at this position matches
+     * Returns true if the world block at this position matches
      * the schematic's expected block (i.e. it's correctly placed).
      */
     private boolean isCorrectSchematicBlock(BlockPos worldPos, World world) {
@@ -2964,7 +2964,7 @@ public class SchematicPrinter {
 
     /**
      * Computes intermediate waypoints between the player and a supply
-     * chest using known positions from the {@link PrinterDatabase}.
+     * chest using known positions from the PrinterDatabase.
      *
      * The database already tracks two classes of known-reachable
      * positions:
@@ -2986,7 +2986,7 @@ public class SchematicPrinter {
      *
      * @param from  player's current position
      * @param to    supply chest position
-     * @return ordered list of waypoints (may be just {@code [to]} if
+     * @return ordered list of waypoints (may be just [to] if
      *         no useful intermediates were found)
      */
     private List<BlockPos> computeSupplyWaypoints(BlockPos from, BlockPos to) {
@@ -3078,7 +3078,7 @@ public class SchematicPrinter {
      * @param from      starting position (player)
      * @param to        destination (supply chest)
      * @param legLength distance between waypoints in blocks
-     * @return list of waypoints ending at {@code to}; single-element
+     * @return list of waypoints ending at to; single-element
      *         list if the distance is already short enough
      */
     private List<BlockPos> computeLinearWaypoints(BlockPos from, BlockPos to, int legLength) {
@@ -3360,13 +3360,13 @@ public class SchematicPrinter {
     }
 
     /**
-     * Scans a cube around {@code center} for a chest, barrel, or shulker box.
+     * Scans a cube around center for a chest, barrel, or shulker box.
      * Used as a fallback when the exact supply position is stale.
      *
      * @param world  the client world
      * @param center the expected position
      * @param radius search radius in blocks
-     * @return the nearest container position, or {@code null}
+     * @return the nearest container position, or null
      */
     private BlockPos findNearbyChest(World world, BlockPos center, int radius) {
         if (world == null) return null;
@@ -3596,7 +3596,7 @@ public class SchematicPrinter {
     // PLACEMENT HELPERS
 
     /**
-     * Formats a {@code Set<Item>} into a readable chat string, showing
+     * Formats a Set<Item> into a readable chat string, showing
      * up to 5 item names with an overflow count.
      */
     private static String formatMissingItems(Set<Item> items) {
@@ -3616,7 +3616,7 @@ public class SchematicPrinter {
     }
 
     /**
-     * Formats a {@code Set<String>} of item IDs (e.g. "minecraft:stone")
+     * Formats a Set<String> of item IDs (e.g. "minecraft:stone")
      * into a readable chat string, resolving each to its display name.
      * Shows up to 5 items with an overflow count.
      */
@@ -3641,9 +3641,9 @@ public class SchematicPrinter {
     }
 
     /**
-     * Converts the string item IDs in {@code neededItems} to {@link Item}
-     * objects and adds them to {@code skippedItems}, so the block-skip
-     * filter in {@code tryPlaceNextBlock} will avoid them.
+     * Converts the string item IDs in neededItems to Item
+     * objects and adds them to skippedItems, so the block-skip
+     * filter in tryPlaceNextBlock will avoid them.
      */
     private void addNeededToSkipped() {
         for (String id : neededItems) {
@@ -3658,7 +3658,7 @@ public class SchematicPrinter {
 
     /**
      * Counts the number of schematic blocks that have not been placed and
-     * whose required item is in {@code skippedItems}.  Used to report how
+     * whose required item is in skippedItems.  Used to report how
      * many blocks were left unplaced due to missing materials.
      */
     private int countSkippedBlocks(World world) {
@@ -3693,8 +3693,8 @@ public class SchematicPrinter {
     }
 
     /**
-     * Returns {@code true} if the given block state can actually be placed
-     * by a player (i.e. has a corresponding {@link BlockItem}).
+     * Returns true if the given block state can actually be placed
+     * by a player (i.e. has a corresponding BlockItem).
      * Filters out liquids (water, lava), fire, portals, light blocks, etc.
      */
     private static boolean isPlaceable(BlockState state) {
@@ -3707,8 +3707,8 @@ public class SchematicPrinter {
     }
 
     /**
-     * Returns {@code true} if the given block state is a placeable liquid
-     * source block (water or lava with level 0).  Flowing liquid (level &gt; 0)
+     * Returns true if the given block state is a placeable liquid
+     * source block (water or lava with level 0).  Flowing liquid (level > 0)
      * is auto-generated and should not be individually placed.
      */
     private static boolean isLiquidSource(BlockState state) {
@@ -3717,7 +3717,7 @@ public class SchematicPrinter {
     }
 
     /**
-     * Returns {@code true} if the schematic contains any liquid source blocks
+     * Returns true if the schematic contains any liquid source blocks
      * that have not yet been placed in the world.
      */
     private boolean hasRemainingLiquids(World world) {
@@ -3751,7 +3751,7 @@ public class SchematicPrinter {
     }
 
     /**
-     * Returns {@code true} if there are solid (non-liquid) blocks in the
+     * Returns true if there are solid (non-liquid) blocks in the
      * schematic that have not yet been placed in the world.  Used to verify
      * that all solids are genuinely done before transitioning to the liquid
      * placement pass.
@@ -3793,8 +3793,8 @@ public class SchematicPrinter {
     }
 
     /**
-     * Returns the bucket {@link Item} required to place the given fluid
-     * block state, or {@code null} if the state is not a supported fluid.
+     * Returns the bucket Item required to place the given fluid
+     * block state, or null if the state is not a supported fluid.
      */
     private static Item getLiquidBucketItem(BlockState state) {
         Block block = state.getBlock();
@@ -3804,7 +3804,7 @@ public class SchematicPrinter {
     }
 
     /**
-     * Returns {@code true} if this block state is an auto-created part that
+     * Returns true if this block state is an auto-created part that
      * should NOT be individually placed.  These blocks are created by
      * Minecraft automatically when the primary part is placed.
  *
@@ -3834,15 +3834,15 @@ public class SchematicPrinter {
     }
 
     /**
-     * Returns {@code true} if the existing block state is "effectively placed"
+     * Returns true if the existing block state is "effectively placed"
      * relative to the desired state.  This ignores neighbor-computed dynamic
      * properties that the player cannot control during placement:
  *
-     *     - Stairs: {@code STAIR_SHAPE} (computed from adjacent stairs)
-     *     - Doors: {@code OPEN}, {@code POWERED}, {@code DOOR_HINGE}
+     *     - Stairs: STAIR_SHAPE (computed from adjacent stairs)
+     *     - Doors: OPEN, POWERED, DOOR_HINGE
      *     - Fences: connection booleans (N/S/E/W)
      *     - Walls: connection heights + UP
-     *     - Chests: {@code CHEST_TYPE} (single ↔ double)
+     *     - Chests: CHEST_TYPE (single ↔ double)
      *     - Panes (glass panes, iron bars): connections are neighbor-computed
      *     - Fence gates: OPEN, POWERED, IN_WALL are dynamic; FACING matters
      *     - Redstone wire: connections + power level
@@ -3948,7 +3948,7 @@ public class SchematicPrinter {
     }
 
     /**
-     * Returns {@code true} if both states have the same value for the given
+     * Returns true if both states have the same value for the given
      * property, or if either state does not contain the property.
      */
     private static <T extends Comparable<T>> boolean propMatches(
@@ -3958,7 +3958,7 @@ public class SchematicPrinter {
     }
 
     /**
-     * Returns {@code true} if the given position is near any previously
+     * Returns true if the given position is near any previously
      * failed build zone.
      */
     private boolean isNearFailedZone(BlockPos pos) {
@@ -3973,7 +3973,7 @@ public class SchematicPrinter {
     }
 
     /**
-     * Returns {@code true} if the player's bounding box overlaps the given
+     * Returns true if the player's bounding box overlaps the given
      * block position.  Placing a block here would push the player out.
      */
     private static boolean playerOverlapsBlock(ClientPlayerEntity player, BlockPos pos) {
@@ -3997,7 +3997,7 @@ public class SchematicPrinter {
     }
 
     /**
-     * Finds a safe ground-level position near {@code target} where the
+     * Finds a safe ground-level position near target where the
      * player can stand and still be within placement reach.
      *
      * Checks in a spiral outward from the target, looking for a spot
@@ -4009,8 +4009,8 @@ public class SchematicPrinter {
      *       stand inside blocks that need placing)
  *
      *
-     * @return a suitable {@link BlockPos} for the player's feet, or
-     *         {@code null} if none was found
+     * @return a suitable BlockPos for the player's feet, or
+     *         null if none was found
      */
     private BlockPos findStandingPosition(BlockPos target, World world, ClientPlayerEntity player) {
         int maxReach = (int) Math.ceil(range);
@@ -4120,7 +4120,7 @@ public class SchematicPrinter {
 
     /**
      * Simple ground-connectivity check: walks a straight-line path from
-     * {@code from} to {@code to} at the same Y level (or {@code to.getY()})
+     * from to to at the same Y level (or to.getY())
      * and checks that every intermediate block has solid ground beneath it.
      *
      * This is NOT full pathfinding — it just detects obvious air gaps
@@ -4128,7 +4128,7 @@ public class SchematicPrinter {
      * are on different Y levels, the check uses the destination Y since
      * that's where the player would need to stand.
      *
-     * @return {@code true} if every step along the path has solid ground
+     * @return true if every step along the path has solid ground
      */
     private static boolean hasGroundPath(BlockPos from, BlockPos to, World world) {
         int x0 = from.getX(), z0 = from.getZ();
@@ -4161,7 +4161,7 @@ public class SchematicPrinter {
     }
 
     /**
-     * Returns {@code true} if the given world position corresponds to an
+     * Returns true if the given world position corresponds to an
      * unbuilt schematic block (the schematic expects a block there but the
      * world doesn't have it yet).
      */
@@ -4197,7 +4197,7 @@ public class SchematicPrinter {
 
     /**
      * Whether a block state physically blocks movement.  Unlike
-     * {@link #isPassable}, this treats fluids as non-blocking because
+     * isPassable, this treats fluids as non-blocking because
      * the player can swim through them.  Used for entrapment detection
      * where we only care about solid walls, not water.
      */
@@ -4208,7 +4208,7 @@ public class SchematicPrinter {
     }
 
     /**
-     * Returns {@code true} if placing a block at {@code pos} would seal
+     * Returns true if placing a block at pos would seal
      * the player's last walkable horizontal exit.
      *
      * Only relevant when the candidate block is in the player's
@@ -4254,7 +4254,7 @@ public class SchematicPrinter {
     }
 
     /**
-     * Returns {@code true} if the player currently has no
+     * Returns true if the player currently has no
      * walkable horizontal exit (all 4 cardinal directions are blocked
      * at either feet or head level by solid blocks).
      *
@@ -4277,7 +4277,7 @@ public class SchematicPrinter {
     }
 
     /**
-     * Returns {@code true} if the given feet position has at least one
+     * Returns true if the given feet position has at least one
      * horizontal exit direction that is currently clear and
      * will remain clear after the schematic is fully built (i.e. the
      * exit blocks are not unbuilt schematic positions).
@@ -4302,8 +4302,8 @@ public class SchematicPrinter {
     }
 
     /**
-     * Returns {@code true} if any block within 2 horizontal blocks of
-     * {@code feetPos} (at feet or head level) contains flowing water or
+     * Returns true if any block within 2 horizontal blocks of
+     * feetPos (at feet or head level) contains flowing water or
      * lava.  Flowing liquids push the player, breaking Baritone's
      * pathfinding — so standing positions near them should be avoided.
      */
@@ -4329,11 +4329,11 @@ public class SchematicPrinter {
      * solid ground, passable feet/head, and not inside the schematic's
      * unbuilt footprint.
      *
-     * Unlike {@link #findStandingPosition}, this accepts positions in
+     * Unlike findStandingPosition, this accepts positions in
      * or near water — the goal is escaping solid entrapment, and
      * swimming through water is acceptable.
      *
-     * @return a safe feet-level {@link BlockPos}, or {@code null}
+     * @return a safe feet-level BlockPos, or null
      */
     private BlockPos findEscapePosition(ClientPlayerEntity player,
                                         World world) {

@@ -26,7 +26,7 @@ import java.util.Map;
 import java.util.Set;
 
 /**
- * Parses Litematica {@code .litematic} files and provides
+ * Parses Litematica .litematic files and provides
  * block-state lookups by coordinate.
  *
  * Supports schema versions 5, 6, and 7.  Schematics created in newer
@@ -57,14 +57,14 @@ public final class LitematicaSchematic {
      * When the anchor comes from Litematica's placement origin
      * (which refers to the schematic's original reference point, not the
      * normalized min corner), callers must add this offset to the anchor
-     * so that {@code worldPos - adjustedAnchor} produces normalized
-     * coordinates that {@link #getBlockState} expects.
+     * so that worldPos - adjustedAnchor produces normalized
+     * coordinates that getBlockState expects.
      */
     private final int originOffsetX, originOffsetY, originOffsetZ;
 
     // ── public API ──────────────────────────────────────────────────────
 
-    /** Load a {@code .litematic} file and normalize all region origins so the
+    /** Load a .litematic file and normalize all region origins so the
      *  minimum corner of the bounding box sits at (0, 0, 0). */
     /** Max decompressed NBT size — prevents zip-bomb schematics from
      *  exhausting heap.  256 MB is generous for any real build. */
@@ -146,9 +146,9 @@ public final class LitematicaSchematic {
     }
 
     /**
-     * Returns the target {@link BlockState} at schematic-local coordinates.
+     * Returns the target BlockState at schematic-local coordinates.
      * Coordinates are relative to the normalized origin (0, 0, 0).
-     * Returns {@code Blocks.AIR} default state if the position is outside
+     * Returns Blocks.AIR default state if the position is outside
      * all regions.
      */
     public BlockState getBlockState(int x, int y, int z) {

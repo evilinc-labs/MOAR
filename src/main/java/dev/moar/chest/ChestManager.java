@@ -159,15 +159,8 @@ public final class ChestManager {
 
     // ── Chest scanning / indexing ───────────────────────────────────────
 
-    /**
-     * Scans the currently open chest screen and stores the snapshot if the
-     * chest position matches a registered supply chest.
-     *
-     * Call this whenever the player opens a chest that should be indexed.
-     *
-     * @param chestPos the world position of the chest being opened
-     * @param handler  the open container screen handler
-     */
+    // Scans an open chest and stores the snapshot.
+    // Call when the player opens a supply chest that should be indexed.
     public void scanOpenChest(BlockPos chestPos, GenericContainerScreenHandler handler) {
         if (chestPos == null || handler == null) return;
 
@@ -202,11 +195,7 @@ public final class ChestManager {
                 chestSlots, key.getX(), key.getY(), key.getZ(), items.size(), shulkerCount);
     }
 
-    /**
-     * Read a shulker box ItemStack's contents via DataComponentTypes.CONTAINER.
-     *
-     * @return itemId to count for all items inside the shulker
-     */
+    // Read a shulker box ItemStack's contents via CONTAINER data component.
     public static Map<String, Integer> readShulkerContents(ItemStack shulkerStack) {
         Map<String, Integer> contents = new HashMap<>();
         if (shulkerStack == null || shulkerStack.isEmpty()) return contents;
@@ -240,10 +229,7 @@ public final class ChestManager {
         return findBestChest(from, neededItemIds, Collections.emptySet());
     }
 
-    /**
-     * Same as {@link #findBestChest(BlockPos, Set)} but excludes positions
-     * in {@code exclude} (e.g. chests that couldn't be reached).
-     */
+    // Find best supply chest, excluding positions in the exclude set.
     public BlockPos findBestChest(BlockPos from, Set<String> neededItemIds,
                                   Set<BlockPos> exclude) {
         if (supplyPositions.isEmpty()) return null;
@@ -309,11 +295,7 @@ public final class ChestManager {
         return nearest;
     }
 
-    /**
-     * Combined inventory across all indexed supply chests.
-     *
-     * @return itemId to total count
-     */
+    // Combined inventory across all indexed supply chests (itemId -> total count).
     public Map<String, Integer> getCombinedInventory() {
         Map<String, Integer> combined = new HashMap<>();
         for (ChestSnapshot snapshot : snapshots.values()) {

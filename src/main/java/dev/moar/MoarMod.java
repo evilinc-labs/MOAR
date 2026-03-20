@@ -22,7 +22,7 @@ import org.slf4j.LoggerFactory;
 
 /**
  * MOAR — a standalone Fabric mod that automatically places
- * blocks from loaded {@code .litematic} schematics.
+ * blocks from loaded .litematic schematics.
  */
 public class MoarMod implements ClientModInitializer {
 
