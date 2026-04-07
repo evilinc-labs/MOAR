@@ -1,0 +1,31 @@
+{
+  "schemaVersion": 1,
+  "id": "moar",
+  "version": "1.1.0",
+  "name": "MOAR",
+  "description": "Automatically places blocks from loaded .litematic schematics. Supports manual and AutoBuild modes with supply chest restocking.",
+  "license": "AGPL-3.0-only",
+  "authors": [],
+  "contact": {},
+  "icon": "assets/moar/icon.png",
+  "environment": "client",
+  "entrypoints": {
+    "client": [
+      "dev.moar.MoarMod"
+    ]
+  },
+  "mixins": [
+    "moar.mixins.json"
+  ],
+  "depends": {
+    "fabricloader": "\u003e\u003d0.18.4",
+    "minecraft": "\u003e\u003d1.21.8 \u003c\u003d1.21.8",
+    "java": "\u003e\u003d21",
+    "fabric-api": "*"
+  },
+  "jars": [
+    {
+      "file": "META-INF/jars/sqlite-jdbc-3.49.1.0.jar"
+    }
+  ]
+}

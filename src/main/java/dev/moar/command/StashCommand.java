@@ -4,10 +4,22 @@ import com.mojang.brigadier.arguments.IntegerArgumentType;
 import dev.moar.MoarMod;
 import dev.moar.stash.StashManager;
 import dev.moar.util.ChatHelper;
+/*? if >=26.1 {*//*
+import net.fabricmc.fabric.api.client.command.v2.ClientCommands;
+*//*?} else {*/
 import net.fabricmc.fabric.api.client.command.v2.ClientCommandManager;
+/*?}*/
 import net.fabricmc.fabric.api.client.command.v2.ClientCommandRegistrationCallback;
+/*? if >=26.1 {*//*
+import net.minecraft.client.Minecraft;
+*//*?} else {*/
 import net.minecraft.client.MinecraftClient;
+/*?}*/
+/*? if >=26.1 {*//*
+import net.minecraft.core.BlockPos;
+*//*?} else {*/
 import net.minecraft.util.math.BlockPos;
+/*?}*/
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -31,7 +43,11 @@ public final class StashCommand {
 
     public static void register() {
         ClientCommandRegistrationCallback.EVENT.register((dispatcher, registryAccess) -> {
+            /*? if >=26.1 {*//*
+            var root = ClientCommands.literal("stash");
+            *//*?} else {*/
             var root = ClientCommandManager.literal("stash");
+            /*?}*/
 
             // Root help
             root.executes(ctx -> {
@@ -49,19 +65,43 @@ public final class StashCommand {
             });
 
             // /stash pos1 [x y z]
+            /*? if >=26.1 {*//*
+            root.then(ClientCommands.literal("pos1")
+            *//*?} else {*/
             root.then(ClientCommandManager.literal("pos1")
+            /*?}*/
                     .executes(ctx -> {
+                        /*? if >=26.1 {*//*
+                        Minecraft mc = Minecraft.getInstance();
+                        *//*?} else {*/
                         MinecraftClient mc = MinecraftClient.getInstance();
+                        /*?}*/
                         if (mc.player == null) return 0;
+                        /*? if >=26.1 {*//*
+                        BlockPos pos = mc.player.blockPosition();
+                        *//*?} else {*/
                         BlockPos pos = mc.player.getBlockPos();
+                        /*?}*/
                         getManager().setCorner1(pos);
                         ChatHelper.labelled("Stash", "§aCorner 1 set to §f"
                                 + pos.getX() + " " + pos.getY() + " " + pos.getZ());
                         return 1;
                     })
+                    /*? if >=26.1 {*//*
+                    .then(ClientCommands.argument("x", IntegerArgumentType.integer())
+                    *//*?} else {*/
                     .then(ClientCommandManager.argument("x", IntegerArgumentType.integer())
+                    /*?}*/
+                            /*? if >=26.1 {*//*
+                            .then(ClientCommands.argument("y", IntegerArgumentType.integer())
+                            *//*?} else {*/
                             .then(ClientCommandManager.argument("y", IntegerArgumentType.integer())
+                            /*?}*/
+                                    /*? if >=26.1 {*//*
+                                    .then(ClientCommands.argument("z", IntegerArgumentType.integer())
+                                    *//*?} else {*/
                                     .then(ClientCommandManager.argument("z", IntegerArgumentType.integer())
+                                    /*?}*/
                                             .executes(ctx -> {
                                                 int x = IntegerArgumentType.getInteger(ctx, "x");
                                                 int y = IntegerArgumentType.getInteger(ctx, "y");
@@ -78,19 +118,43 @@ public final class StashCommand {
             );
 
             // /stash pos2 [x y z]
+            /*? if >=26.1 {*//*
+            root.then(ClientCommands.literal("pos2")
+            *//*?} else {*/
             root.then(ClientCommandManager.literal("pos2")
+            /*?}*/
                     .executes(ctx -> {
+                        /*? if >=26.1 {*//*
+                        Minecraft mc = Minecraft.getInstance();
+                        *//*?} else {*/
                         MinecraftClient mc = MinecraftClient.getInstance();
+                        /*?}*/
                         if (mc.player == null) return 0;
+                        /*? if >=26.1 {*//*
+                        BlockPos pos = mc.player.blockPosition();
+                        *//*?} else {*/
                         BlockPos pos = mc.player.getBlockPos();
+                        /*?}*/
                         getManager().setCorner2(pos);
                         ChatHelper.labelled("Stash", "§aCorner 2 set to §f"
                                 + pos.getX() + " " + pos.getY() + " " + pos.getZ());
                         return 1;
                     })
+                    /*? if >=26.1 {*//*
+                    .then(ClientCommands.argument("x", IntegerArgumentType.integer())
+                    *//*?} else {*/
                     .then(ClientCommandManager.argument("x", IntegerArgumentType.integer())
+                    /*?}*/
+                            /*? if >=26.1 {*//*
+                            .then(ClientCommands.argument("y", IntegerArgumentType.integer())
+                            *//*?} else {*/
                             .then(ClientCommandManager.argument("y", IntegerArgumentType.integer())
+                            /*?}*/
+                                    /*? if >=26.1 {*//*
+                                    .then(ClientCommands.argument("z", IntegerArgumentType.integer())
+                                    *//*?} else {*/
                                     .then(ClientCommandManager.argument("z", IntegerArgumentType.integer())
+                                    /*?}*/
                                             .executes(ctx -> {
                                                 int x = IntegerArgumentType.getInteger(ctx, "x");
                                                 int y = IntegerArgumentType.getInteger(ctx, "y");
@@ -107,7 +171,11 @@ public final class StashCommand {
             );
 
             // /stash scan
+            /*? if >=26.1 {*//*
+            root.then(ClientCommands.literal("scan")
+            *//*?} else {*/
             root.then(ClientCommandManager.literal("scan")
+            /*?}*/
                     .executes(ctx -> {
                         getManager().start();
                         return 1;
@@ -115,7 +183,11 @@ public final class StashCommand {
             );
 
             // /stash stop
+            /*? if >=26.1 {*//*
+            root.then(ClientCommands.literal("stop")
+            *//*?} else {*/
             root.then(ClientCommandManager.literal("stop")
+            /*?}*/
                     .executes(ctx -> {
                         getManager().stop();
                         return 1;
@@ -123,7 +195,11 @@ public final class StashCommand {
             );
 
             // /stash status
+            /*? if >=26.1 {*//*
+            root.then(ClientCommands.literal("status")
+            *//*?} else {*/
             root.then(ClientCommandManager.literal("status")
+            /*?}*/
                     .executes(ctx -> {
                         StashManager mgr = getManager();
                         ChatHelper.labelled("Stash", "§7State: §f" + mgr.getStatus());
@@ -136,7 +212,11 @@ public final class StashCommand {
             );
 
             // /stash export
+            /*? if >=26.1 {*//*
+            root.then(ClientCommands.literal("export")
+            *//*?} else {*/
             root.then(ClientCommandManager.literal("export")
+            /*?}*/
                     .executes(ctx -> {
                         var path = getManager().exportCsv();
                         if (path != null) {
@@ -147,7 +227,11 @@ public final class StashCommand {
             );
 
             // /stash clear
+            /*? if >=26.1 {*//*
+            root.then(ClientCommands.literal("clear")
+            *//*?} else {*/
             root.then(ClientCommandManager.literal("clear")
+            /*?}*/
                     .executes(ctx -> {
                         getManager().clearIndex();
                         return 1;

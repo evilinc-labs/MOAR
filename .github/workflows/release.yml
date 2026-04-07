@@ -28,18 +28,59 @@ jobs:
       - name: Grant execute permission
         run: chmod +x gradlew
 
-      - name: Clean
-        run: ./gradlew clean --no-daemon
-
-      - name: Build all versions
-        run: ./gradlew buildAndCollect --no-daemon
-
-      - name: List build output
-        run: find build/libs -name '*.jar' | sort
+      - name: Clean & build all versions
+        run: ./gradlew clean buildAndCollect --no-daemon
 
       - name: Extract version from tag
         id: version
         run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+
+      - name: Package release ZIPs
+        id: package
+        run: |
+          VER="${{ steps.version.outputs.version }}"
+          STAGING="build/release"
+          mkdir -p "$STAGING"
+
+          HASH_BODY=""
+
+          for mc in 1.21.1 1.21.4 1.21.5 1.21.8 1.21.10 1.21.11; do
+            JAR="build/libs/${VER}/moar-${VER}+${mc}.jar"
+            if [ ! -f "$JAR" ]; then
+              echo "::error::Missing JAR: $JAR"
+              exit 1
+            fi
+
+            HASH=$(sha256sum "$JAR" | awk '{print $1}')
+            JAR_NAME="moar-${VER}+${mc}.jar"
+            ZIP_NAME="moar-${VER}+${mc}.zip"
+
+            # Create checksum file for inside the ZIP
+            echo "${HASH}  ${JAR_NAME}" > "${STAGING}/SHA256SUMS.txt"
+
+            # Build the ZIP (jar + checksum)
+            (cd "build/libs/${VER}" && zip -j "../../release/${ZIP_NAME}" "$JAR_NAME")
+            (cd "$STAGING" && zip "${ZIP_NAME}" SHA256SUMS.txt)
+            rm "${STAGING}/SHA256SUMS.txt"
+
+            HASH_BODY="${HASH_BODY}| ${mc} | \`${JAR_NAME}\` | \`${HASH}\` |"$'\n'
+          done
+
+          # Sources JAR (not zipped, included directly)
+          SOURCES_JAR=$(find "build/libs/${VER}" -name "moar-*-sources.jar" | head -1)
+          if [ -n "$SOURCES_JAR" ]; then
+            cp "$SOURCES_JAR" "$STAGING/"
+          fi
+
+          # Write hash table for release body
+          {
+            echo "hashes<<EOF"
+            echo "$HASH_BODY"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+
+          echo "staging=$STAGING" >> "$GITHUB_OUTPUT"
+          ls -la "$STAGING/"
 
       - name: Generate changelog
         id: changelog
@@ -65,22 +106,16 @@ jobs:
             ## MOAR v${{ steps.version.outputs.version }}
 
             ### Downloads
-            | Minecraft | File |
-            |-----------|------|
-            | 1.21.1  | `moar-${{ steps.version.outputs.version }}+1.21.1.jar` |
-            | 1.21.4  | `moar-${{ steps.version.outputs.version }}+1.21.4.jar` |
-            | 1.21.5  | `moar-${{ steps.version.outputs.version }}+1.21.5.jar` |
-            | 1.21.8  | `moar-${{ steps.version.outputs.version }}+1.21.8.jar` |
-            | 1.21.10 | `moar-${{ steps.version.outputs.version }}+1.21.10.jar` |
+            Each ZIP contains the mod JAR and a `SHA256SUMS.txt` verification file.
+
+            | Minecraft | File | SHA-256 |
+            |-----------|------|---------|
+            ${{ steps.package.outputs.hashes }}
 
             ### Changes
             ${{ steps.changelog.outputs.changes }}
           files: |
-            build/libs/*/moar-*+1.21.1.jar
-            build/libs/*/moar-*+1.21.4.jar
-            build/libs/*/moar-*+1.21.5.jar
-            build/libs/*/moar-*+1.21.8.jar
-            build/libs/*/moar-*+1.21.10.jar
-            build/libs/*/moar-*-sources.jar
+            ${{ steps.package.outputs.staging }}/moar-*.zip
+            ${{ steps.package.outputs.staging }}/moar-*-sources.jar
           fail_on_unmatched_files: true
           generate_release_notes: false

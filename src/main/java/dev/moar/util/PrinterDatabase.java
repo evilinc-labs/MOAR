@@ -3,7 +3,11 @@ package dev.moar.util;
 import com.google.gson.Gson;
 import com.google.gson.GsonBuilder;
 import net.fabricmc.loader.api.FabricLoader;
+/*? if >=26.1 {*//*
+import net.minecraft.core.BlockPos;
+*//*?} else {*/
 import net.minecraft.util.math.BlockPos;
+/*?}*/
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -14,8 +18,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.*;
 
-// Scaffold tracking database. Persists to config/moar/printer_scaffold.json.
-// Supply-chest management lives in ChestManager.
+// Scaffold tracking (config/moar/printer_scaffold.json).
 public final class PrinterDatabase {
 
     private PrinterDatabase() {}
@@ -27,10 +30,7 @@ public final class PrinterDatabase {
     //  SCAFFOLD TRACKING — blocks placed by Baritone during pathfinding
     // ═══════════════════════════════════════════════════════════════════
 
-    // Map of scaffold positions -> block item ID (e.g. "minecraft:cobblestone").
-    // Baritone places these via allowPlace pathfinding; they should be cleaned
-    // up after the build.
-    // Persisted so scaffold data survives restarts.
+    // Scaffold positions -> block item ID. Persisted across restarts.
     private static final Map<BlockPos, String> scaffoldTable = new LinkedHashMap<>();
 
     private static final Path SCAFFOLD_FILE = FabricLoader.getInstance()
@@ -43,7 +43,11 @@ public final class PrinterDatabase {
 
     /** Record a scaffold block position with its block item ID. */
     public static void addScaffold(BlockPos pos, String itemId) {
+        /*? if >=26.1 {*//*
+        scaffoldTable.put(pos.immutable(), itemId);
+        *//*?} else {*/
         scaffoldTable.put(pos.toImmutable(), itemId);
+        /*?}*/
         scaffoldDirty = true;
     }
 
@@ -82,7 +86,7 @@ public final class PrinterDatabase {
         return scaffoldTable.containsKey(pos);
     }
 
-    // Returns the stored block item ID for a scaffold position, or null if not tracked.
+    /** Block item ID for a scaffold position, or null. */
     public static String getScaffoldBlockId(BlockPos pos) {
         return scaffoldTable.get(pos);
     }

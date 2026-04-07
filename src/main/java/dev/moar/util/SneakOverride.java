@@ -1,7 +1,15 @@
 package dev.moar.util;
 
+/*? if >=26.1 {*//*
+import net.minecraft.client.Minecraft;
+*//*?} else {*/
 import net.minecraft.client.MinecraftClient;
+/*?}*/
+/*? if >=26.1 {*//*
+import net.minecraft.client.player.LocalPlayer;
+*//*?} else {*/
 import net.minecraft.client.network.ClientPlayerEntity;
+/*?}*/
 
 // Thread-safe sneak override flag. A mixin on KeyboardInput.tick() checks
 // shouldSneak() after keyboard polling. Sneak is only forced when the player
@@ -48,9 +56,21 @@ public final class SneakOverride {
 
         if (!forceSneak) return false;
 
+        /*? if >=26.1 {*//*
+        Minecraft mc = Minecraft.getInstance();
+        *//*?} else {*/
         MinecraftClient mc = MinecraftClient.getInstance();
+        /*?}*/
+        /*? if >=26.1 {*//*
+        if (mc.player == null || mc.level == null) return false;
+        *//*?} else {*/
         if (mc.player == null || mc.world == null) return false;
+        /*?}*/
 
+        /*? if >=26.1 {*//*
+        return EdgeDetector.isNearEdge(mc.player, mc.level);
+        *//*?} else {*/
         return EdgeDetector.isNearEdge(mc.player, mc.world);
+        /*?}*/
     }
 }

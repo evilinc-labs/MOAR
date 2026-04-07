@@ -3,7 +3,11 @@ package dev.moar.schematic;
 import com.google.gson.Gson;
 import com.google.gson.GsonBuilder;
 import net.fabricmc.loader.api.FabricLoader;
+/*? if >=26.1 {*//*
+import net.minecraft.core.BlockPos;
+*//*?} else {*/
 import net.minecraft.util.math.BlockPos;
+/*?}*/
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -13,14 +17,7 @@ import java.io.Writer;
 import java.nio.file.Files;
 import java.nio.file.Path;
 
-/**
- * Persists schematic printer state so printing can resume after a
- * disconnect, crash, or client restart.
- *
- * Data is written to moar/printer_checkpoint.json
- * and includes the schematic filename, anchor position, session
- * block count, and the player's last known position.
- */
+// Persists printer state to moar/printer_checkpoint.json for resume after restart.
 public final class PrinterCheckpoint {
 
     private PrinterCheckpoint() {}

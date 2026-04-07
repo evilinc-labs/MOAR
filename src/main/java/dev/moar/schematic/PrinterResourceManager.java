@@ -2,25 +2,55 @@ package dev.moar.schematic;
 
 import dev.moar.MoarMod;
 import dev.moar.util.PrinterDatabase;
+/*? if >=26.1 {*//*
+import net.minecraft.world.level.block.state.BlockState;
+*//*?} else {*/
 import net.minecraft.block.BlockState;
+/*?}*/
+/*? if >=26.1 {*//*
+import net.minecraft.world.level.block.Blocks;
+*//*?} else {*/
 import net.minecraft.block.Blocks;
+/*?}*/
+/*? if >=26.1 {*//*
+import net.minecraft.world.level.block.LiquidBlock;
+*//*?} else {*/
 import net.minecraft.block.FluidBlock;
+/*?}*/
+/*? if >=26.1 {*//*
+import net.minecraft.world.item.BlockItem;
+*//*?} else {*/
 import net.minecraft.item.BlockItem;
+/*?}*/
+/*? if >=26.1 {*//*
+import net.minecraft.world.item.Item;
+*//*?} else {*/
 import net.minecraft.item.Item;
+/*?}*/
+/*? if >=26.1 {*//*
+import net.minecraft.world.item.Items;
+*//*?} else {*/
 import net.minecraft.item.Items;
+/*?}*/
+/*? if >=26.1 {*//*
+import net.minecraft.core.registries.BuiltInRegistries;
+*//*?} else {*/
 import net.minecraft.registry.Registries;
+/*?}*/
+/*? if >=26.1 {*//*
+import net.minecraft.core.BlockPos;
+*//*?} else {*/
 import net.minecraft.util.math.BlockPos;
+/*?}*/
+/*? if >=26.1 {*//*
+import net.minecraft.world.level.Level;
+*//*?} else {*/
 import net.minecraft.world.World;
+/*?}*/
 
 import java.util.*;
 
-/**
- * Manages supply-chest interactions and materials analysis for AutoBuild.
- *
- * Supply-chest positions and inventory snapshots are managed by
- * dev.moar.chest.ChestManager.  This class provides
- * higher-level operations like materials analysis that layer on top.
- */
+// Materials analysis and supply-chest helpers for AutoBuild (delegates to ChestManager).
 public final class PrinterResourceManager {
 
     private PrinterResourceManager() {}
@@ -51,7 +81,11 @@ public final class PrinterResourceManager {
     public static final int MIN_SUPPLY_ITEMS = 16;
 
     public static BlockPos findBestSupplyChest(
+            /*? if >=26.1 {*//*
+            BlockPos from, Set<String> neededItemIds, Level world) {
+            *//*?} else {*/
             BlockPos from, Set<String> neededItemIds, World world) {
+            /*?}*/
         return MoarMod.getChestManager().findBestChest(from, neededItemIds);
     }
 
@@ -75,7 +109,11 @@ public final class PrinterResourceManager {
     public static MaterialsReport analyzeMaterials(
             LitematicaSchematic schematic,
             BlockPos anchor,
+            /*? if >=26.1 {*//*
+            Level world) {
+            *//*?} else {*/
             World world) {
+            /*?}*/
         if (schematic == null || world == null) return MaterialsReport.EMPTY;
 
         Map<String, Integer> unknownBlocks = schematic.hasUnknownBlocks()
@@ -95,11 +133,23 @@ public final class PrinterResourceManager {
                         if (target.isAir()) continue;
 
                         // Fluid source blocks (water/lava) need buckets
+                        /*? if >=26.1 {*//*
+                        if (target.getBlock() instanceof LiquidBlock
+                        *//*?} else {*/
                         if (target.getBlock() instanceof FluidBlock
+                        /*?}*/
+                                /*? if >=26.1 {*//*
+                                && target.getFluidState().isSource()) {
+                                *//*?} else {*/
                                 && target.getFluidState().isStill()) {
+                                /*?}*/
                             Item bucket = fluidBucketItem(target);
                             if (bucket != null) {
+                                /*? if >=26.1 {*//*
+                                String itemId = BuiltInRegistries.ITEM.getKey(bucket).toString();
+                                *//*?} else {*/
                                 String itemId = Registries.ITEM.getId(bucket).toString();
+                                /*?}*/
                                 required.merge(itemId, 1, Integer::sum);
                                 totalBlocks++;
                             }
@@ -109,7 +159,11 @@ public final class PrinterResourceManager {
                         Item item = target.getBlock().asItem();
                         if (item == Items.AIR) continue;
 
+                        /*? if >=26.1 {*//*
+                        String itemId = BuiltInRegistries.ITEM.getKey(item).toString();
+                        *//*?} else {*/
                         String itemId = Registries.ITEM.getId(item).toString();
+                        /*?}*/
                         required.merge(itemId, 1, Integer::sum);
                         totalBlocks++;
                     }
@@ -134,18 +188,38 @@ public final class PrinterResourceManager {
                         int wy = anchor.getY() + region.originY + y;
                         int wz = anchor.getZ() + region.originZ + z;
 
+                        /*? if >=26.1 {*//*
+                        if (!world.hasChunk(wx >> 4, wz >> 4)) continue;
+                        *//*?} else {*/
                         if (!world.isChunkLoaded(wx >> 4, wz >> 4)) continue;
+                        /*?}*/
 
                         BlockState current = world.getBlockState(new BlockPos(wx, wy, wz));
 
-                        // Fluid source blocks — check if same fluid is already present
+                        // Skip if same fluid already present
+                        /*? if >=26.1 {*//*
+                        if (target.getBlock() instanceof LiquidBlock
+                        *//*?} else {*/
                         if (target.getBlock() instanceof FluidBlock
+                        /*?}*/
+                                /*? if >=26.1 {*//*
+                                && target.getFluidState().isSource()) {
+                                *//*?} else {*/
                                 && target.getFluidState().isStill()) {
+                                /*?}*/
                             if (current.getBlock() == target.getBlock()
+                                    /*? if >=26.1 {*//*
+                                    && current.getFluidState().isSource()) {
+                                    *//*?} else {*/
                                     && current.getFluidState().isStill()) {
+                                    /*?}*/
                                 Item bucket = fluidBucketItem(target);
                                 if (bucket != null) {
+                                    /*? if >=26.1 {*//*
+                                    String itemId = BuiltInRegistries.ITEM.getKey(bucket).toString();
+                                    *//*?} else {*/
                                     String itemId = Registries.ITEM.getId(bucket).toString();
+                                    /*?}*/
                                     placed.merge(itemId, 1, Integer::sum);
                                     placedCount++;
                                 }
@@ -153,13 +227,15 @@ public final class PrinterResourceManager {
                             continue;
                         }
 
-                        // Use block-type matching: same block present counts as placed.
-                        // Dynamic/neighbor-computed properties (chest type, stair shape,
-                        // fence connections, etc.) don't affect the placed count.
+                        // Same block type = placed (ignore dynamic properties).
                         if (current.getBlock() == target.getBlock() && !current.isAir()) {
                             Item item = target.getBlock().asItem();
                             if (item != Items.AIR) {
+                                /*? if >=26.1 {*//*
+                                String itemId = BuiltInRegistries.ITEM.getKey(item).toString();
+                                *//*?} else {*/
                                 String itemId = Registries.ITEM.getId(item).toString();
+                                /*?}*/
                                 placed.merge(itemId, 1, Integer::sum);
                                 placedCount++;
                             }

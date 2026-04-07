@@ -3,25 +3,103 @@ package dev.moar.stash;
 import dev.moar.chest.ChestManager;
 import dev.moar.util.ChatHelper;
 import dev.moar.util.PathWalker;
+/*? if >=26.1 {*//*
+import net.minecraft.world.level.block.*;
+import net.minecraft.world.level.block.state.*;
+import net.minecraft.world.level.block.piston.*;
+*//*?} else {*/
 import net.minecraft.block.*;
+/*?}*/
+/*? if >=26.1 {*//*
+import net.minecraft.world.level.block.entity.BlockEntity;
+*//*?} else {*/
 import net.minecraft.block.entity.BlockEntity;
+/*?}*/
+/*? if >=26.1 {*//*
+import net.minecraft.world.level.block.entity.ChestBlockEntity;
+*//*?} else {*/
 import net.minecraft.block.entity.ChestBlockEntity;
+/*?}*/
+/*? if >=26.1 {*//*
+import net.minecraft.world.level.block.state.properties.ChestType;
+*//*?} else {*/
 import net.minecraft.block.enums.ChestType;
+/*?}*/
+/*? if >=26.1 {*//*
+import net.minecraft.client.Minecraft;
+*//*?} else {*/
 import net.minecraft.client.MinecraftClient;
+/*?}*/
+/*? if >=26.1 {*//*
+import net.minecraft.client.player.LocalPlayer;
+*//*?} else {*/
 import net.minecraft.client.network.ClientPlayerEntity;
+/*?}*/
+/*? if >=26.1 {*//*
+import net.minecraft.core.component.DataComponents;
+*//*?} else {*/
 import net.minecraft.component.DataComponentTypes;
+/*?}*/
+/*? if >=26.1 {*//*
+import net.minecraft.world.item.component.ItemContainerContents;
+*//*?} else {*/
 import net.minecraft.component.type.ContainerComponent;
+/*?}*/
+/*? if >=26.1 {*//*
+import net.minecraft.world.item.BlockItem;
+*//*?} else {*/
 import net.minecraft.item.BlockItem;
+/*?}*/
+/*? if >=26.1 {*//*
+import net.minecraft.world.item.ItemStack;
+*//*?} else {*/
 import net.minecraft.item.ItemStack;
+/*?}*/
+/*? if >=26.1 {*//*
+import net.minecraft.core.registries.BuiltInRegistries;
+*//*?} else {*/
 import net.minecraft.registry.Registries;
+/*?}*/
+/*? if >=26.1 {*//*
+import net.minecraft.world.inventory.ChestMenu;
+*//*?} else {*/
 import net.minecraft.screen.GenericContainerScreenHandler;
+/*?}*/
+/*? if >=26.1 {*//*
+import net.minecraft.world.inventory.HopperMenu;
+*//*?} else {*/
 import net.minecraft.screen.HopperScreenHandler;
+/*?}*/
+/*? if >=26.1 {*//*
+import net.minecraft.world.inventory.AbstractContainerMenu;
+*//*?} else {*/
 import net.minecraft.screen.ScreenHandler;
+/*?}*/
+/*? if >=26.1 {*//*
+import net.minecraft.world.level.block.state.properties.BlockStateProperties;
+*//*?} else {*/
 import net.minecraft.state.property.Properties;
+/*?}*/
+/*? if >=26.1 {*//*
+import net.minecraft.core.BlockPos;
+*//*?} else {*/
 import net.minecraft.util.math.BlockPos;
+/*?}*/
+/*? if >=26.1 {*//*
+import net.minecraft.core.Direction;
+*//*?} else {*/
 import net.minecraft.util.math.Direction;
+/*?}*/
+/*? if >=26.1 {*//*
+import net.minecraft.world.phys.Vec3;
+*//*?} else {*/
 import net.minecraft.util.math.Vec3d;
+/*?}*/
+/*? if >=26.1 {*//*
+import net.minecraft.world.level.Level;
+*//*?} else {*/
 import net.minecraft.world.World;
+/*?}*/
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -179,8 +257,16 @@ public final class StashManager {
      * Start scanning the region defined by corner1 and corner2.
      */
     public boolean start() {
+        /*? if >=26.1 {*//*
+        Minecraft mc = Minecraft.getInstance();
+        *//*?} else {*/
         MinecraftClient mc = MinecraftClient.getInstance();
+        /*?}*/
+        /*? if >=26.1 {*//*
+        if (mc == null || mc.player == null || mc.level == null) {
+        *//*?} else {*/
         if (mc == null || mc.player == null || mc.world == null) {
+        /*?}*/
             ChatHelper.labelled("Stash", "§cNot in a world.");
             return false;
         }
@@ -220,7 +306,11 @@ public final class StashManager {
                 + "§a to §f" + regionMax.getX() + " " + regionMax.getY() + " " + regionMax.getZ() + "§a)...");
 
         // Check for unloaded chunks in the region → warn
+        /*? if >=26.1 {*//*
+        if (hasUnloadedChunks(mc.level)) {
+        *//*?} else {*/
         if (hasUnloadedChunks(mc.world)) {
+        /*?}*/
             ChatHelper.labelled("Stash", "§6\u26A0 Region extends beyond render distance. "
                     + "The scanner will walk incrementally to cover all areas, "
                     + "but results may be inaccurate until the full region is visited.");
@@ -255,8 +345,16 @@ public final class StashManager {
     public void tick() {
         if (state == State.IDLE || state == State.DONE) return;
 
+        /*? if >=26.1 {*//*
+        Minecraft mc = Minecraft.getInstance();
+        *//*?} else {*/
         MinecraftClient mc = MinecraftClient.getInstance();
+        /*?}*/
+        /*? if >=26.1 {*//*
+        if (mc == null || mc.player == null || mc.level == null) return;
+        *//*?} else {*/
         if (mc == null || mc.player == null || mc.world == null) return;
+        /*?}*/
 
         switch (state) {
             case ZONE_SCANNING   -> tickZoneScanning(mc);
@@ -271,8 +369,16 @@ public final class StashManager {
     // ── State handlers ──────────────────────────────────────────────────
 
     // Scan loaded chunks within the region for containers (skips already-scanned chunks).
+    /*? if >=26.1 {*//*
+    private void tickZoneScanning(Minecraft mc) {
+    *//*?} else {*/
     private void tickZoneScanning(MinecraftClient mc) {
+    /*?}*/
+        /*? if >=26.1 {*//*
+        Level world = mc.level;
+        *//*?} else {*/
         World world = mc.world;
+        /*?}*/
         List<BlockPos> containers = new ArrayList<>();
 
         int minCX = regionMin.getX() >> 4;
@@ -284,7 +390,11 @@ public final class StashManager {
             for (int cz = minCZ; cz <= maxCZ; cz++) {
                 long packed = packChunk(cx, cz);
                 if (scannedChunks.contains(packed)) continue;
+                /*? if >=26.1 {*//*
+                if (!world.hasChunk(cx, cz)) continue;
+                *//*?} else {*/
                 if (!world.isChunkLoaded(cx, cz)) continue;
+                /*?}*/
 
                 scannedChunks.add(packed);
 
@@ -309,8 +419,16 @@ public final class StashManager {
                                     }
                                 }
                                 if (!visitedPositions.contains(pos)) {
+                                    /*? if >=26.1 {*//*
+                                    containers.add(pos.immutable());
+                                    *//*?} else {*/
                                     containers.add(pos.toImmutable());
+                                    /*?}*/
+                                    /*? if >=26.1 {*//*
+                                    visitedPositions.add(pos.immutable());
+                                    *//*?} else {*/
                                     visitedPositions.add(pos.toImmutable());
+                                    /*?}*/
                                 }
                             }
                         }
@@ -321,8 +439,16 @@ public final class StashManager {
 
         if (!containers.isEmpty()) {
             // Sort by distance from player
+            /*? if >=26.1 {*//*
+            BlockPos playerPos = mc.player.blockPosition();
+            *//*?} else {*/
             BlockPos playerPos = mc.player.getBlockPos();
+            /*?}*/
+            /*? if >=26.1 {*//*
+            containers.sort(Comparator.comparingDouble(p -> p.distSqr(playerPos)));
+            *//*?} else {*/
             containers.sort(Comparator.comparingDouble(p -> p.getSquaredDistance(playerPos)));
+            /*?}*/
 
             // Cap at MAX
             if (containers.size() > MAX_CONTAINERS - totalFound) {
@@ -349,14 +475,26 @@ public final class StashManager {
     }
 
     /** Walk toward the current target container. */
+    /*? if >=26.1 {*//*
+    private void tickWalking(Minecraft mc) {
+    *//*?} else {*/
     private void tickWalking(MinecraftClient mc) {
+    /*?}*/
         if (currentTarget == null) {
             advanceToNext();
             return;
         }
 
+        /*? if >=26.1 {*//*
+        LocalPlayer player = mc.player;
+        *//*?} else {*/
         ClientPlayerEntity player = mc.player;
+        /*?}*/
+        /*? if >=26.1 {*//*
+        double distSq = player.distanceToSqr(
+        *//*?} else {*/
         double distSq = player.squaredDistanceTo(
+        /*?}*/
                 currentTarget.getX() + 0.5,
                 currentTarget.getY() + 0.5,
                 currentTarget.getZ() + 0.5);
@@ -390,13 +528,29 @@ public final class StashManager {
     }
 
     /** Open the container at currentTarget. */
+    /*? if >=26.1 {*//*
+    private void tickOpening(Minecraft mc) {
+    *//*?} else {*/
     private void tickOpening(MinecraftClient mc) {
+    /*?}*/
         openWaitTicks++;
 
         // Check if a container screen opened (chests/barrels/shulkers or hoppers)
+        /*? if >=26.1 {*//*
+        AbstractContainerMenu handler = mc.player.containerMenu;
+        *//*?} else {*/
         ScreenHandler handler = mc.player.currentScreenHandler;
+        /*?}*/
+        /*? if >=26.1 {*//*
+        if (handler instanceof ChestMenu
+        *//*?} else {*/
         if (handler instanceof GenericContainerScreenHandler
+        /*?}*/
+                /*? if >=26.1 {*//*
+                || handler instanceof HopperMenu) {
+                *//*?} else {*/
                 || handler instanceof HopperScreenHandler) {
+                /*?}*/
             readWaitTicks = 0;
             state = State.READING;
             return;
@@ -404,11 +558,27 @@ public final class StashManager {
 
         // Send interact on tick 1
         if (openWaitTicks == 1) {
+            /*? if >=26.1 {*//*
+            mc.gameMode.useItemOn(
+            *//*?} else {*/
             mc.interactionManager.interactBlock(
+            /*?}*/
                     mc.player,
+                    /*? if >=26.1 {*//*
+                    mc.player.getUsedItemHand(),
+                    *//*?} else {*/
                     mc.player.getActiveHand(),
+                    /*?}*/
+                    /*? if >=26.1 {*//*
+                    new net.minecraft.world.phys.BlockHitResult(
+                    *//*?} else {*/
                     new net.minecraft.util.hit.BlockHitResult(
+                    /*?}*/
+                            /*? if >=26.1 {*//*
+                            Vec3.atCenterOf(currentTarget),
+                            *//*?} else {*/
                             Vec3d.ofCenter(currentTarget),
+                            /*?}*/
                             Direction.UP,
                             currentTarget,
                             false
@@ -424,16 +594,36 @@ public final class StashManager {
     }
 
     /** Read the contents of the currently open container screen. */
+    /*? if >=26.1 {*//*
+    private void tickReading(Minecraft mc) {
+    *//*?} else {*/
     private void tickReading(MinecraftClient mc) {
+    /*?}*/
         readWaitTicks++;
         if (readWaitTicks < READ_DELAY_TICKS) return;
 
+        /*? if >=26.1 {*//*
+        AbstractContainerMenu handler = mc.player.containerMenu;
+        *//*?} else {*/
         ScreenHandler handler = mc.player.currentScreenHandler;
+        /*?}*/
 
         int containerSlots;
+        /*? if >=26.1 {*//*
+        if (handler instanceof ChestMenu containerHandler) {
+        *//*?} else {*/
         if (handler instanceof GenericContainerScreenHandler containerHandler) {
+        /*?}*/
+            /*? if >=26.1 {*//*
+            containerSlots = containerHandler.getRowCount() * 9;
+            *//*?} else {*/
             containerSlots = containerHandler.getRows() * 9;
+            /*?}*/
+        /*? if >=26.1 {*//*
+        } else if (handler instanceof HopperMenu) {
+        *//*?} else {*/
         } else if (handler instanceof HopperScreenHandler) {
+        /*?}*/
             containerSlots = 5;  // hoppers always have 5 slots
         } else {
             // Screen closed unexpectedly
@@ -448,10 +638,18 @@ public final class StashManager {
         int shulkerCount = 0;
 
         for (int slot = 0; slot < containerSlots; slot++) {
+            /*? if >=26.1 {*//*
+            ItemStack stack = handler.getSlot(slot).getItem();
+            *//*?} else {*/
             ItemStack stack = handler.getSlot(slot).getStack();
+            /*?}*/
             if (stack.isEmpty()) continue;
 
+            /*? if >=26.1 {*//*
+            String itemId = BuiltInRegistries.ITEM.getKey(stack.getItem()).toString();
+            *//*?} else {*/
             String itemId = Registries.ITEM.getId(stack.getItem()).toString();
+            /*?}*/
 
             if (ChestManager.isShulkerBox(stack)) {
                 shulkerCount++;
@@ -469,11 +667,27 @@ public final class StashManager {
         }
 
         // Record container metadata
+        /*? if >=26.1 {*//*
+        BlockState blockState = mc.level.getBlockState(currentTarget);
+        *//*?} else {*/
         BlockState blockState = mc.world.getBlockState(currentTarget);
+        /*?}*/
+        /*? if >=26.1 {*//*
+        String blockType = BuiltInRegistries.BLOCK.getKey(blockState.getBlock()).toString();
+        *//*?} else {*/
         String blockType = Registries.BLOCK.getId(blockState.getBlock()).toString();
+        /*?}*/
         boolean isDouble = blockState.getBlock() instanceof ChestBlock
+                /*? if >=26.1 {*//*
+                && blockState.hasProperty(BlockStateProperties.CHEST_TYPE)
+                *//*?} else {*/
                 && blockState.contains(Properties.CHEST_TYPE)
+                /*?}*/
+                /*? if >=26.1 {*//*
+                && blockState.getValue(BlockStateProperties.CHEST_TYPE) != ChestType.SINGLE;
+                *//*?} else {*/
                 && blockState.get(Properties.CHEST_TYPE) != ChestType.SINGLE;
+                /*?}*/
 
         ContainerEntry entry = new ContainerEntry(
                 currentTarget, blockType, isDouble,
@@ -485,7 +699,11 @@ public final class StashManager {
         totalIndexed++;
 
         // Close the screen
+        /*? if >=26.1 {*//*
+        mc.player.clientSideCloseContainer();
+        *//*?} else {*/
         mc.player.closeHandledScreen();
+        /*?}*/
 
         if (totalIndexed % 10 == 0) {
             ChatHelper.labelled("Stash", "§7Indexed "
@@ -499,7 +717,11 @@ public final class StashManager {
      * Walk toward the next unscanned zone using incremental waypoints.
      * This mirrors the printer's megabase waypoint pattern.
      */
+    /*? if >=26.1 {*//*
+    private void tickWalkingToZone(Minecraft mc) {
+    *//*?} else {*/
     private void tickWalkingToZone(MinecraftClient mc) {
+    /*?}*/
         if (PathWalker.hasArrived() || !PathWalker.isActive()) {
             PathWalker.stop();
             // Arrived at zone — rescan for newly loaded containers
@@ -533,8 +755,16 @@ public final class StashManager {
         }
 
         // Queue exhausted — check for more unscanned zones
+        /*? if >=26.1 {*//*
+        Minecraft mc = Minecraft.getInstance();
+        *//*?} else {*/
         MinecraftClient mc = MinecraftClient.getInstance();
+        /*?}*/
+        /*? if >=26.1 {*//*
+        if (mc == null || mc.player == null || mc.level == null) {
+        *//*?} else {*/
         if (mc == null || mc.player == null || mc.world == null) {
+        /*?}*/
             finishScan();
             return;
         }
@@ -551,8 +781,16 @@ public final class StashManager {
      * Compute linear waypoints from the player to the target zone center
      * and start walking via PathWalker.
      */
+    /*? if >=26.1 {*//*
+    private void startWalkingToZone(Minecraft mc, BlockPos zoneCenter) {
+    *//*?} else {*/
     private void startWalkingToZone(MinecraftClient mc, BlockPos zoneCenter) {
+    /*?}*/
+        /*? if >=26.1 {*//*
+        BlockPos from = mc.player.blockPosition();
+        *//*?} else {*/
         BlockPos from = mc.player.getBlockPos();
+        /*?}*/
         List<BlockPos> waypoints = computeLinearWaypoints(from, zoneCenter, WAYPOINT_LEG_LENGTH);
 
         ChatHelper.labelled("Stash", "§7Walking to unscanned zone at §f"
@@ -569,7 +807,11 @@ public final class StashManager {
      * Returns the center of that chunk (at region min Y), or null if
      * all chunks have been scanned.
      */
+    /*? if >=26.1 {*//*
+    private BlockPos findUnscannedZone(Minecraft mc) {
+    *//*?} else {*/
     private BlockPos findUnscannedZone(MinecraftClient mc) {
+    /*?}*/
         if (regionMin == null || regionMax == null) return null;
 
         int minCX = regionMin.getX() >> 4;
@@ -577,7 +819,9 @@ public final class StashManager {
         int minCZ = regionMin.getZ() >> 4;
         int maxCZ = regionMax.getZ() >> 4;
 
-        /*? if >=1.21.10 {*//*
+        /*? if >=26.1 {*//*
+        Vec3 playerPos = mc.player.position();
+        *//*?} else if >=1.21.10 {*//*
         Vec3d playerPos = mc.player.getSyncedPos();
         *//*?} else {*/
         Vec3d playerPos = mc.player.getPos();
@@ -595,7 +839,11 @@ public final class StashManager {
                 int centerZ = (cz << 4) + 8;
                 int centerY = regionMin.getY();
 
+                /*? if >=26.1 {*//*
+                double dist = playerPos.distanceToSqr(
+                *//*?} else {*/
                 double dist = playerPos.squaredDistanceTo(
+                /*?}*/
                         centerX + 0.5, centerY + 0.5, centerZ + 0.5);
                 if (dist < bestDist) {
                     bestDist = dist;
@@ -631,7 +879,11 @@ public final class StashManager {
     // ── Region helpers ──────────────────────────────────────────────────
 
     /** Check if any chunks in the region are currently unloaded. */
+    /*? if >=26.1 {*//*
+    private boolean hasUnloadedChunks(Level world) {
+    *//*?} else {*/
     private boolean hasUnloadedChunks(World world) {
+    /*?}*/
         int minCX = regionMin.getX() >> 4;
         int maxCX = regionMax.getX() >> 4;
         int minCZ = regionMin.getZ() >> 4;
@@ -639,7 +891,11 @@ public final class StashManager {
 
         for (int cx = minCX; cx <= maxCX; cx++) {
             for (int cz = minCZ; cz <= maxCZ; cz++) {
+                /*? if >=26.1 {*//*
+                if (!world.hasChunk(cx, cz)) return true;
+                *//*?} else {*/
                 if (!world.isChunkLoaded(cx, cz)) return true;
+                /*?}*/
             }
         }
         return false;
@@ -657,7 +913,11 @@ public final class StashManager {
         double dist = Math.sqrt(dx * dx + dy * dy + dz * dz);
 
         if (dist <= legLength) {
+            /*? if >=26.1 {*//*
+            waypoints.add(to.immutable());
+            *//*?} else {*/
             waypoints.add(to.toImmutable());
+            /*?}*/
             return waypoints;
         }
 
@@ -669,7 +929,11 @@ public final class StashManager {
             int wz = from.getZ() + (int) (dz * t);
             waypoints.add(new BlockPos(wx, wy, wz));
         }
+        /*? if >=26.1 {*//*
+        waypoints.set(waypoints.size() - 1, to.immutable());
+        *//*?} else {*/
         waypoints.set(waypoints.size() - 1, to.toImmutable());
+        /*?}*/
         return waypoints;
     }
 
@@ -821,18 +1085,42 @@ public final class StashManager {
 
     /** For double chests, get the partner position. Returns null for single chests. */
     private static BlockPos getDoubleChestPartner(BlockPos pos, BlockState state) {
+        /*? if >=26.1 {*//*
+        if (!state.hasProperty(BlockStateProperties.CHEST_TYPE)) return null;
+        *//*?} else {*/
         if (!state.contains(Properties.CHEST_TYPE)) return null;
+        /*?}*/
+        /*? if >=26.1 {*//*
+        ChestType type = state.getValue(BlockStateProperties.CHEST_TYPE);
+        *//*?} else {*/
         ChestType type = state.get(Properties.CHEST_TYPE);
+        /*?}*/
         if (type == ChestType.SINGLE) return null;
 
+        /*? if >=26.1 {*//*
+        Direction facing = state.getValue(BlockStateProperties.HORIZONTAL_FACING);
+        *//*?} else {*/
         Direction facing = state.get(Properties.HORIZONTAL_FACING);
+        /*?}*/
         Direction partnerDir;
         if (type == ChestType.LEFT) {
+            /*? if >=26.1 {*//*
+            partnerDir = facing.getClockWise();
+            *//*?} else {*/
             partnerDir = facing.rotateYClockwise();
+            /*?}*/
         } else {
+            /*? if >=26.1 {*//*
+            partnerDir = facing.getCounterClockWise();
+            *//*?} else {*/
             partnerDir = facing.rotateYCounterclockwise();
+            /*?}*/
         }
+        /*? if >=26.1 {*//*
+        return pos.relative(partnerDir);
+        *//*?} else {*/
         return pos.offset(partnerDir);
+        /*?}*/
     }
 
     /** Format an item ID into a human-readable name. */
@@ -857,5 +1145,10 @@ public final class StashManager {
             return "\"" + value.replace("\"", "\"\"") + "\"";
         }
         return value;
+    }
+
+    /** Assign labels to containers based on their contents (called after organization). */
+    public void assignLabels() {
+        // Stub — label assignment will be implemented later
     }
 }

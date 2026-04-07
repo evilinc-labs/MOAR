@@ -5,19 +5,73 @@ import com.google.gson.GsonBuilder;
 import dev.moar.util.ChatHelper;
 import dev.moar.util.PathWalker;
 import net.fabricmc.loader.api.FabricLoader;
+/*? if >=26.1 {*//*
+import net.minecraft.world.level.block.*;
+import net.minecraft.world.level.block.state.*;
+import net.minecraft.world.level.block.piston.*;
+*//*?} else {*/
 import net.minecraft.block.*;
+/*?}*/
+/*? if >=26.1 {*//*
+import net.minecraft.client.Minecraft;
+*//*?} else {*/
 import net.minecraft.client.MinecraftClient;
+/*?}*/
+/*? if >=26.1 {*//*
+import net.minecraft.client.player.LocalPlayer;
+*//*?} else {*/
 import net.minecraft.client.network.ClientPlayerEntity;
+/*?}*/
+/*? if >=26.1 {*//*
+import net.minecraft.core.component.DataComponents;
+*//*?} else {*/
 import net.minecraft.component.DataComponentTypes;
+/*?}*/
+/*? if >=26.1 {*//*
+import net.minecraft.world.item.component.ItemContainerContents;
+*//*?} else {*/
 import net.minecraft.component.type.ContainerComponent;
+/*?}*/
+/*? if >=26.1 {*//*
+import net.minecraft.world.item.BlockItem;
+*//*?} else {*/
 import net.minecraft.item.BlockItem;
+/*?}*/
+/*? if >=26.1 {*//*
+import net.minecraft.world.item.Item;
+*//*?} else {*/
 import net.minecraft.item.Item;
+/*?}*/
+/*? if >=26.1 {*//*
+import net.minecraft.world.item.ItemStack;
+*//*?} else {*/
 import net.minecraft.item.ItemStack;
+/*?}*/
+/*? if >=26.1 {*//*
+import net.minecraft.core.registries.BuiltInRegistries;
+*//*?} else {*/
 import net.minecraft.registry.Registries;
+/*?}*/
+/*? if >=26.1 {*//*
+import net.minecraft.world.inventory.ChestMenu;
+*//*?} else {*/
 import net.minecraft.screen.GenericContainerScreenHandler;
+/*?}*/
+/*? if >=26.1 {*//*
+import net.minecraft.world.inventory.AbstractContainerMenu;
+*//*?} else {*/
 import net.minecraft.screen.ScreenHandler;
+/*?}*/
+/*? if >=26.1 {*//*
+import net.minecraft.world.inventory.ContainerInput;
+*//*?} else {*/
 import net.minecraft.screen.slot.SlotActionType;
+/*?}*/
+/*? if >=26.1 {*//*
+import net.minecraft.core.BlockPos;
+*//*?} else {*/
 import net.minecraft.util.math.BlockPos;
+/*?}*/
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -29,19 +83,7 @@ import java.nio.file.Path;
 import java.util.*;
 import java.util.stream.Collectors;
 
-/**
- * Unified manager for all chest-related operations in MOAR.
- *
- * Consolidates:
- *   - Supply chest registration and persistence (positions saved to JSON)
- *   - Inventory snapshot caching (in-memory, populated when player opens chests)
- *   - Chest scanning / indexing (reads chest and shulker box contents)
- *   - Best-chest ranking for resupply (match count, distance, indexed vs unindexed)
- *   - Storage chest sorting (deposit planning, type assignments, overflow)
- *
- * This class is a singleton held in MoarMod and ticked every
- * client tick to drive the sorting state machine.
- */
+// Supply-chest registry, inventory snapshots, scanning, ranking, and sorting.
 public final class ChestManager {
 
     private static final Logger LOGGER = LoggerFactory.getLogger("MOAR/ChestManager");
@@ -63,7 +105,11 @@ public final class ChestManager {
 
     /** Register a supply chest position. Returns false if already registered. */
     public boolean addSupplyChest(BlockPos pos) {
+        /*? if >=26.1 {*//*
+        BlockPos immutable = pos.immutable();
+        *//*?} else {*/
         BlockPos immutable = pos.toImmutable();
+        /*?}*/
         if (!supplyPositions.add(immutable)) return false;
         saveSupplyChests();
         return true;
@@ -71,7 +117,11 @@ public final class ChestManager {
 
     /** Unregister a supply chest position. */
     public boolean removeSupplyChest(BlockPos pos) {
+        /*? if >=26.1 {*//*
+        BlockPos immutable = pos.immutable();
+        *//*?} else {*/
         BlockPos immutable = pos.toImmutable();
+        /*?}*/
         boolean removed = supplyPositions.remove(immutable);
         if (removed) {
             snapshots.remove(immutable);
@@ -99,18 +149,11 @@ public final class ChestManager {
 
     // ── Inventory snapshots (in-memory) ─────────────────────────────────
 
-    /**
-     * Snapshot of a single supply chest's contents at the time it was last
-     * opened.  Includes items directly in the chest and items found inside
-     * shulker boxes within it.
-     */
+    // Snapshot of a supply chest's contents (direct + shulker items).
     public record ChestSnapshot(
             BlockPos pos,
-            /** Item ID to total count (direct + shulker contents). */
             Map<String, Integer> items,
-            /** Number of shulker boxes found in this chest. */
             int shulkerCount,
-            /** System.currentTimeMillis() when this snapshot was taken. */
             long timestamp
     ) {
         public boolean contains(String itemId) {
@@ -139,17 +182,29 @@ public final class ChestManager {
 
     /** Store a snapshot for a chest position. */
     public void putSnapshot(BlockPos pos, ChestSnapshot snapshot) {
+        /*? if >=26.1 {*//*
+        snapshots.put(pos.immutable(), snapshot);
+        *//*?} else {*/
         snapshots.put(pos.toImmutable(), snapshot);
+        /*?}*/
     }
 
     /** Get the cached snapshot for a chest, or null if not scanned. */
     public ChestSnapshot getSnapshot(BlockPos pos) {
+        /*? if >=26.1 {*//*
+        return snapshots.get(pos.immutable());
+        *//*?} else {*/
         return snapshots.get(pos.toImmutable());
+        /*?}*/
     }
 
     /** Invalidate the cached snapshot for a chest (e.g. after modifying contents). */
     public void invalidateSnapshot(BlockPos pos) {
+        /*? if >=26.1 {*//*
+        snapshots.remove(pos.immutable());
+        *//*?} else {*/
         snapshots.remove(pos.toImmutable());
+        /*?}*/
     }
 
     /** Clear all snapshots (positions are retained). */
@@ -161,19 +216,39 @@ public final class ChestManager {
 
     // Scans an open chest and stores the snapshot.
     // Call when the player opens a supply chest that should be indexed.
+    /*? if >=26.1 {*//*
+    public void scanOpenChest(BlockPos chestPos, ChestMenu handler) {
+    *//*?} else {*/
     public void scanOpenChest(BlockPos chestPos, GenericContainerScreenHandler handler) {
+    /*?}*/
         if (chestPos == null || handler == null) return;
 
+        /*? if >=26.1 {*//*
+        BlockPos key = chestPos.immutable();
+        *//*?} else {*/
         BlockPos key = chestPos.toImmutable();
+        /*?}*/
         Map<String, Integer> items = new HashMap<>();
         int shulkerCount = 0;
 
+        /*? if >=26.1 {*//*
+        int chestSlots = handler.getRowCount() * 9;
+        *//*?} else {*/
         int chestSlots = handler.getRows() * 9;
+        /*?}*/
         for (int slot = 0; slot < chestSlots; slot++) {
+            /*? if >=26.1 {*//*
+            ItemStack stack = handler.getSlot(slot).getItem();
+            *//*?} else {*/
             ItemStack stack = handler.getSlot(slot).getStack();
+            /*?}*/
             if (stack.isEmpty()) continue;
 
+            /*? if >=26.1 {*//*
+            String itemId = BuiltInRegistries.ITEM.getKey(stack.getItem()).toString();
+            *//*?} else {*/
             String itemId = Registries.ITEM.getId(stack.getItem()).toString();
+            /*?}*/
 
             if (isShulkerBox(stack)) {
                 shulkerCount++;
@@ -200,11 +275,23 @@ public final class ChestManager {
         Map<String, Integer> contents = new HashMap<>();
         if (shulkerStack == null || shulkerStack.isEmpty()) return contents;
 
+        /*? if >=26.1 {*//*
+        ItemContainerContents cc = shulkerStack.get(DataComponents.CONTAINER);
+        *//*?} else {*/
         ContainerComponent cc = shulkerStack.get(DataComponentTypes.CONTAINER);
+        /*?}*/
         if (cc == null) return contents;
 
+        /*? if >=26.1 {*//*
+        for (ItemStack inner : cc.nonEmptyItemCopyStream().toList()) {
+        *//*?} else {*/
         for (ItemStack inner : cc.iterateNonEmpty()) {
+        /*?}*/
+            /*? if >=26.1 {*//*
+            String innerId = BuiltInRegistries.ITEM.getKey(inner.getItem()).toString();
+            *//*?} else {*/
             String innerId = Registries.ITEM.getId(inner.getItem()).toString();
+            /*?}*/
             contents.merge(innerId, inner.getCount(), Integer::sum);
         }
         return contents;
@@ -247,7 +334,11 @@ public final class ChestManager {
 
         for (BlockPos pos : supplyPositions) {
             if (exclude.contains(pos)) continue;
+            /*? if >=26.1 {*//*
+            double dist = from.distSqr(pos);
+            *//*?} else {*/
             double dist = from.getSquaredDistance(pos);
+            /*?}*/
             ChestSnapshot snapshot = snapshots.get(pos);
 
             if (snapshot == null) {
@@ -286,7 +377,11 @@ public final class ChestManager {
         BlockPos nearest = null;
         double nearestDist = Double.MAX_VALUE;
         for (BlockPos pos : supplyPositions) {
+            /*? if >=26.1 {*//*
+            double dist = from.distSqr(pos);
+            *//*?} else {*/
             double dist = from.getSquaredDistance(pos);
+            /*?}*/
             if (dist < nearestDist) {
                 nearestDist = dist;
                 nearest = pos;
@@ -491,11 +586,19 @@ public final class ChestManager {
      * Check if the player's inventory is full enough to warrant sorting.
      * Returns true if fewer than 4 empty slots remain.
      */
+    /*? if >=26.1 {*//*
+    public boolean isInventoryFull(Minecraft mc) {
+    *//*?} else {*/
     public boolean isInventoryFull(MinecraftClient mc) {
+    /*?}*/
         if (mc.player == null) return false;
         int empty = 0;
         for (int i = 0; i < 36; i++) {
+            /*? if >=26.1 {*//*
+            if (mc.player.getInventory().getItem(i).isEmpty()) {
+            *//*?} else {*/
             if (mc.player.getInventory().getStack(i).isEmpty()) {
+            /*?}*/
                 empty++;
             }
         }
@@ -506,7 +609,11 @@ public final class ChestManager {
      * Start the sorting process.
      * Analyzes inventory and builds a deposit plan.
      */
+    /*? if >=26.1 {*//*
+    public boolean startSort(Minecraft mc) {
+    *//*?} else {*/
     public boolean startSort(MinecraftClient mc) {
+    /*?}*/
         if (storageChests.isEmpty()) {
             ChatHelper.info("§cNo storage chests configured. Use /spawnproof chest add");
             return false;
@@ -514,7 +621,11 @@ public final class ChestManager {
 
         if (mc.player == null) return false;
 
+        /*? if >=26.1 {*//*
+        sortReturnPos = mc.player.blockPosition();
+        *//*?} else {*/
         sortReturnPos = mc.player.getBlockPos();
+        /*?}*/
         buildDepositPlan(mc);
 
         if (depositPlan.isEmpty()) {
@@ -559,8 +670,16 @@ public final class ChestManager {
     public void tick() {
         if (sortState == SortState.IDLE || sortState == SortState.DONE) return;
 
+        /*? if >=26.1 {*//*
+        Minecraft mc = Minecraft.getInstance();
+        *//*?} else {*/
         MinecraftClient mc = MinecraftClient.getInstance();
+        /*?}*/
+        /*? if >=26.1 {*//*
+        if (mc == null || mc.player == null || mc.level == null) return;
+        *//*?} else {*/
         if (mc == null || mc.player == null || mc.world == null) return;
+        /*?}*/
 
         sortTickCounter++;
 
@@ -574,14 +693,26 @@ public final class ChestManager {
 
     // ── Sorting state handlers ──────────────────────────────────────────
 
+    /*? if >=26.1 {*//*
+    private void tickSortWalking(Minecraft mc) {
+    *//*?} else {*/
     private void tickSortWalking(MinecraftClient mc) {
+    /*?}*/
         if (sortTarget == null) {
             sortState = SortState.DONE;
             return;
         }
 
+        /*? if >=26.1 {*//*
+        LocalPlayer player = mc.player;
+        *//*?} else {*/
         ClientPlayerEntity player = mc.player;
+        /*?}*/
+        /*? if >=26.1 {*//*
+        double distSq = player.distanceToSqr(
+        *//*?} else {*/
         double distSq = player.squaredDistanceTo(
+        /*?}*/
                 sortTarget.getX() + 0.5,
                 sortTarget.getY() + 0.5,
                 sortTarget.getZ() + 0.5);
@@ -614,30 +745,60 @@ public final class ChestManager {
         PathWalker.tick();
     }
 
+    /*? if >=26.1 {*//*
+    private void tickSortOpening(Minecraft mc) {
+    *//*?} else {*/
     private void tickSortOpening(MinecraftClient mc) {
+    /*?}*/
         openWaitTicks++;
 
+        /*? if >=26.1 {*//*
+        if (mc.player.containerMenu instanceof ChestMenu) {
+        *//*?} else {*/
         if (mc.player.currentScreenHandler instanceof GenericContainerScreenHandler) {
+        /*?}*/
             depositIndex = 0;
             sortState = SortState.DEPOSITING;
             return;
         }
 
         if (openWaitTicks == 1) {
+            /*? if >=26.1 {*//*
+            BlockState chestState = mc.level.getBlockState(sortTarget);
+            *//*?} else {*/
             BlockState chestState = mc.world.getBlockState(sortTarget);
+            /*?}*/
             if (chestState.getBlock() instanceof ChestBlock
                     || chestState.getBlock() instanceof BarrelBlock
                     || chestState.getBlock() instanceof ShulkerBoxBlock) {
+                /*? if >=26.1 {*//*
+                mc.gameMode.useItemOn(
+                *//*?} else {*/
                 mc.interactionManager.interactBlock(
+                /*?}*/
                         mc.player,
-                        /*? if >=1.21.10 {*//*
+                        /*? if >=26.1 {*//*
+                        mc.player.getUsedItemHand(),
+                        *//*?} else if >=1.21.10 {*//*
                         mc.player.getActiveHand(),
                         *//*?} else {*/
                         mc.player.getActiveHand(),
                         /*?}*/
+                        /*? if >=26.1 {*//*
+                        new net.minecraft.world.phys.BlockHitResult(
+                        *//*?} else {*/
                         new net.minecraft.util.hit.BlockHitResult(
+                        /*?}*/
+                                /*? if >=26.1 {*//*
+                                net.minecraft.world.phys.Vec3.atCenterOf(sortTarget),
+                                *//*?} else {*/
                                 net.minecraft.util.math.Vec3d.ofCenter(sortTarget),
+                                /*?}*/
+                                /*? if >=26.1 {*//*
+                                net.minecraft.core.Direction.UP,
+                                *//*?} else {*/
                                 net.minecraft.util.math.Direction.UP,
+                                /*?}*/
                                 sortTarget,
                                 false
                         )
@@ -652,9 +813,21 @@ public final class ChestManager {
         }
     }
 
+    /*? if >=26.1 {*//*
+    private void tickSortDepositing(Minecraft mc) {
+    *//*?} else {*/
     private void tickSortDepositing(MinecraftClient mc) {
+    /*?}*/
+        /*? if >=26.1 {*//*
+        AbstractContainerMenu handler = mc.player.containerMenu;
+        *//*?} else {*/
         ScreenHandler handler = mc.player.currentScreenHandler;
+        /*?}*/
+        /*? if >=26.1 {*//*
+        if (!(handler instanceof ChestMenu containerHandler)) {
+        *//*?} else {*/
         if (!(handler instanceof GenericContainerScreenHandler containerHandler)) {
+        /*?}*/
             advanceToNextSortChest();
             return;
         }
@@ -662,30 +835,54 @@ public final class ChestManager {
         if (sortTickCounter % CLICK_COOLDOWN_TICKS != 0) return;
 
         if (currentSlots == null || depositIndex >= currentSlots.size()) {
+            /*? if >=26.1 {*//*
+            mc.player.clientSideCloseContainer();
+            *//*?} else {*/
             mc.player.closeHandledScreen();
+            /*?}*/
             assignChestType(sortTarget, mc);
             advanceToNextSortChest();
             return;
         }
 
         int playerSlot = currentSlots.get(depositIndex);
+        /*? if >=26.1 {*//*
+        ItemStack stack = mc.player.getInventory().getItem(playerSlot);
+        *//*?} else {*/
         ItemStack stack = mc.player.getInventory().getStack(playerSlot);
+        /*?}*/
 
         if (stack.isEmpty()) {
             depositIndex++;
             return;
         }
 
+        /*? if >=26.1 {*//*
+        int chestSlotCount = containerHandler.getRowCount() * 9;
+        *//*?} else {*/
         int chestSlotCount = containerHandler.getRows() * 9;
+        /*?}*/
         boolean hasRoom = false;
         for (int i = 0; i < chestSlotCount; i++) {
+            /*? if >=26.1 {*//*
+            ItemStack chestStack = containerHandler.getSlot(i).getItem();
+            *//*?} else {*/
             ItemStack chestStack = containerHandler.getSlot(i).getStack();
+            /*?}*/
             if (chestStack.isEmpty()) {
                 hasRoom = true;
                 break;
             }
+            /*? if >=26.1 {*//*
+            if (ItemStack.isSameItem(chestStack, stack)
+            *//*?} else {*/
             if (ItemStack.areItemsEqual(chestStack, stack)
+            /*?}*/
+                    /*? if >=26.1 {*//*
+                    && chestStack.getCount() < chestStack.getMaxStackSize()) {
+                    *//*?} else {*/
                     && chestStack.getCount() < chestStack.getMaxCount()) {
+                    /*?}*/
                 hasRoom = true;
                 break;
             }
@@ -694,7 +891,11 @@ public final class ChestManager {
         if (!hasRoom) {
             ChatHelper.info("§eChest full at "
                     + sortTarget.getX() + " " + sortTarget.getY() + " " + sortTarget.getZ());
+            /*? if >=26.1 {*//*
+            mc.player.clientSideCloseContainer();
+            *//*?} else {*/
             mc.player.closeHandledScreen();
+            /*?}*/
             advanceToNextSortChest();
             return;
         }
@@ -706,11 +907,23 @@ public final class ChestManager {
             containerSlotIndex = chestSlotCount + playerSlot - 9;
         }
 
+        /*? if >=26.1 {*//*
+        mc.gameMode.handleContainerInput(
+        *//*?} else {*/
         mc.interactionManager.clickSlot(
+        /*?}*/
+                /*? if >=26.1 {*//*
+                containerHandler.containerId,
+                *//*?} else {*/
                 containerHandler.syncId,
+                /*?}*/
                 containerSlotIndex,
                 0,
+                /*? if >=26.1 {*//*
+                ContainerInput.QUICK_MOVE,
+                *//*?} else {*/
                 SlotActionType.QUICK_MOVE,
+                /*?}*/
                 mc.player
         );
 
@@ -719,20 +932,36 @@ public final class ChestManager {
 
     // ── Deposit planning ────────────────────────────────────────────────
 
+    /*? if >=26.1 {*//*
+    private void buildDepositPlan(Minecraft mc) {
+    *//*?} else {*/
     private void buildDepositPlan(MinecraftClient mc) {
+    /*?}*/
         depositPlan.clear();
 
+        /*? if >=26.1 {*//*
+        LocalPlayer player = mc.player;
+        *//*?} else {*/
         ClientPlayerEntity player = mc.player;
+        /*?}*/
         if (player == null) return;
 
         Map<String, List<Integer>> itemSlots = new LinkedHashMap<>();
 
         for (int i = 0; i < 36; i++) {
+            /*? if >=26.1 {*//*
+            ItemStack stack = player.getInventory().getItem(i);
+            *//*?} else {*/
             ItemStack stack = player.getInventory().getStack(i);
+            /*?}*/
             if (stack.isEmpty()) continue;
             if (keepItems.contains(stack.getItem())) continue;
 
+            /*? if >=26.1 {*//*
+            String itemId = BuiltInRegistries.ITEM.getKey(stack.getItem()).toString();
+            *//*?} else {*/
             String itemId = Registries.ITEM.getId(stack.getItem()).toString();
+            /*?}*/
             itemSlots.computeIfAbsent(itemId, k -> new ArrayList<>()).add(i);
         }
 
@@ -789,16 +1018,40 @@ public final class ChestManager {
         }
     }
 
+    /*? if >=26.1 {*//*
+    private void assignChestType(BlockPos chest, Minecraft mc) {
+    *//*?} else {*/
     private void assignChestType(BlockPos chest, MinecraftClient mc) {
+    /*?}*/
         if (chestTypes.containsKey(chest)) return;
         if (Objects.equals(chest, overflowChest)) return;
 
+        /*? if >=26.1 {*//*
+        AbstractContainerMenu handler = mc.player.containerMenu;
+        *//*?} else {*/
         ScreenHandler handler = mc.player.currentScreenHandler;
+        /*?}*/
+        /*? if >=26.1 {*//*
+        if (handler instanceof ChestMenu containerHandler) {
+        *//*?} else {*/
         if (handler instanceof GenericContainerScreenHandler containerHandler) {
+        /*?}*/
+            /*? if >=26.1 {*//*
+            for (int i = 0; i < containerHandler.getRowCount() * 9; i++) {
+            *//*?} else {*/
             for (int i = 0; i < containerHandler.getRows() * 9; i++) {
+            /*?}*/
+                /*? if >=26.1 {*//*
+                ItemStack stack = containerHandler.getSlot(i).getItem();
+                *//*?} else {*/
                 ItemStack stack = containerHandler.getSlot(i).getStack();
+                /*?}*/
                 if (!stack.isEmpty()) {
+                    /*? if >=26.1 {*//*
+                    String itemId = BuiltInRegistries.ITEM.getKey(stack.getItem()).toString();
+                    *//*?} else {*/
                     String itemId = Registries.ITEM.getId(stack.getItem()).toString();
+                    /*?}*/
                     chestTypes.put(chest, itemId);
                     ChatHelper.info("§7Chest assigned type: §f" + itemId);
                     return;

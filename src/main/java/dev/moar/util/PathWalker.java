@@ -1,19 +1,75 @@
 package dev.moar.util;
 
+/*? if >=26.1 {*//*
+import net.minecraft.world.level.block.Block;
+*//*?} else {*/
 import net.minecraft.block.Block;
+/*?}*/
+/*? if >=26.1 {*//*
+import net.minecraft.world.level.block.state.BlockState;
+*//*?} else {*/
 import net.minecraft.block.BlockState;
+/*?}*/
+/*? if >=26.1 {*//*
+import net.minecraft.client.Minecraft;
+*//*?} else {*/
 import net.minecraft.client.MinecraftClient;
+/*?}*/
+/*? if >=26.1 {*//*
+import net.minecraft.client.player.LocalPlayer;
+*//*?} else {*/
 import net.minecraft.client.network.ClientPlayerEntity;
+/*?}*/
+/*? if >=26.1 {*//*
+import net.minecraft.client.Options;
+*//*?} else {*/
 import net.minecraft.client.option.GameOptions;
+/*?}*/
+/*? if >=26.1 {*//*
+import net.minecraft.world.entity.player.Inventory;
+*//*?} else {*/
 import net.minecraft.entity.player.PlayerInventory;
+/*?}*/
+/*? if >=26.1 {*//*
+import net.minecraft.world.item.BlockItem;
+*//*?} else {*/
 import net.minecraft.item.BlockItem;
+/*?}*/
+/*? if >=26.1 {*//*
+import net.minecraft.world.item.Item;
+*//*?} else {*/
 import net.minecraft.item.Item;
+/*?}*/
+/*? if >=26.1 {*//*
+import net.minecraft.world.item.ItemStack;
+*//*?} else {*/
 import net.minecraft.item.ItemStack;
+/*?}*/
+/*? if >=26.1 {*//*
+import net.minecraft.core.BlockPos;
+*//*?} else {*/
 import net.minecraft.util.math.BlockPos;
+/*?}*/
+/*? if >=26.1 {*//*
+import net.minecraft.core.Direction;
+*//*?} else {*/
 import net.minecraft.util.math.Direction;
+/*?}*/
+/*? if >=26.1 {*//*
+import net.minecraft.util.Mth;
+*//*?} else {*/
 import net.minecraft.util.math.MathHelper;
+/*?}*/
+/*? if >=26.1 {*//*
+import net.minecraft.world.phys.Vec3;
+*//*?} else {*/
 import net.minecraft.util.math.Vec3d;
+/*?}*/
+/*? if >=26.1 {*//*
+import net.minecraft.world.level.Level;
+*//*?} else {*/
 import net.minecraft.world.World;
+/*?}*/
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -24,14 +80,7 @@ import java.util.ArrayList;
 import java.util.Deque;
 import java.util.List;
 
-/**
- * Movement controller that walks the player toward a target position.
- *
- * When Baritone is installed, delegates pathfinding to Baritone's A*
- * engine via reflection — no compile-time Baritone dependency required.
- * When Baritone is absent, falls back to vanilla key simulation with
- * straight-line walking, auto-jumping, and stuck detection.
- */
+// Walks player to target. Uses Baritone (reflection) if available, else vanilla movement.
 public final class PathWalker {
 
     private static final Logger LOGGER = LoggerFactory.getLogger("MOAR/PathWalker");
@@ -102,7 +151,11 @@ public final class PathWalker {
 
     // ── vanilla-only state ──────────────────────────────────────────
 
+    /*? if >=26.1 {*//*
+    private static Vec3 lastProgressPos;
+    *//*?} else {*/
     private static Vec3d lastProgressPos;
+    /*?}*/
     private static int lastProgressTick;
     private static int stuckCycles;
 
@@ -170,7 +223,11 @@ public final class PathWalker {
      * Uses Baritone pathfinding if available, vanilla key simulation otherwise.
      */
     public static void walkTo(BlockPos pos) {
+        /*? if >=26.1 {*//*
+        target = pos.immutable();
+        *//*?} else {*/
         target = pos.toImmutable();
+        /*?}*/
         active = true;
         arrived = false;
         stuck = false;
@@ -195,7 +252,11 @@ public final class PathWalker {
      */
     public static void walkToAdjacent(BlockPos pos) {
         if (BARITONE_AVAILABLE) {
+            /*? if >=26.1 {*//*
+            target = pos.immutable();
+            *//*?} else {*/
             target = pos.toImmutable();
+            /*?}*/
             active = true;
             arrived = false;
             stuck = false;
@@ -214,7 +275,11 @@ public final class PathWalker {
      */
     public static void walkToNearby(BlockPos pos, int radius) {
         if (BARITONE_AVAILABLE) {
+            /*? if >=26.1 {*//*
+            target = pos.immutable();
+            *//*?} else {*/
             target = pos.toImmutable();
+            /*?}*/
             active = true;
             arrived = false;
             stuck = false;
@@ -246,7 +311,11 @@ public final class PathWalker {
     }
 
     public static void walkToWithPlacement(BlockPos pos, int radius,
+                                           /*? if >=26.1 {*//*
+                                           LocalPlayer player) {
+                                           *//*?} else {*/
                                            ClientPlayerEntity player) {
+                                           /*?}*/
         if (BARITONE_AVAILABLE) {
             BaritoneDelegate.enablePlacement();
             if (player != null) {
@@ -296,7 +365,11 @@ public final class PathWalker {
      * @param player  player entity for configuring throwaway items
      */
     public static void walkToYLevelWithPlacement(int y,
+                                                  /*? if >=26.1 {*//*
+                                                  LocalPlayer player) {
+                                                  *//*?} else {*/
                                                   ClientPlayerEntity player) {
+                                                  /*?}*/
         if (BARITONE_AVAILABLE) {
             BaritoneDelegate.enablePlacement();
             if (player != null) {
@@ -319,15 +392,27 @@ public final class PathWalker {
      * @param targetY  the Y level to descend to
      */
     public static void startMiningDescent(int targetY) {
+        /*? if >=26.1 {*//*
+        Minecraft mc = Minecraft.getInstance();
+        *//*?} else {*/
         MinecraftClient mc = MinecraftClient.getInstance();
+        /*?}*/
         if (mc.player == null) return;
 
         miningDescent = true;
         miningDescentTargetY = targetY;
         currentMiningPos = null;
+        /*? if >=26.1 {*//*
+        savedPitch = mc.player.getXRot();
+        *//*?} else {*/
         savedPitch = mc.player.getPitch();
+        /*?}*/
 
+        /*? if >=26.1 {*//*
+        target = mc.player.blockPosition(); // track current pos
+        *//*?} else {*/
         target = mc.player.getBlockPos(); // track current pos
+        /*?}*/
         active = true;
         arrived = false;
         stuck = false;
@@ -342,7 +427,11 @@ public final class PathWalker {
         waypointRadiusQueue.clear();
 
         LOGGER.debug("PathWalker: starting mining descent from Y={} to Y={}",
+                /*? if >=26.1 {*//*
+                mc.player.blockPosition().getY(), targetY);
+                *//*?} else {*/
                 mc.player.getBlockPos().getY(), targetY);
+                /*?}*/
     }
 
     /**
@@ -366,7 +455,11 @@ public final class PathWalker {
         waypointQueue.clear();
         waypointRadiusQueue.clear();
         for (BlockPos wp : waypoints) {
+            /*? if >=26.1 {*//*
+            waypointQueue.addLast(wp.immutable());
+            *//*?} else {*/
             waypointQueue.addLast(wp.toImmutable());
+            /*?}*/
         }
         waypointRadius = radius;
 
@@ -392,7 +485,11 @@ public final class PathWalker {
         waypointQueue.clear();
         waypointRadiusQueue.clear();
         for (int i = 0; i < waypoints.size(); i++) {
+            /*? if >=26.1 {*//*
+            waypointQueue.addLast(waypoints.get(i).immutable());
+            *//*?} else {*/
             waypointQueue.addLast(waypoints.get(i).toImmutable());
+            /*?}*/
             waypointRadiusQueue.addLast(radii.get(i));
         }
         waypointRadius = radii.get(0);
@@ -427,7 +524,11 @@ public final class PathWalker {
      */
     public static void walkToViaWaypointsWithRadiiAndPlacement(
             List<BlockPos> waypoints, List<Integer> radii,
+            /*? if >=26.1 {*//*
+            LocalPlayer player) {
+            *//*?} else {*/
             ClientPlayerEntity player) {
+            /*?}*/
         if (!BARITONE_AVAILABLE || waypoints == null || waypoints.isEmpty()) {
             walkToViaWaypointsWithRadii(waypoints, radii);
             return;
@@ -460,7 +561,11 @@ public final class PathWalker {
 
     public static void walkToViaWaypointsWithPlacement(List<BlockPos> waypoints,
                                                         int radius,
+                                                        /*? if >=26.1 {*//*
+                                                        LocalPlayer player) {
+                                                        *//*?} else {*/
                                                         ClientPlayerEntity player) {
+                                                        /*?}*/
         if (!BARITONE_AVAILABLE || waypoints == null || waypoints.isEmpty()) {
             walkToViaWaypoints(waypoints, radius);
             return;
@@ -488,8 +593,16 @@ public final class PathWalker {
         }
         if (miningDescent) {
             // Restore pitch
+            /*? if >=26.1 {*//*
+            Minecraft mc = Minecraft.getInstance();
+            *//*?} else {*/
             MinecraftClient mc = MinecraftClient.getInstance();
+            /*?}*/
+            /*? if >=26.1 {*//*
+            if (mc.player != null) mc.player.setXRot(savedPitch);
+            *//*?} else {*/
             if (mc.player != null) mc.player.setPitch(savedPitch);
+            /*?}*/
             miningDescent = false;
             currentMiningPos = null;
         }
@@ -556,8 +669,16 @@ public final class PathWalker {
     // ═══════════════════════════════════════════════════════════════════
 
     private static void tickMiningDescent() {
+        /*? if >=26.1 {*//*
+        Minecraft mc = Minecraft.getInstance();
+        *//*?} else {*/
         MinecraftClient mc = MinecraftClient.getInstance();
+        /*?}*/
+        /*? if >=26.1 {*//*
+        if (mc.player == null || mc.gameMode == null || mc.level == null) {
+        *//*?} else {*/
         if (mc.player == null || mc.interactionManager == null || mc.world == null) {
+        /*?}*/
             stop();
             return;
         }
@@ -570,11 +691,19 @@ public final class PathWalker {
             return;
         }
 
+        /*? if >=26.1 {*//*
+        int playerFeetY = mc.player.blockPosition().getY();
+        *//*?} else {*/
         int playerFeetY = mc.player.getBlockPos().getY();
+        /*?}*/
         if (playerFeetY <= miningDescentTargetY) {
             // Reached target Y level
             LOGGER.debug("PathWalker: mining descent complete at Y={}", playerFeetY);
+            /*? if >=26.1 {*//*
+            mc.player.setXRot(savedPitch);
+            *//*?} else {*/
             mc.player.setPitch(savedPitch);
+            /*?}*/
             arrived = true;
             active = false;
             miningDescent = false;
@@ -583,23 +712,59 @@ public final class PathWalker {
         }
 
         // Look straight down for anti-cheat compliance
+        /*? if >=26.1 {*//*
+        mc.player.setXRot(90.0f);
+        *//*?} else {*/
         mc.player.setPitch(90.0f);
+        /*?}*/
 
         // Find the solid block to mine — the one under the player's feet
+        /*? if >=26.1 {*//*
+        BlockPos feetPos = mc.player.blockPosition();
+        *//*?} else {*/
         BlockPos feetPos = mc.player.getBlockPos();
+        /*?}*/
+        /*? if >=26.1 {*//*
+        BlockPos below = feetPos.below();
+        *//*?} else {*/
         BlockPos below = feetPos.down();
+        /*?}*/
 
+        /*? if >=26.1 {*//*
+        BlockState belowState = mc.level.getBlockState(below);
+        *//*?} else {*/
         BlockState belowState = mc.world.getBlockState(below);
+        /*?}*/
         BlockPos toMine = null;
 
+        /*? if >=26.1 {*//*
+        if (!belowState.isAir() && belowState.getDestroySpeed(mc.level, below) >= 0
+        *//*?} else {*/
         if (!belowState.isAir() && belowState.getHardness(mc.world, below) >= 0
+        /*?}*/
+                /*? if >=26.1 {*//*
+                && belowState.getDestroySpeed(mc.level, below) <= 10.0f) {
+                *//*?} else {*/
                 && belowState.getHardness(mc.world, below) <= 10.0f) {
+                /*?}*/
             toMine = below;
         } else {
             // Check feet pos itself (player might be inside the block)
+            /*? if >=26.1 {*//*
+            BlockState feetState = mc.level.getBlockState(feetPos);
+            *//*?} else {*/
             BlockState feetState = mc.world.getBlockState(feetPos);
+            /*?}*/
+            /*? if >=26.1 {*//*
+            if (!feetState.isAir() && feetState.getDestroySpeed(mc.level, feetPos) >= 0
+            *//*?} else {*/
             if (!feetState.isAir() && feetState.getHardness(mc.world, feetPos) >= 0
+            /*?}*/
+                    /*? if >=26.1 {*//*
+                    && feetState.getDestroySpeed(mc.level, feetPos) <= 10.0f) {
+                    *//*?} else {*/
                     && feetState.getHardness(mc.world, feetPos) <= 10.0f) {
+                    /*?}*/
                 toMine = feetPos;
             }
         }
@@ -610,8 +775,16 @@ public final class PathWalker {
             // safe distance), we've left the pillar — stop mining.
             boolean hasSolidBelow = false;
             for (int dy = 1; dy <= 4; dy++) {
+                /*? if >=26.1 {*//*
+                BlockPos check = feetPos.below(dy);
+                *//*?} else {*/
                 BlockPos check = feetPos.down(dy);
+                /*?}*/
+                /*? if >=26.1 {*//*
+                if (!mc.level.getBlockState(check).isAir()) {
+                *//*?} else {*/
                 if (!mc.world.getBlockState(check).isAir()) {
+                /*?}*/
                     hasSolidBelow = true;
                     break;
                 }
@@ -619,7 +792,11 @@ public final class PathWalker {
             if (!hasSolidBelow) {
                 // Pillar ended — we're done (might be at ground)
                 LOGGER.debug("PathWalker: mining descent — no more pillar below, stopping at Y={}", playerFeetY);
+                /*? if >=26.1 {*//*
+                mc.player.setXRot(savedPitch);
+                *//*?} else {*/
                 mc.player.setPitch(savedPitch);
+                /*?}*/
                 arrived = true;
                 active = false;
                 miningDescent = false;
@@ -633,8 +810,16 @@ public final class PathWalker {
         // an unsafe fall (> 3 blocks).
         boolean safeFall = false;
         for (int dy = 1; dy <= 3; dy++) {
+            /*? if >=26.1 {*//*
+            BlockPos check = toMine.below(dy);
+            *//*?} else {*/
             BlockPos check = toMine.down(dy);
+            /*?}*/
+            /*? if >=26.1 {*//*
+            if (!mc.level.getBlockState(check).isAir()) {
+            *//*?} else {*/
             if (!mc.world.getBlockState(check).isAir()) {
+            /*?}*/
                 safeFall = true;
                 break;
             }
@@ -643,7 +828,11 @@ public final class PathWalker {
             // Gap in the pillar — unsafe to continue.  Stop here;
             // we're presumably near ground level.
             LOGGER.debug("PathWalker: mining descent — unsafe gap below Y={}, stopping", toMine.getY());
+            /*? if >=26.1 {*//*
+            mc.player.setXRot(savedPitch);
+            *//*?} else {*/
             mc.player.setPitch(savedPitch);
+            /*?}*/
             arrived = true;
             active = false;
             miningDescent = false;
@@ -654,11 +843,19 @@ public final class PathWalker {
         // Mine the block
         if (currentMiningPos == null || !currentMiningPos.equals(toMine)) {
             // Start mining a new block
+            /*? if >=26.1 {*//*
+            mc.gameMode.startDestroyBlock(toMine, Direction.UP);
+            *//*?} else {*/
             mc.interactionManager.attackBlock(toMine, Direction.UP);
+            /*?}*/
             currentMiningPos = toMine;
         } else {
             // Continue mining the same block
+            /*? if >=26.1 {*//*
+            mc.gameMode.continueDestroyBlock(toMine, Direction.UP);
+            *//*?} else {*/
             mc.interactionManager.updateBlockBreakingProgress(toMine, Direction.UP);
+            /*?}*/
         }
     }
 
@@ -667,7 +864,11 @@ public final class PathWalker {
     // ═══════════════════════════════════════════════════════════════════
 
     private static void tickBaritone() {
+        /*? if >=26.1 {*//*
+        Minecraft mc = Minecraft.getInstance();
+        *//*?} else {*/
         MinecraftClient mc = MinecraftClient.getInstance();
+        /*?}*/
         if (mc.player == null) {
             stop();
             return;
@@ -708,12 +909,18 @@ public final class PathWalker {
             // and Baritone hasn't made progress in 2 seconds, stop
             // Baritone and use simple WASD walking instead.
             if (noPathTicks >= VANILLA_FALLBACK_TICKS && target != null) {
-                /*? if >=1.21.10 {*//*
+                /*? if >=26.1 {*//*
+                Vec3 pPos = mc.player.position();
+                *//*?} else if >=1.21.10 {*//*
                 Vec3d pPos = mc.player.getSyncedPos();
                 *//*?} else {*/
                 Vec3d pPos = mc.player.getPos();
                 /*?}*/
+                /*? if >=26.1 {*//*
+                double distSq = pPos.distanceToSqr(Vec3.atCenterOf(target));
+                *//*?} else {*/
                 double distSq = pPos.squaredDistanceTo(Vec3d.ofCenter(target));
+                /*?}*/
                 double vertDy = Math.abs(pPos.y - target.getY() - 0.5);
                 // Only fall back to vanilla if the target is roughly
                 // at the same elevation — vanilla walking can't climb
@@ -762,12 +969,18 @@ public final class PathWalker {
         if (!BaritoneDelegate.isProcessActive()) {
             // Baritone is no longer working toward the goal —
             // check if we're near the target
-            /*? if >=1.21.10 {*//*
+            /*? if >=26.1 {*//*
+            Vec3 playerPos = mc.player.position();
+            *//*?} else if >=1.21.10 {*//*
             Vec3d playerPos = mc.player.getSyncedPos();
             *//*?} else {*/
             Vec3d playerPos = mc.player.getPos();
             /*?}*/
+            /*? if >=26.1 {*//*
+            Vec3 targetCenter = Vec3.atCenterOf(target);
+            *//*?} else {*/
             Vec3d targetCenter = Vec3d.ofCenter(target);
+            /*?}*/
             double dxz2 = horizontalDistSq(playerPos, targetCenter);
             double dy = Math.abs(playerPos.y - targetCenter.y);
 
@@ -1057,7 +1270,11 @@ public final class PathWalker {
          * so that the original list is saved first.
          */
         @SuppressWarnings("unchecked")
+        /*? if >=26.1 {*//*
+        static void configureThrowawayFromInventory(LocalPlayer player) {
+        *//*?} else {*/
         static void configureThrowawayFromInventory(ClientPlayerEntity player) {
+        /*?}*/
             if (!settingsReady || player == null) return;
             try {
                 Object currentList = settingValueField.get(throwawayItemsSetting);
@@ -1072,9 +1289,21 @@ public final class PathWalker {
                 // accurate — the player might have 128 concrete split
                 // across hotbar and main inventory.
                 java.util.Map<Item, Integer> holdings = new java.util.HashMap<>();
+                /*? if >=26.1 {*//*
+                Inventory inv = player.getInventory();
+                *//*?} else {*/
                 PlayerInventory inv = player.getInventory();
+                /*?}*/
+                /*? if >=26.1 {*//*
+                for (int i = 0; i < inv.getContainerSize(); i++) {
+                *//*?} else {*/
                 for (int i = 0; i < inv.size(); i++) {
+                /*?}*/
+                    /*? if >=26.1 {*//*
+                    ItemStack stack = inv.getItem(i);
+                    *//*?} else {*/
                     ItemStack stack = inv.getStack(i);
+                    /*?}*/
                     if (!stack.isEmpty() && stack.getItem() instanceof BlockItem) {
                         holdings.merge(stack.getItem(), stack.getCount(),
                                 Integer::sum);
@@ -1144,8 +1373,16 @@ public final class PathWalker {
                 if (list instanceof java.util.List<?> items) {
                     for (Object item : items) {
                         // item is an Item instance — get its registry ID
+                        /*? if >=26.1 {*//*
+                        String id = net.minecraft.core.registries.BuiltInRegistries.ITEM
+                        *//*?} else {*/
                         String id = net.minecraft.registry.Registries.ITEM
+                        /*?}*/
+                                /*? if >=26.1 {*//*
+                                .getKey((net.minecraft.world.item.Item) item).toString();
+                                *//*?} else {*/
                                 .getId((net.minecraft.item.Item) item).toString();
+                                /*?}*/
                         result.add(id);
                     }
                 }
@@ -1256,13 +1493,25 @@ public final class PathWalker {
     // ═══════════════════════════════════════════════════════════════════
 
     private static void tickVanilla() {
+        /*? if >=26.1 {*//*
+        Minecraft mc = Minecraft.getInstance();
+        *//*?} else {*/
         MinecraftClient mc = MinecraftClient.getInstance();
+        /*?}*/
+        /*? if >=26.1 {*//*
+        if (mc.player == null || mc.level == null) {
+        *//*?} else {*/
         if (mc.player == null || mc.world == null) {
+        /*?}*/
             stop();
             return;
         }
 
+        /*? if >=26.1 {*//*
+        LocalPlayer player = mc.player;
+        *//*?} else {*/
         ClientPlayerEntity player = mc.player;
+        /*?}*/
 
         // ── timeout check ───────────────────────────────────────────
         if (ticksWalking >= getEffectiveTimeout()) {
@@ -1274,12 +1523,18 @@ public final class PathWalker {
         }
 
         // ── arrival check ───────────────────────────────────────────
-        /*? if >=1.21.10 {*//*
+        /*? if >=26.1 {*//*
+        Vec3 playerPos = player.position();
+        *//*?} else if >=1.21.10 {*//*
         Vec3d playerPos = player.getSyncedPos();
         *//*?} else {*/
         Vec3d playerPos = player.getPos();
         /*?}*/
+        /*? if >=26.1 {*//*
+        Vec3 targetCenter = Vec3.atCenterOf(target);
+        *//*?} else {*/
         Vec3d targetCenter = Vec3d.ofCenter(target);
+        /*?}*/
         double dxz2 = horizontalDistSq(playerPos, targetCenter);
         double dy = Math.abs(playerPos.y - targetCenter.y);
 
@@ -1313,8 +1568,16 @@ public final class PathWalker {
             if (progressDist2 < MIN_PROGRESS_SQ) {
                 stuckCycles++;
                 LOGGER.debug("PathWalker[Vanilla]: stuck cycle {} — trying jump", stuckCycles);
+                /*? if >=26.1 {*//*
+                if (player.onGround()) {
+                *//*?} else {*/
                 if (player.isOnGround()) {
+                /*?}*/
+                    /*? if >=26.1 {*//*
+                    player.jumpFromGround();
+                    *//*?} else {*/
                     player.jump();
+                    /*?}*/
                 }
                 if (stuckCycles >= STUCK_CYCLES_BEFORE_GIVE_UP) {
                     LOGGER.warn("PathWalker[Vanilla]: stuck after {} cycles, declaring stuck", stuckCycles);
@@ -1330,39 +1593,107 @@ public final class PathWalker {
         // ── look at target ──────────────────────────────────────────
         double dx = targetCenter.x - playerPos.x;
         double dz = targetCenter.z - playerPos.z;
+        /*? if >=26.1 {*//*
+        float targetYaw = (float) (Mth.atan2(dz, dx) * (180.0 / Math.PI)) - 90.0f;
+        *//*?} else {*/
         float targetYaw = (float) (MathHelper.atan2(dz, dx) * (180.0 / Math.PI)) - 90.0f;
+        /*?}*/
 
+        /*? if >=26.1 {*//*
+        float currentYaw = player.getYRot();
+        *//*?} else {*/
         float currentYaw = player.getYaw();
+        /*?}*/
+        /*? if >=26.1 {*//*
+        float yawDiff = Mth.wrapDegrees(targetYaw - currentYaw);
+        *//*?} else {*/
         float yawDiff = MathHelper.wrapDegrees(targetYaw - currentYaw);
+        /*?}*/
         float maxTurn = 15.0f;
+        /*? if >=26.1 {*//*
+        float newYaw = currentYaw + Mth.clamp(yawDiff, -maxTurn, maxTurn);
+        *//*?} else {*/
         float newYaw = currentYaw + MathHelper.clamp(yawDiff, -maxTurn, maxTurn);
+        /*?}*/
+        /*? if >=26.1 {*//*
+        player.setYRot(newYaw);
+        *//*?} else {*/
         player.setYaw(newYaw);
+        /*?}*/
+        /*? if >=26.1 {*//*
+        player.setXRot(5.0f);
+        *//*?} else {*/
         player.setPitch(5.0f);
+        /*?}*/
 
         // ── movement ────────────────────────────────────────────────
+        /*? if >=26.1 {*//*
+        Options options = mc.options;
+        *//*?} else {*/
         GameOptions options = mc.options;
+        /*?}*/
 
+        /*? if >=26.1 {*//*
+        options.keyUp.setDown(true);
+        *//*?} else {*/
         options.forwardKey.setPressed(true);
+        /*?}*/
+        /*? if >=26.1 {*//*
+        options.keyDown.setDown(false);
+        *//*?} else {*/
         options.backKey.setPressed(false);
+        /*?}*/
+        /*? if >=26.1 {*//*
+        options.keyLeft.setDown(false);
+        *//*?} else {*/
         options.leftKey.setPressed(false);
+        /*?}*/
+        /*? if >=26.1 {*//*
+        options.keyRight.setDown(false);
+        *//*?} else {*/
         options.rightKey.setPressed(false);
+        /*?}*/
 
         boolean facingTarget = Math.abs(yawDiff) < 30.0f;
+        /*? if >=26.1 {*//*
+        options.keySprint.setDown(facingTarget && dxz2 > 9.0);
+        *//*?} else {*/
         options.sprintKey.setPressed(facingTarget && dxz2 > 9.0);
+        /*?}*/
 
         // ── proactive obstacle jumping ──────────────────────────────
+        /*? if >=26.1 {*//*
+        if (player.onGround()) {
+        *//*?} else {*/
         if (player.isOnGround()) {
+        /*?}*/
             if (player.horizontalCollision) {
+                /*? if >=26.1 {*//*
+                player.jumpFromGround();
+                *//*?} else {*/
                 player.jump();
+                /*?}*/
+            /*? if >=26.1 {*//*
+            } else if (shouldJumpAhead(player, mc.level, targetYaw)) {
+            *//*?} else {*/
             } else if (shouldJumpAhead(player, mc.world, targetYaw)) {
+            /*?}*/
+                /*? if >=26.1 {*//*
+                player.jumpFromGround();
+                *//*?} else {*/
                 player.jump();
+                /*?}*/
             }
         }
     }
 
     // ── internals ───────────────────────────────────────────────────────
 
+    /*? if >=26.1 {*//*
+    private static boolean shouldJumpAhead(LocalPlayer player, Level world, float yaw) {
+    *//*?} else {*/
     private static boolean shouldJumpAhead(ClientPlayerEntity player, World world, float yaw) {
+    /*?}*/
         double rad = Math.toRadians(yaw + 90.0);
         double aheadX = player.getX() + (-Math.sin(rad) * 1.2);
         double aheadZ = player.getZ() + (Math.cos(rad) * 1.2);
@@ -1373,29 +1704,81 @@ public final class PathWalker {
                 (int) Math.floor(aheadZ));
 
         BlockState footState  = world.getBlockState(ahead);
+        /*? if >=26.1 {*//*
+        BlockState headState  = world.getBlockState(ahead.above());
+        *//*?} else {*/
         BlockState headState  = world.getBlockState(ahead.up());
+        /*?}*/
+        /*? if >=26.1 {*//*
+        BlockState aboveHead  = world.getBlockState(ahead.above(2));
+        *//*?} else {*/
         BlockState aboveHead  = world.getBlockState(ahead.up(2));
+        /*?}*/
 
+        /*? if >=26.1 {*//*
+        boolean footSolid  = !footState.isAir() && !footState.canBeReplaced();
+        *//*?} else {*/
         boolean footSolid  = !footState.isAir() && !footState.isReplaceable();
+        /*?}*/
+        /*? if >=26.1 {*//*
+        boolean headClear  = headState.isAir() || headState.canBeReplaced();
+        *//*?} else {*/
         boolean headClear  = headState.isAir() || headState.isReplaceable();
+        /*?}*/
+        /*? if >=26.1 {*//*
+        boolean aboveClear = aboveHead.isAir() || aboveHead.canBeReplaced();
+        *//*?} else {*/
         boolean aboveClear = aboveHead.isAir() || aboveHead.isReplaceable();
+        /*?}*/
 
         return footSolid && headClear && aboveClear;
     }
 
     private static void releaseKeys() {
+        /*? if >=26.1 {*//*
+        Minecraft mc = Minecraft.getInstance();
+        *//*?} else {*/
         MinecraftClient mc = MinecraftClient.getInstance();
+        /*?}*/
         if (mc == null) return;
 
+        /*? if >=26.1 {*//*
+        Options options = mc.options;
+        *//*?} else {*/
         GameOptions options = mc.options;
+        /*?}*/
+        /*? if >=26.1 {*//*
+        options.keyUp.setDown(false);
+        *//*?} else {*/
         options.forwardKey.setPressed(false);
+        /*?}*/
+        /*? if >=26.1 {*//*
+        options.keyDown.setDown(false);
+        *//*?} else {*/
         options.backKey.setPressed(false);
+        /*?}*/
+        /*? if >=26.1 {*//*
+        options.keyLeft.setDown(false);
+        *//*?} else {*/
         options.leftKey.setPressed(false);
+        /*?}*/
+        /*? if >=26.1 {*//*
+        options.keyRight.setDown(false);
+        *//*?} else {*/
         options.rightKey.setPressed(false);
+        /*?}*/
+        /*? if >=26.1 {*//*
+        options.keySprint.setDown(false);
+        *//*?} else {*/
         options.sprintKey.setPressed(false);
+        /*?}*/
     }
 
+    /*? if >=26.1 {*//*
+    private static double horizontalDistSq(Vec3 a, Vec3 b) {
+    *//*?} else {*/
     private static double horizontalDistSq(Vec3d a, Vec3d b) {
+    /*?}*/
         double dx = a.x - b.x;
         double dz = a.z - b.z;
         return dx * dx + dz * dz;
@@ -1403,9 +1786,17 @@ public final class PathWalker {
 
     /** Record the distance from the player to the target at walk start. */
     private static void recordInitialDistance(BlockPos pos) {
+        /*? if >=26.1 {*//*
+        Minecraft mc = Minecraft.getInstance();
+        *//*?} else {*/
         MinecraftClient mc = MinecraftClient.getInstance();
+        /*?}*/
         if (mc.player != null) {
+            /*? if >=26.1 {*//*
+            initialDistance = Math.sqrt(mc.player.blockPosition().distSqr(pos));
+            *//*?} else {*/
             initialDistance = Math.sqrt(mc.player.getBlockPos().getSquaredDistance(pos));
+            /*?}*/
         } else {
             initialDistance = 0;
         }
@@ -1429,14 +1820,24 @@ public final class PathWalker {
      */
     private static int effectiveStuckThreshold() {
         if (target == null) return STUCK_THRESHOLD;
+        /*? if >=26.1 {*//*
+        Minecraft mc = Minecraft.getInstance();
+        *//*?} else {*/
         MinecraftClient mc = MinecraftClient.getInstance();
+        /*?}*/
         if (mc.player == null) return STUCK_THRESHOLD;
-        /*? if >=1.21.10 {*//*
+        /*? if >=26.1 {*//*
+        Vec3 pPos = mc.player.position();
+        *//*?} else if >=1.21.10 {*//*
         Vec3d pPos = mc.player.getSyncedPos();
         *//*?} else {*/
         Vec3d pPos = mc.player.getPos();
         /*?}*/
+        /*? if >=26.1 {*//*
+        double dist = Math.sqrt(pPos.distanceToSqr(Vec3.atCenterOf(target)));
+        *//*?} else {*/
         double dist = Math.sqrt(pPos.squaredDistanceTo(Vec3d.ofCenter(target)));
+        /*?}*/
         if (dist >= 30.0) return STUCK_THRESHOLD;
         // Linear scale: 0 blocks → MIN_STUCK_THRESHOLD, 30 blocks → STUCK_THRESHOLD
         return Math.max(MIN_STUCK_THRESHOLD,

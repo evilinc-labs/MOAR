@@ -10,10 +10,24 @@ import dev.moar.schematic.PrinterResourceManager;
 import dev.moar.spawnproof.SpawnProofer;
 import net.fabricmc.api.ClientModInitializer;
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
+/*? if >=26.1 {*//*
+import net.fabricmc.fabric.api.client.keymapping.v1.KeyMappingHelper;
+*//*?} else {*/
 import net.fabricmc.fabric.api.client.keybinding.v1.KeyBindingHelper;
+/*?}*/
+/*? if >=26.1 {*//*
+import net.minecraft.client.KeyMapping;
+*//*?} else {*/
 import net.minecraft.client.option.KeyBinding;
+/*?}*/
+/*? if >=26.1 {*//*
+import com.mojang.blaze3d.platform.InputConstants;
+*//*?} else {*/
 import net.minecraft.client.util.InputUtil;
-/*? if >=1.21.10 {*//*
+/*?}*/
+/*? if >=26.1 {*//*
+import net.minecraft.resources.Identifier;
+*//*?} else if >=1.21.10 {*//*
 import net.minecraft.util.Identifier;
 *//*?}*/
 import org.lwjgl.glfw.GLFW;
@@ -34,18 +48,32 @@ public class MoarMod implements ClientModInitializer {
     private static final ChestManager CHEST_MANAGER = new ChestManager();
     private static final StashManager STASH_MANAGER = new StashManager();
 
+    /*? if >=26.1 {*//*
+    private static KeyMapping toggleKey;
+    *//*?} else {*/
     private static KeyBinding toggleKey;
+    /*?}*/
 
     @Override
     public void onInitializeClient() {
         LOGGER.info("MOAR initializing...");
 
         // Register keybinding to toggle the printer
+        /*? if >=26.1 {*//*
+        toggleKey = KeyMappingHelper.registerKeyMapping(new KeyMapping(
+        *//*?} else {*/
         toggleKey = KeyBindingHelper.registerKeyBinding(new KeyBinding(
+        /*?}*/
                 "key.moar.toggle",
+                /*? if >=26.1 {*//*
+                InputConstants.Type.KEYSYM,
+                *//*?} else {*/
                 InputUtil.Type.KEYSYM,
+                /*?}*/
                 GLFW.GLFW_KEY_KP_0,
-                /*? if >=1.21.10 {*//*
+                /*? if >=26.1 {*//*
+                KeyMapping.Category.register(Identifier.fromNamespaceAndPath("moar", "category"))
+                *//*?} else if >=1.21.10 {*//*
                 KeyBinding.Category.create(Identifier.of("moar", "category"))
                 *//*?} else {*/
                 "category.moar"
@@ -63,7 +91,11 @@ public class MoarMod implements ClientModInitializer {
         // Register tick handler
         ClientTickEvents.END_CLIENT_TICK.register(client -> {
             // Toggle keybind check
+            /*? if >=26.1 {*//*
+            while (toggleKey.consumeClick()) {
+            *//*?} else {*/
             while (toggleKey.wasPressed()) {
+            /*?}*/
                 PRINTER.toggle();
             }
 

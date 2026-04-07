@@ -43,7 +43,7 @@ jobs:
         run: |
           echo "## Build Results" >> "$GITHUB_STEP_SUMMARY"
           echo "" >> "$GITHUB_STEP_SUMMARY"
-          for ver in 1.21.1 1.21.4 1.21.5 1.21.8 1.21.10; do
+          for ver in 1.21.1 1.21.4 1.21.5 1.21.8 1.21.10 1.21.11; do
             jar="build/libs/1.1.0/moar-1.1.0+${ver}.jar"
             if [ -f "$jar" ]; then
               size=$(du -h "$jar" | cut -f1)
@@ -57,7 +57,7 @@ jobs:
         if: always()
         run: |
           # Verify all 5 version jars were produced
-          expected=5
+          expected=6
           actual=$(find build/libs -name '*.jar' ! -name '*-sources.jar' | wc -l)
           if [ "$actual" -ne "$expected" ]; then
             echo "::error::Expected $expected version jars but found $actual"

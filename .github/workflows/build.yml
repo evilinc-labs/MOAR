@@ -74,6 +74,14 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
+      - name: Upload MC 1.21.11
+        uses: actions/upload-artifact@v4
+        with:
+          name: moar-1.21.11
+          path: build/libs/*/moar-*+1.21.11.jar
+          if-no-files-found: error
+          retention-days: 14
+
       - name: Upload sources
         uses: actions/upload-artifact@v4
         with:
