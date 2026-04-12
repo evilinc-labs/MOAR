@@ -32,10 +32,18 @@ jobs:
       - name: Grant execute permission
         run: chmod +x gradlew
 
-      - name: Clean & build all versions
+      # 26.1.1 excluded — requires JDK 25 (not yet available on GitHub-hosted runners)
+      - name: Clean & build stable versions
         id: build
         run: |
-          ./gradlew clean buildAndCollect --no-daemon 2>&1 | tee build.log
+          ./gradlew clean \
+            :1.21.1:buildAndCollect \
+            :1.21.4:buildAndCollect \
+            :1.21.5:buildAndCollect \
+            :1.21.8:buildAndCollect \
+            :1.21.10:buildAndCollect \
+            :1.21.11:buildAndCollect \
+            --no-daemon 2>&1 | tee build.log
           echo "status=${PIPESTATUS[0]}" >> "$GITHUB_OUTPUT"
 
       - name: Summarize build
@@ -57,7 +65,7 @@ jobs:
       - name: Check for version-specific issues
         if: always()
         run: |
-          # Verify all 5 version jars were produced
+          # Verify all stable version jars were produced (excludes 26.1.1)
           expected=6
           actual=$(find build/libs -name '*.jar' ! -name '*-sources.jar' | wc -l)
           if [ "$actual" -ne "$expected" ]; then

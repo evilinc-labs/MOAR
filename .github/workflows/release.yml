@@ -28,8 +28,17 @@ jobs:
       - name: Grant execute permission
         run: chmod +x gradlew
 
-      - name: Clean & build all versions
-        run: ./gradlew clean buildAndCollect --no-daemon
+      # 26.1.1 excluded — requires JDK 25 (not yet available on GitHub-hosted runners)
+      - name: Clean & build stable versions
+        run: >
+          ./gradlew clean
+          :1.21.1:buildAndCollect
+          :1.21.4:buildAndCollect
+          :1.21.5:buildAndCollect
+          :1.21.8:buildAndCollect
+          :1.21.10:buildAndCollect
+          :1.21.11:buildAndCollect
+          --no-daemon
 
       - name: Extract version from tag
         id: version
