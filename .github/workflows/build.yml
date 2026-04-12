@@ -31,8 +31,17 @@ jobs:
       - name: Grant execute permission
         run: chmod +x gradlew
 
-      - name: Clean & build all versions
-        run: ./gradlew clean buildAndCollect --no-daemon
+      # 26.1.1 excluded — requires JDK 25 (not yet available on GitHub-hosted runners)
+      - name: Clean & build stable versions
+        run: >
+          ./gradlew clean
+          :1.21.1:buildAndCollect
+          :1.21.4:buildAndCollect
+          :1.21.5:buildAndCollect
+          :1.21.8:buildAndCollect
+          :1.21.10:buildAndCollect
+          :1.21.11:buildAndCollect
+          --no-daemon
 
       - name: Upload MC 1.21.1
         uses: actions/upload-artifact@v4
@@ -71,6 +80,14 @@ jobs:
         with:
           name: moar-1.21.10
           path: build/libs/*/moar-*+1.21.10.jar
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Upload MC 1.21.11
+        uses: actions/upload-artifact@v4
+        with:
+          name: moar-1.21.11
+          path: build/libs/*/moar-*+1.21.11.jar
           if-no-files-found: error
           retention-days: 14
 

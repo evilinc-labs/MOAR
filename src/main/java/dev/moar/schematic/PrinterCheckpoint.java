@@ -3,7 +3,11 @@ package dev.moar.schematic;
 import com.google.gson.Gson;
 import com.google.gson.GsonBuilder;
 import net.fabricmc.loader.api.FabricLoader;
+/*? if >=26.1 {*//*
+import net.minecraft.core.BlockPos;
+*//*?} else {*/
 import net.minecraft.util.math.BlockPos;
+/*?}*/
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -13,14 +17,7 @@ import java.io.Writer;
 import java.nio.file.Files;
 import java.nio.file.Path;
 
-/**
- * Persists schematic printer state so printing can resume after a
- * disconnect, crash, or client restart.
- *
- * Data is written to moar/printer_checkpoint.json
- * and includes the schematic filename, anchor position, session
- * block count, and the player's last known position.
- */
+// Persists printer state to moar/printer_checkpoint.json for resume after restart.
 public final class PrinterCheckpoint {
 
     private PrinterCheckpoint() {}
@@ -33,16 +30,16 @@ public final class PrinterCheckpoint {
             .resolve("moar")
             .resolve("printer_checkpoint.json");
 
-    // ── auto-save interval ──────────────────────────────────────────────
+    // auto-save interval
 
     private static final int SAVE_INTERVAL = 50;
     private static int blocksSinceLastSave = 0;
 
-    // ── current state (in-memory mirror) ────────────────────────────────
+    // current state (in-memory mirror)
 
     private static CheckpointData current = null;
 
-    // ── public API ──────────────────────────────────────────────────────
+    // public API
 
     public static void save(String schematicFile, BlockPos anchor, int blocksPlaced, BlockPos playerPos) {
         current = new CheckpointData();
@@ -104,7 +101,7 @@ public final class PrinterCheckpoint {
         return current;
     }
 
-    // ── persistence ─────────────────────────────────────────────────────
+    // persistence
 
     private static void writeToDisk() {
         try {
@@ -117,7 +114,7 @@ public final class PrinterCheckpoint {
         }
     }
 
-    // ── data class ──────────────────────────────────────────────────────
+    // data class
 
     public static class CheckpointData {
         public String schematicFile;

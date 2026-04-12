@@ -32,32 +32,41 @@ jobs:
       - name: Grant execute permission
         run: chmod +x gradlew
 
-      - name: Clean & build all versions
+      # 26.1.1 excluded — requires JDK 25 (not yet available on GitHub-hosted runners)
+      - name: Clean & build stable versions
         id: build
         run: |
-          ./gradlew clean buildAndCollect --no-daemon 2>&1 | tee build.log
+          ./gradlew clean \
+            :1.21.1:buildAndCollect \
+            :1.21.4:buildAndCollect \
+            :1.21.5:buildAndCollect \
+            :1.21.8:buildAndCollect \
+            :1.21.10:buildAndCollect \
+            :1.21.11:buildAndCollect \
+            --no-daemon 2>&1 | tee build.log
           echo "status=${PIPESTATUS[0]}" >> "$GITHUB_OUTPUT"
 
       - name: Summarize build
         if: always()
         run: |
+          VER=$(grep '^mod.version=' gradle.properties | cut -d= -f2)
           echo "## Build Results" >> "$GITHUB_STEP_SUMMARY"
           echo "" >> "$GITHUB_STEP_SUMMARY"
-          for ver in 1.21.1 1.21.4 1.21.5 1.21.8 1.21.10; do
-            jar="build/libs/1.1.0/moar-1.1.0+${ver}.jar"
+          for mc in 1.21.1 1.21.4 1.21.5 1.21.8 1.21.10 1.21.11; do
+            jar="build/libs/${VER}/moar-${VER}+${mc}.jar"
             if [ -f "$jar" ]; then
               size=$(du -h "$jar" | cut -f1)
-              echo "- :white_check_mark: **MC ${ver}** — ${size}" >> "$GITHUB_STEP_SUMMARY"
+              echo "- :white_check_mark: **MC ${mc}** — ${size}" >> "$GITHUB_STEP_SUMMARY"
             else
-              echo "- :x: **MC ${ver}** — jar not found" >> "$GITHUB_STEP_SUMMARY"
+              echo "- :x: **MC ${mc}** — jar not found" >> "$GITHUB_STEP_SUMMARY"
             fi
           done
 
       - name: Check for version-specific issues
         if: always()
         run: |
-          # Verify all 5 version jars were produced
-          expected=5
+          # Verify all stable version jars were produced (excludes 26.1.1)
+          expected=6
           actual=$(find build/libs -name '*.jar' ! -name '*-sources.jar' | wc -l)
           if [ "$actual" -ne "$expected" ]; then
             echo "::error::Expected $expected version jars but found $actual"

@@ -9,17 +9,53 @@ import dev.moar.schematic.LitematicaDetector;
 import dev.moar.schematic.PrinterCheckpoint;
 import dev.moar.schematic.PrinterResourceManager;
 import dev.moar.util.ChatHelper;
+/*? if >=26.1 {*//*
+import net.fabricmc.fabric.api.client.command.v2.ClientCommands;
+*//*?} else {*/
 import net.fabricmc.fabric.api.client.command.v2.ClientCommandManager;
+/*?}*/
 import net.fabricmc.fabric.api.client.command.v2.ClientCommandRegistrationCallback;
 import net.fabricmc.fabric.api.client.command.v2.FabricClientCommandSource;
+/*? if >=26.1 {*//*
+import net.minecraft.world.level.block.BarrelBlock;
+*//*?} else {*/
 import net.minecraft.block.BarrelBlock;
+/*?}*/
+/*? if >=26.1 {*//*
+import net.minecraft.world.level.block.Block;
+*//*?} else {*/
 import net.minecraft.block.Block;
+/*?}*/
+/*? if >=26.1 {*//*
+import net.minecraft.world.level.block.ChestBlock;
+*//*?} else {*/
 import net.minecraft.block.ChestBlock;
+/*?}*/
+/*? if >=26.1 {*//*
+import net.minecraft.world.level.block.ShulkerBoxBlock;
+*//*?} else {*/
 import net.minecraft.block.ShulkerBoxBlock;
+/*?}*/
+/*? if >=26.1 {*//*
+import net.minecraft.client.Minecraft;
+*//*?} else {*/
 import net.minecraft.client.MinecraftClient;
+/*?}*/
+/*? if >=26.1 {*//*
+import net.minecraft.world.phys.BlockHitResult;
+*//*?} else {*/
 import net.minecraft.util.hit.BlockHitResult;
+/*?}*/
+/*? if >=26.1 {*//*
+import net.minecraft.world.phys.HitResult;
+*//*?} else {*/
 import net.minecraft.util.hit.HitResult;
+/*?}*/
+/*? if >=26.1 {*//*
+import net.minecraft.core.BlockPos;
+*//*?} else {*/
 import net.minecraft.util.math.BlockPos;
+/*?}*/
 
 import java.io.IOException;
 import java.nio.file.Files;
@@ -34,11 +70,23 @@ public final class PrinterCommand {
 
     public static void register() {
         ClientCommandRegistrationCallback.EVENT.register((dispatcher, registryAccess) -> {
+            /*? if >=26.1 {*//*
+            var root = ClientCommands.literal("printer");
+            *//*?} else {*/
             var root = ClientCommandManager.literal("printer");
+            /*?}*/
 
             // /printer load <file>
+            /*? if >=26.1 {*//*
+            root.then(ClientCommands.literal("load")
+            *//*?} else {*/
             root.then(ClientCommandManager.literal("load")
+            /*?}*/
+                    /*? if >=26.1 {*//*
+                    .then(ClientCommands.argument("file", StringArgumentType.greedyString())
+                    *//*?} else {*/
                     .then(ClientCommandManager.argument("file", StringArgumentType.greedyString())
+                    /*?}*/
                             .suggests((ctx, builder) -> {
                                 for (String name : SchematicPrinter.listSchematics()) {
                                     builder.suggest(name);
@@ -53,7 +101,11 @@ public final class PrinterCommand {
             );
 
             // /printer unload
+            /*? if >=26.1 {*//*
+            root.then(ClientCommands.literal("unload")
+            *//*?} else {*/
             root.then(ClientCommandManager.literal("unload")
+            /*?}*/
                     .executes(ctx -> {
                         SchematicPrinter printer = getPrinter();
                         if (!printer.isLoaded()) {
@@ -67,10 +119,18 @@ public final class PrinterCommand {
             );
 
             // /printer here
+            /*? if >=26.1 {*//*
+            root.then(ClientCommands.literal("here")
+            *//*?} else {*/
             root.then(ClientCommandManager.literal("here")
+            /*?}*/
                     .executes(ctx -> {
                         SchematicPrinter printer = getPrinter();
+                        /*? if >=26.1 {*//*
+                        Minecraft mc = Minecraft.getInstance();
+                        *//*?} else {*/
                         MinecraftClient mc = MinecraftClient.getInstance();
+                        /*?}*/
                         if (mc.player == null) return 0;
 
                         if (!printer.isLoaded()) {
@@ -78,14 +138,12 @@ public final class PrinterCommand {
                             return 0;
                         }
 
-                        // Primary: correlate against Litematica's SchematicWorld
-                        // to get the exact hologram position.
+                        // Correlate against Litematica SchematicWorld for exact anchor
                         BlockPos pos = LitematicaDetector.detectAnchorFromSchematicWorld(
                                 printer.getSchematic());
                         if (pos != null) {
                             ChatHelper.info("§aAligned anchor from hologram blocks.");
                         } else {
-                            // Fallback: snap to nearest Litematica placement origin
                             List<LitematicaDetector.DetectedPlacement> placements =
                                     SchematicPrinter.detectAllPlacements();
                             LitematicaDetector.DetectedPlacement bestMatch = null;
@@ -106,7 +164,11 @@ public final class PrinterCommand {
                                         bestMatch.originZ() + printer.getSchematic().getOriginOffsetZ());
                                 ChatHelper.info("§aSnapped to Litematica placement origin.");
                             } else {
+                                /*? if >=26.1 {*//*
+                                pos = mc.player.blockPosition();
+                                *//*?} else {*/
                                 pos = mc.player.getBlockPos();
+                                /*?}*/
                             }
                         }
 
@@ -117,10 +179,26 @@ public final class PrinterCommand {
             );
 
             // /printer pos <x> <y> <z>
+            /*? if >=26.1 {*//*
+            root.then(ClientCommands.literal("pos")
+            *//*?} else {*/
             root.then(ClientCommandManager.literal("pos")
+            /*?}*/
+                    /*? if >=26.1 {*//*
+                    .then(ClientCommands.argument("x", IntegerArgumentType.integer())
+                    *//*?} else {*/
                     .then(ClientCommandManager.argument("x", IntegerArgumentType.integer())
+                    /*?}*/
+                            /*? if >=26.1 {*//*
+                            .then(ClientCommands.argument("y", IntegerArgumentType.integer())
+                            *//*?} else {*/
                             .then(ClientCommandManager.argument("y", IntegerArgumentType.integer())
+                            /*?}*/
+                                    /*? if >=26.1 {*//*
+                                    .then(ClientCommands.argument("z", IntegerArgumentType.integer())
+                                    *//*?} else {*/
                                     .then(ClientCommandManager.argument("z", IntegerArgumentType.integer())
+                                    /*?}*/
                                             .executes(ctx -> {
                                                 SchematicPrinter printer = getPrinter();
                                                 if (!printer.isLoaded()) {
@@ -141,7 +219,11 @@ public final class PrinterCommand {
             );
 
             // /printer status
+            /*? if >=26.1 {*//*
+            root.then(ClientCommands.literal("status")
+            *//*?} else {*/
             root.then(ClientCommandManager.literal("status")
+            /*?}*/
                     .executes(ctx -> {
                         SchematicPrinter printer = getPrinter();
                         if (!printer.isLoaded()) {
@@ -177,7 +259,11 @@ public final class PrinterCommand {
             );
 
             // /printer list
+            /*? if >=26.1 {*//*
+            root.then(ClientCommands.literal("list")
+            *//*?} else {*/
             root.then(ClientCommandManager.literal("list")
+            /*?}*/
                     .executes(ctx -> {
                         List<String> schematics = SchematicPrinter.listSchematics();
                         if (schematics.isEmpty()) {
@@ -194,7 +280,11 @@ public final class PrinterCommand {
             );
 
             // /printer detect
+            /*? if >=26.1 {*//*
+            root.then(ClientCommands.literal("detect")
+            *//*?} else {*/
             root.then(ClientCommandManager.literal("detect")
+            /*?}*/
                     .executes(ctx -> {
                         SchematicPrinter printer = getPrinter();
 
@@ -228,7 +318,11 @@ public final class PrinterCommand {
             );
 
             // /printer resume
+            /*? if >=26.1 {*//*
+            root.then(ClientCommands.literal("resume")
+            *//*?} else {*/
             root.then(ClientCommandManager.literal("resume")
+            /*?}*/
                     .executes(ctx -> {
                         if (!PrinterCheckpoint.exists()) {
                             ChatHelper.info("§cNo checkpoint found. Nothing to resume.");
@@ -266,7 +360,11 @@ public final class PrinterCommand {
             );
 
             // /printer materials
+            /*? if >=26.1 {*//*
+            root.then(ClientCommands.literal("materials")
+            *//*?} else {*/
             root.then(ClientCommandManager.literal("materials")
+            /*?}*/
                     .executes(ctx -> {
                         SchematicPrinter printer = getPrinter();
 
@@ -321,7 +419,11 @@ public final class PrinterCommand {
             );
 
             // /printer toggle
+            /*? if >=26.1 {*//*
+            root.then(ClientCommands.literal("toggle")
+            *//*?} else {*/
             root.then(ClientCommandManager.literal("toggle")
+            /*?}*/
                     .executes(ctx -> {
                         SchematicPrinter printer = getPrinter();
                         printer.toggle();
@@ -330,7 +432,11 @@ public final class PrinterCommand {
             );
 
             // /printer autobuild
+            /*? if >=26.1 {*//*
+            root.then(ClientCommands.literal("autobuild")
+            *//*?} else {*/
             root.then(ClientCommandManager.literal("autobuild")
+            /*?}*/
                     .executes(ctx -> {
                         SchematicPrinter printer = getPrinter();
                         boolean newValue = !printer.isAutoBuild();
@@ -341,7 +447,11 @@ public final class PrinterCommand {
             );
 
             // /printer air — toggle air placement (place blocks without adjacent support)
+            /*? if >=26.1 {*//*
+            root.then(ClientCommands.literal("air")
+            *//*?} else {*/
             root.then(ClientCommandManager.literal("air")
+            /*?}*/
                     .executes(ctx -> {
                         SchematicPrinter printer = getPrinter();
                         boolean newValue = !printer.isPrintInAir();
@@ -351,13 +461,21 @@ public final class PrinterCommand {
                     })
             );
             // /printer speed [1-20] -- set placement speed (blocks per second)
+            /*? if >=26.1 {*//*
+            root.then(ClientCommands.literal("speed")
+            *//*?} else {*/
             root.then(ClientCommandManager.literal("speed")
+            /*?}*/
                     .executes(ctx -> {
                         SchematicPrinter printer = getPrinter();
                         ChatHelper.info("Current speed: §e" + printer.getBps() + " §7blocks/sec (range: 1-20)");
                         return 1;
                     })
+                    /*? if >=26.1 {*//*
+                    .then(ClientCommands.argument("bps", IntegerArgumentType.integer(1, 20))
+                    *//*?} else {*/
                     .then(ClientCommandManager.argument("bps", IntegerArgumentType.integer(1, 20))
+                    /*?}*/
                             .executes(ctx -> {
                                 SchematicPrinter printer = getPrinter();
                                 int value = IntegerArgumentType.getInteger(ctx, "bps");
@@ -368,7 +486,11 @@ public final class PrinterCommand {
                     )
             );
             // /printer sort [mode] — set build order (bottom_up, top_down, nearest)
+            /*? if >=26.1 {*//*
+            root.then(ClientCommands.literal("sort")
+            *//*?} else {*/
             root.then(ClientCommandManager.literal("sort")
+            /*?}*/
                     .executes(ctx -> {
                         // No argument — cycle through modes
                         SchematicPrinter printer = getPrinter();
@@ -382,7 +504,11 @@ public final class PrinterCommand {
                         ChatHelper.info("Sort mode: §e" + next.name());
                         return 1;
                     })
+                    /*? if >=26.1 {*//*
+                    .then(ClientCommands.argument("mode", StringArgumentType.word())
+                    *//*?} else {*/
                     .then(ClientCommandManager.argument("mode", StringArgumentType.word())
+                    /*?}*/
                             .suggests((ctx, builder) -> {
                                 builder.suggest("bottom_up");
                                 builder.suggest("top_down");
@@ -406,14 +532,26 @@ public final class PrinterCommand {
                     )
             );
 
-            // ── /printer supply ─────────────────────────────────────────
+            // /printer supply
 
+            /*? if >=26.1 {*//*
+            var supply = ClientCommands.literal("supply");
+            *//*?} else {*/
             var supply = ClientCommandManager.literal("supply");
+            /*?}*/
 
             // /printer supply add
+            /*? if >=26.1 {*//*
+            supply.then(ClientCommands.literal("add")
+            *//*?} else {*/
             supply.then(ClientCommandManager.literal("add")
+            /*?}*/
                     .executes(ctx -> {
+                        /*? if >=26.1 {*//*
+                        Minecraft mc = Minecraft.getInstance();
+                        *//*?} else {*/
                         MinecraftClient mc = MinecraftClient.getInstance();
+                        /*?}*/
                         if (mc.player == null) return 0;
                         BlockPos pos = findTargetContainer(mc);
                         if (pos == null) {
@@ -428,9 +566,21 @@ public final class PrinterCommand {
                         }
                         return 1;
                     })
+                    /*? if >=26.1 {*//*
+                    .then(ClientCommands.argument("x", IntegerArgumentType.integer())
+                    *//*?} else {*/
                     .then(ClientCommandManager.argument("x", IntegerArgumentType.integer())
+                    /*?}*/
+                            /*? if >=26.1 {*//*
+                            .then(ClientCommands.argument("y", IntegerArgumentType.integer())
+                            *//*?} else {*/
                             .then(ClientCommandManager.argument("y", IntegerArgumentType.integer())
+                            /*?}*/
+                                    /*? if >=26.1 {*//*
+                                    .then(ClientCommands.argument("z", IntegerArgumentType.integer())
+                                    *//*?} else {*/
                                     .then(ClientCommandManager.argument("z", IntegerArgumentType.integer())
+                                    /*?}*/
                                             .executes(ctx -> {
                                                 int x = IntegerArgumentType.getInteger(ctx, "x");
                                                 int y = IntegerArgumentType.getInteger(ctx, "y");
@@ -450,9 +600,17 @@ public final class PrinterCommand {
             );
 
             // /printer supply remove
+            /*? if >=26.1 {*//*
+            supply.then(ClientCommands.literal("remove")
+            *//*?} else {*/
             supply.then(ClientCommandManager.literal("remove")
+            /*?}*/
                     .executes(ctx -> {
+                        /*? if >=26.1 {*//*
+                        Minecraft mc = Minecraft.getInstance();
+                        *//*?} else {*/
                         MinecraftClient mc = MinecraftClient.getInstance();
+                        /*?}*/
                         if (mc.player == null) return 0;
                         BlockPos pos = findTargetContainer(mc);
                         if (pos == null) {
@@ -470,7 +628,11 @@ public final class PrinterCommand {
             );
 
             // /printer supply list
+            /*? if >=26.1 {*//*
+            supply.then(ClientCommands.literal("list")
+            *//*?} else {*/
             supply.then(ClientCommandManager.literal("list")
+            /*?}*/
                     .executes(ctx -> {
                         List<BlockPos> chests = PrinterResourceManager.getSupplyChests();
                         if (chests.isEmpty()) {
@@ -487,7 +649,11 @@ public final class PrinterCommand {
             );
 
             // /printer supply clear
+            /*? if >=26.1 {*//*
+            supply.then(ClientCommands.literal("clear")
+            *//*?} else {*/
             supply.then(ClientCommandManager.literal("clear")
+            /*?}*/
                     .executes(ctx -> {
                         PrinterResourceManager.clearSupplyChests();
                         ChatHelper.info("§aAll supply chest designations cleared.");
@@ -496,7 +662,11 @@ public final class PrinterCommand {
             );
 
             // /printer supply scan
+            /*? if >=26.1 {*//*
+            supply.then(ClientCommands.literal("scan")
+            *//*?} else {*/
             supply.then(ClientCommandManager.literal("scan")
+            /*?}*/
                     .executes(ctx -> {
                         List<BlockPos> chests = PrinterResourceManager.getSupplyChests();
                         if (chests.isEmpty()) {
@@ -546,15 +716,159 @@ public final class PrinterCommand {
 
             root.then(supply);
 
+            // /printer dump sub-tree
+
+            /*? if >=26.1 {*//*
+            var dump = ClientCommands.literal("dump");
+            *//*?} else {*/
+            var dump = ClientCommandManager.literal("dump");
+            /*?}*/
+
+            // /printer dump  (help)
+            dump.executes(ctx -> {
+                ChatHelper.info("§7Dump chests store mined items during area clearing.");
+                ChatHelper.info("  §f/printer dump add §7[x y z] §8— mark a dump chest");
+                ChatHelper.info("  §f/printer dump remove §8— unmark nearest dump chest");
+                ChatHelper.info("  §f/printer dump list §8— show all dump chests");
+                ChatHelper.info("  §f/printer dump clear §8— clear all dump chests");
+                return 1;
+            });
+
+            // /printer dump add [x y z]
+            /*? if >=26.1 {*//*
+            dump.then(ClientCommands.literal("add")
+            *//*?} else {*/
+            dump.then(ClientCommandManager.literal("add")
+            /*?}*/
+                    .executes(ctx -> {
+                        /*? if >=26.1 {*//*
+                        Minecraft mc = Minecraft.getInstance();
+                        *//*?} else {*/
+                        MinecraftClient mc = MinecraftClient.getInstance();
+                        /*?}*/
+                        if (mc.player == null) return 0;
+                        BlockPos pos = findTargetContainer(mc);
+                        if (pos == null) {
+                            ChatHelper.info("§cNo chest, barrel, or shulker box found. Look at one or stand next to it.");
+                            return 0;
+                        }
+                        if (MoarMod.getChestManager().addDumpChest(pos)) {
+                            ChatHelper.info("§aMarked dump chest at §e"
+                                    + pos.getX() + " " + pos.getY() + " " + pos.getZ());
+                        } else {
+                            ChatHelper.info("§eThat position is already marked.");
+                        }
+                        return 1;
+                    })
+                    /*? if >=26.1 {*//*
+                    .then(ClientCommands.argument("x", IntegerArgumentType.integer())
+                    *//*?} else {*/
+                    .then(ClientCommandManager.argument("x", IntegerArgumentType.integer())
+                    /*?}*/
+                            /*? if >=26.1 {*//*
+                            .then(ClientCommands.argument("y", IntegerArgumentType.integer())
+                            *//*?} else {*/
+                            .then(ClientCommandManager.argument("y", IntegerArgumentType.integer())
+                            /*?}*/
+                                    /*? if >=26.1 {*//*
+                                    .then(ClientCommands.argument("z", IntegerArgumentType.integer())
+                                    *//*?} else {*/
+                                    .then(ClientCommandManager.argument("z", IntegerArgumentType.integer())
+                                    /*?}*/
+                                            .executes(ctx -> {
+                                                int x = IntegerArgumentType.getInteger(ctx, "x");
+                                                int y = IntegerArgumentType.getInteger(ctx, "y");
+                                                int z = IntegerArgumentType.getInteger(ctx, "z");
+                                                BlockPos pos = new BlockPos(x, y, z);
+                                                if (MoarMod.getChestManager().addDumpChest(pos)) {
+                                                    ChatHelper.info("§aMarked dump chest at §e" + x + " " + y + " " + z);
+                                                } else {
+                                                    ChatHelper.info("§eThat position is already marked.");
+                                                }
+                                                return 1;
+                                            })
+                                    )
+                            )
+                    )
+            );
+
+            // /printer dump remove
+            /*? if >=26.1 {*//*
+            dump.then(ClientCommands.literal("remove")
+            *//*?} else {*/
+            dump.then(ClientCommandManager.literal("remove")
+            /*?}*/
+                    .executes(ctx -> {
+                        /*? if >=26.1 {*//*
+                        Minecraft mc = Minecraft.getInstance();
+                        *//*?} else {*/
+                        MinecraftClient mc = MinecraftClient.getInstance();
+                        /*?}*/
+                        if (mc.player == null) return 0;
+                        BlockPos pos = findTargetContainer(mc);
+                        if (pos == null) {
+                            ChatHelper.info("§cNo dump chest found nearby to remove.");
+                            return 0;
+                        }
+                        if (MoarMod.getChestManager().removeDumpChest(pos)) {
+                            ChatHelper.info("§aRemoved dump chest at §e"
+                                    + pos.getX() + " " + pos.getY() + " " + pos.getZ());
+                        } else {
+                            ChatHelper.info("§cThat container is not marked as a dump chest.");
+                        }
+                        return 1;
+                    })
+            );
+
+            // /printer dump list
+            /*? if >=26.1 {*//*
+            dump.then(ClientCommands.literal("list")
+            *//*?} else {*/
+            dump.then(ClientCommandManager.literal("list")
+            /*?}*/
+                    .executes(ctx -> {
+                        List<BlockPos> chests = MoarMod.getChestManager().getDumpPositions();
+                        if (chests.isEmpty()) {
+                            ChatHelper.info("No dump chests designated.");
+                            ChatHelper.info("§7Use §f/printer dump add §7while standing at a chest.");
+                        } else {
+                            ChatHelper.info("§lDump chests (" + chests.size() + "):");
+                            for (BlockPos pos : chests) {
+                                ChatHelper.info(" §7- §e" + pos.getX() + " " + pos.getY() + " " + pos.getZ());
+                            }
+                        }
+                        return 1;
+                    })
+            );
+
+            // /printer dump clear
+            /*? if >=26.1 {*//*
+            dump.then(ClientCommands.literal("clear")
+            *//*?} else {*/
+            dump.then(ClientCommandManager.literal("clear")
+            /*?}*/
+                    .executes(ctx -> {
+                        MoarMod.getChestManager().clearDumpChests();
+                        ChatHelper.info("§aAll dump chest designations cleared.");
+                        return 1;
+                    })
+            );
+
+            root.then(dump);
+
             dispatcher.register(root);
         });
     }
 
-    // ── helpers ──────────────────────────────────────────────────────────
+    // helpers
 
     private static int loadSchematic(String filename) {
         SchematicPrinter printer = getPrinter();
+        /*? if >=26.1 {*//*
+        Minecraft mc = Minecraft.getInstance();
+        *//*?} else {*/
         MinecraftClient mc = MinecraftClient.getInstance();
+        /*?}*/
         if (mc.player == null) return 0;
 
         Path dir = SchematicPrinter.getSchematicsDir();
@@ -569,7 +883,11 @@ public final class PrinterCommand {
         try {
             // Temporarily load with player position; we'll override if
             // Litematica has a matching placement.
+            /*? if >=26.1 {*//*
+            BlockPos anchor = mc.player.blockPosition();
+            *//*?} else {*/
             BlockPos anchor = mc.player.getBlockPos();
+            /*?}*/
             printer.loadSchematic(file, anchor);
 
             // Try to match Litematica's active placement for this file
@@ -670,27 +988,67 @@ public final class PrinterCommand {
     }
 
     // Finds the container block the player is targeting (crosshair > feet > below).
+    /*? if >=26.1 {*//*
+    private static BlockPos findTargetContainer(Minecraft mc) {
+    *//*?} else {*/
     private static BlockPos findTargetContainer(MinecraftClient mc) {
+    /*?}*/
+        /*? if >=26.1 {*//*
+        if (mc.player == null || mc.level == null) return null;
+        *//*?} else {*/
         if (mc.player == null || mc.world == null) return null;
+        /*?}*/
 
         // 1. Crosshair target — the block the player is looking at
+        /*? if >=26.1 {*//*
+        if (mc.hitResult instanceof BlockHitResult bhr
+        *//*?} else {*/
         if (mc.crosshairTarget instanceof BlockHitResult bhr
+        /*?}*/
+                /*? if >=26.1 {*//*
+                && mc.hitResult.getType() == HitResult.Type.BLOCK) {
+                *//*?} else {*/
                 && mc.crosshairTarget.getType() == HitResult.Type.BLOCK) {
+                /*?}*/
+            /*? if >=26.1 {*//*
             BlockPos lookPos = bhr.getBlockPos();
+            *//*?} else {*/
+            BlockPos lookPos = bhr.getBlockPos();
+            /*?}*/
+            /*? if >=26.1 {*//*
+            if (isContainer(mc.level.getBlockState(lookPos).getBlock())) {
+            *//*?} else {*/
             if (isContainer(mc.world.getBlockState(lookPos).getBlock())) {
+            /*?}*/
                 return lookPos;
             }
         }
 
         // 2. Feet position
+        /*? if >=26.1 {*//*
+        BlockPos feet = mc.player.blockPosition();
+        *//*?} else {*/
         BlockPos feet = mc.player.getBlockPos();
+        /*?}*/
+        /*? if >=26.1 {*//*
+        if (isContainer(mc.level.getBlockState(feet).getBlock())) {
+        *//*?} else {*/
         if (isContainer(mc.world.getBlockState(feet).getBlock())) {
+        /*?}*/
             return feet;
         }
 
         // 3. Below feet (standing on top of a chest)
+        /*? if >=26.1 {*//*
+        BlockPos below = feet.below();
+        *//*?} else {*/
         BlockPos below = feet.down();
+        /*?}*/
+        /*? if >=26.1 {*//*
+        if (isContainer(mc.level.getBlockState(below).getBlock())) {
+        *//*?} else {*/
         if (isContainer(mc.world.getBlockState(below).getBlock())) {
+        /*?}*/
             return below;
         }
 

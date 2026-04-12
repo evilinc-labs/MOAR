@@ -4,16 +4,34 @@ import dev.moar.chest.ChestManager;
 import dev.moar.command.PrinterCommand;
 import dev.moar.command.SpawnProofCommand;
 import dev.moar.command.StashCommand;
+import dev.moar.stash.StashDatabase;
 import dev.moar.stash.StashManager;
 import dev.moar.printer.SchematicPrinter;
 import dev.moar.schematic.PrinterResourceManager;
 import dev.moar.spawnproof.SpawnProofer;
+import dev.moar.util.PathWalker;
+import dev.moar.util.PrinterDatabase;
 import net.fabricmc.api.ClientModInitializer;
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
+import net.fabricmc.fabric.api.client.networking.v1.ClientPlayConnectionEvents;
+/*? if >=26.1 {*//*
+import net.fabricmc.fabric.api.client.keymapping.v1.KeyMappingHelper;
+*//*?} else {*/
 import net.fabricmc.fabric.api.client.keybinding.v1.KeyBindingHelper;
+/*?}*/
+/*? if >=26.1 {*//*
+import net.minecraft.client.KeyMapping;
+*//*?} else {*/
 import net.minecraft.client.option.KeyBinding;
+/*?}*/
+/*? if >=26.1 {*//*
+import com.mojang.blaze3d.platform.InputConstants;
+*//*?} else {*/
 import net.minecraft.client.util.InputUtil;
-/*? if >=1.21.10 {*//*
+/*?}*/
+/*? if >=26.1 {*//*
+import net.minecraft.resources.Identifier;
+*//*?} else if >=1.21.10 {*//*
 import net.minecraft.util.Identifier;
 *//*?}*/
 import org.lwjgl.glfw.GLFW;
@@ -29,23 +47,38 @@ public class MoarMod implements ClientModInitializer {
     public static final String MOD_ID = "moar";
     public static final Logger LOGGER = LoggerFactory.getLogger("MOAR");
 
+    private static final StashDatabase DATABASE = new StashDatabase();
     private static final SchematicPrinter PRINTER = new SchematicPrinter();
     private static final SpawnProofer SPAWN_PROOFER = new SpawnProofer();
     private static final ChestManager CHEST_MANAGER = new ChestManager();
     private static final StashManager STASH_MANAGER = new StashManager();
 
+    /*? if >=26.1 {*//*
+    private static KeyMapping toggleKey;
+    *//*?} else {*/
     private static KeyBinding toggleKey;
+    /*?}*/
 
     @Override
     public void onInitializeClient() {
         LOGGER.info("MOAR initializing...");
 
         // Register keybinding to toggle the printer
+        /*? if >=26.1 {*//*
+        toggleKey = KeyMappingHelper.registerKeyMapping(new KeyMapping(
+        *//*?} else {*/
         toggleKey = KeyBindingHelper.registerKeyBinding(new KeyBinding(
+        /*?}*/
                 "key.moar.toggle",
+                /*? if >=26.1 {*//*
+                InputConstants.Type.KEYSYM,
+                *//*?} else {*/
                 InputUtil.Type.KEYSYM,
+                /*?}*/
                 GLFW.GLFW_KEY_KP_0,
-                /*? if >=1.21.10 {*//*
+                /*? if >=26.1 {*//*
+                KeyMapping.Category.register(Identifier.fromNamespaceAndPath("moar", "category"))
+                *//*?} else if >=1.21.10 {*//*
                 KeyBinding.Category.create(Identifier.of("moar", "category"))
                 *//*?} else {*/
                 "category.moar"
@@ -63,7 +96,11 @@ public class MoarMod implements ClientModInitializer {
         // Register tick handler
         ClientTickEvents.END_CLIENT_TICK.register(client -> {
             // Toggle keybind check
+            /*? if >=26.1 {*//*
+            while (toggleKey.consumeClick()) {
+            *//*?} else {*/
             while (toggleKey.wasPressed()) {
+            /*?}*/
                 PRINTER.toggle();
             }
 
@@ -78,6 +115,17 @@ public class MoarMod implements ClientModInitializer {
 
             // Tick the stash manager
             STASH_MANAGER.tick();
+        });
+
+        // Clean up all state when leaving a server/world
+        ClientPlayConnectionEvents.DISCONNECT.register((handler, client) -> {
+            PRINTER.onDisconnect();
+            STASH_MANAGER.stop();
+            STASH_MANAGER.getOrganizer().stop();
+            SPAWN_PROOFER.stop();
+            PathWalker.stop();
+            PrinterDatabase.clearScaffold();
+            DATABASE.close();
         });
 
         LOGGER.info("MOAR initialized.");
@@ -101,5 +149,10 @@ public class MoarMod implements ClientModInitializer {
     /** Get the singleton stash manager instance. */
     public static StashManager getStashManager() {
         return STASH_MANAGER;
+    }
+
+    /** Get the shared SQLite database. */
+    public static StashDatabase getDatabase() {
+        return DATABASE;
     }
 }

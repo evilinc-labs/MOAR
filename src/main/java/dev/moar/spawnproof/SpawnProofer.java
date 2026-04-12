@@ -1,20 +1,69 @@
 package dev.moar.spawnproof;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import dev.moar.MoarMod;
+import dev.moar.stash.StashDatabase;
 import dev.moar.util.ChatHelper;
 import dev.moar.util.PathWalker;
 import dev.moar.util.PlacementEngine;
+/*? if >=26.1 {*//*
+import net.minecraft.world.level.block.*;
+import net.minecraft.world.level.block.state.*;
+import net.minecraft.world.level.block.piston.*;
+*//*?} else {*/
 import net.minecraft.block.*;
+/*?}*/
+/*? if >=26.1 {*//*
+import net.minecraft.client.Minecraft;
+*//*?} else {*/
 import net.minecraft.client.MinecraftClient;
+/*?}*/
+/*? if >=26.1 {*//*
+import net.minecraft.client.player.LocalPlayer;
+*//*?} else {*/
 import net.minecraft.client.network.ClientPlayerEntity;
+/*?}*/
+/*? if >=26.1 {*//*
+import net.minecraft.world.item.Item;
+*//*?} else {*/
 import net.minecraft.item.Item;
+/*?}*/
+/*? if >=26.1 {*//*
+import net.minecraft.world.item.Items;
+*//*?} else {*/
 import net.minecraft.item.Items;
+/*?}*/
+/*? if >=26.1 {*//*
+import net.minecraft.core.registries.BuiltInRegistries;
+*//*?} else {*/
 import net.minecraft.registry.Registries;
+/*?}*/
+/*? if >=26.1 {*//*
+import net.minecraft.resources.Identifier;
+*//*?} else {*/
 import net.minecraft.util.Identifier;
+/*?}*/
+/*? if >=26.1 {*//*
+import net.minecraft.core.BlockPos;
+*//*?} else {*/
 import net.minecraft.util.math.BlockPos;
+/*?}*/
+/*? if >=26.1 {*//*
+import net.minecraft.core.Direction;
+*//*?} else {*/
 import net.minecraft.util.math.Direction;
+/*?}*/
+/*? if >=26.1 {*//*
+import net.minecraft.world.level.LightLayer;
+*//*?} else {*/
 import net.minecraft.world.LightType;
+/*?}*/
+/*? if >=26.1 {*//*
+import net.minecraft.world.level.Level;
+*//*?} else {*/
 import net.minecraft.world.World;
+/*?}*/
 
 import java.util.*;
 
@@ -24,33 +73,25 @@ import java.util.*;
 //
 // Lifecycle: configure corners + light source, call tick() every client tick.
 public class SpawnProofer {
+    private static final Logger LOGGER = LoggerFactory.getLogger(SpawnProofer.class);
 
-    // ── State machine ───────────────────────────────────────────────────
+    // State machine
 
     public enum State {
-        /** Idle — not running. */
         IDLE,
-        /** Scanning the area for dark spawnable positions. */
         SCANNING,
-        /** Walking to next placement target. */
         WALKING,
-        /** Placing a light source block. */
         PLACING,
-        /** Walking to supply chest for more light sources. */
         RESUPPLYING,
-        /** Taking items from the supply chest screen. */
         RESTOCKING,
-        /** Returning to the build area after restocking. */
         RETURNING,
-        /** Paused — user can resume. */
         PAUSED,
-        /** Done — area fully lit. */
         DONE
     }
 
     private State state = State.IDLE;
 
-    // ── Configuration ───────────────────────────────────────────────────
+    // Configuration
 
     /** Corners of the area to spawnproof (inclusive). */
     private BlockPos corner1;
@@ -65,18 +106,10 @@ public class SpawnProofer {
     /** Luminance emitted by the chosen light source. */
     private int lightSourceLuminance = 14;
 
-    /**
-     * When true and the light source is a full block, replace the dark
-     * surface block itself ("embed in ground") rather than placing on top.
-     * Useful for glowstone, sea lanterns, froglights, etc. — the light
-     * source becomes part of the floor.
-     */
+    /** Replace the ground block with the light source instead of placing on top. */
     private boolean embedInGround = false;
 
-    /**
-     * Light sources and their luminance values.
-     * Used for greedy coverage calculation.
-     */
+    /** Light sources → luminance. */
     private static final Map<Block, Integer> KNOWN_LIGHT_SOURCES = new LinkedHashMap<>();
     static {
         KNOWN_LIGHT_SOURCES.put(Blocks.TORCH,                14);
@@ -93,7 +126,7 @@ public class SpawnProofer {
         KNOWN_LIGHT_SOURCES.put(Blocks.PEARLESCENT_FROGLIGHT,15);
     }
 
-    // ── Runtime state ───────────────────────────────────────────────────
+    // Runtime state
 
     /** Positions that are dark and spawnable — the remaining work queue. */
     private final List<BlockPos> darkSpots = new ArrayList<>();
@@ -129,7 +162,12 @@ public class SpawnProofer {
     /** Maximum reach distance for placement (vanilla: 4.5). */
     private static final double PLACE_REACH = 4.5;
 
-    // ── Public API ──────────────────────────────────────────────────────
+    /** Number of consecutive ticks where placeBlock() returned false
+     *  for the current queue head.  After a threshold, skip the position. */
+    private int placeRetryTicks;
+    private static final int MAX_PLACE_RETRIES = 40;
+
+    // Public API
 
     /** Get current state. */
     public State getState() { return state; }
@@ -140,10 +178,16 @@ public class SpawnProofer {
     }
 
     /** Set corner 1 of the area. */
-    public void setCorner1(BlockPos pos) { this.corner1 = pos; }
+    public void setCorner1(BlockPos pos) {
+        this.corner1 = pos;
+        saveConfig();
+    }
 
     /** Set corner 2 of the area. */
-    public void setCorner2(BlockPos pos) { this.corner2 = pos; }
+    public void setCorner2(BlockPos pos) {
+        this.corner2 = pos;
+        saveConfig();
+    }
 
     /** Get corner 1. */
     public BlockPos getCorner1() { return corner1; }
@@ -159,11 +203,19 @@ public class SpawnProofer {
         Identifier id = Identifier.tryParse(blockId);
         if (id == null) return false;
 
+        /*? if >=26.1 {*//*
+        Block block = BuiltInRegistries.BLOCK.getValue(id);
+        *//*?} else {*/
         Block block = Registries.BLOCK.get(id);
+        /*?}*/
         if (block == null || block == Blocks.AIR) return false;
 
         // Check luminance — must emit at least 1 light
+        /*? if >=26.1 {*//*
+        int lum = block.defaultBlockState().getLightEmission();
+        *//*?} else {*/
         int lum = block.getDefaultState().getLuminance();
+        /*?}*/
         if (lum <= 0) return false;
 
         this.lightSource = block;
@@ -175,6 +227,7 @@ public class SpawnProofer {
             ChatHelper.info("§eEmbed mode auto-disabled — " + getLightSourceName()
                     + " cannot be embedded.");
         }
+        saveConfig();
         return true;
     }
 
@@ -184,18 +237,27 @@ public class SpawnProofer {
     public void setLightSource(Block block) {
         this.lightSource = block;
         this.lightSourceItem = block.asItem();
+        /*? if >=26.1 {*//*
+        this.lightSourceLuminance = block.defaultBlockState().getLightEmission();
+        *//*?} else {*/
         this.lightSourceLuminance = block.getDefaultState().getLuminance();
+        /*?}*/
         // Auto-disable embed mode if new source can't be embedded
         if (embedInGround && !isFullBlockLightSource()) {
             embedInGround = false;
             ChatHelper.info("§eEmbed mode auto-disabled — " + getLightSourceName()
                     + " cannot be embedded.");
         }
+        saveConfig();
     }
 
     /** Get the name of the current light source. */
     public String getLightSourceName() {
+        /*? if >=26.1 {*//*
+        return BuiltInRegistries.BLOCK.getKey(lightSource).getPath();
+        *//*?} else {*/
         return Registries.BLOCK.getId(lightSource).getPath();
+        /*?}*/
     }
 
     /** Get count of dark spots remaining. */
@@ -205,7 +267,10 @@ public class SpawnProofer {
     public int getTotalPlaced() { return totalPlaced; }
 
     /** Toggle embed-in-ground mode. */
-    public void setEmbedInGround(boolean embed) { this.embedInGround = embed; }
+    public void setEmbedInGround(boolean embed) {
+        this.embedInGround = embed;
+        saveConfig();
+    }
 
     /** Whether embed-in-ground mode is active. */
     public boolean isEmbedInGround() { return embedInGround; }
@@ -222,12 +287,17 @@ public class SpawnProofer {
 
     /** Add a supply chest position. */
     public void addSupplyChest(BlockPos pos) {
-        if (!supplyChests.contains(pos)) supplyChests.add(pos);
+        if (!supplyChests.contains(pos)) {
+            supplyChests.add(pos);
+            saveSupplyChests();
+        }
     }
 
     /** Remove a supply chest position. */
     public void removeSupplyChest(BlockPos pos) {
-        supplyChests.remove(pos);
+        if (supplyChests.remove(pos)) {
+            saveSupplyChests();
+        }
     }
 
     /** Get supply chest positions. */
@@ -235,7 +305,82 @@ public class SpawnProofer {
         return Collections.unmodifiableList(supplyChests);
     }
 
-    // ── Lifecycle ───────────────────────────────────────────────────────
+    // Persistence
+
+    /** Save spawnproofer config to the database. */
+    private void saveConfig() {
+        StashDatabase db = MoarMod.getDatabase();
+        if (!db.isOpen()) return;
+        if (corner1 != null) {
+            db.setConfig("spawnproofer.corner1",
+                    corner1.getX() + "," + corner1.getY() + "," + corner1.getZ());
+        }
+        if (corner2 != null) {
+            db.setConfig("spawnproofer.corner2",
+                    corner2.getX() + "," + corner2.getY() + "," + corner2.getZ());
+        }
+        /*? if >=26.1 {*//*
+        db.setConfig("spawnproofer.lightSource",
+                BuiltInRegistries.BLOCK.getKey(lightSource).toString());
+        *//*?} else {*/
+        db.setConfig("spawnproofer.lightSource",
+                Registries.BLOCK.getId(lightSource).toString());
+        /*?}*/
+        db.setConfig("spawnproofer.embedInGround", String.valueOf(embedInGround));
+    }
+
+    /** Save spawnproofer supply chests to the database. */
+    private void saveSupplyChests() {
+        StashDatabase db = MoarMod.getDatabase();
+        if (db.isOpen()) db.saveSpawnprooferSupply(supplyChests);
+    }
+
+    /** Load spawnproofer config and supply chests from the database. */
+    public void loadConfig() {
+        StashDatabase db = MoarMod.getDatabase();
+        if (!db.isOpen()) return;
+
+        String c1 = db.getConfig("spawnproofer.corner1");
+        if (c1 != null) {
+            String[] parts = c1.split(",");
+            if (parts.length == 3) {
+                corner1 = new BlockPos(
+                        Integer.parseInt(parts[0]),
+                        Integer.parseInt(parts[1]),
+                        Integer.parseInt(parts[2]));
+            }
+        }
+
+        String c2 = db.getConfig("spawnproofer.corner2");
+        if (c2 != null) {
+            String[] parts = c2.split(",");
+            if (parts.length == 3) {
+                corner2 = new BlockPos(
+                        Integer.parseInt(parts[0]),
+                        Integer.parseInt(parts[1]),
+                        Integer.parseInt(parts[2]));
+            }
+        }
+
+        String ls = db.getConfig("spawnproofer.lightSource");
+        if (ls != null) {
+            // Use the string-based setter (validates & sets item + luminance)
+            setLightSource(ls);
+        }
+
+        String embed = db.getConfig("spawnproofer.embedInGround");
+        if (embed != null) {
+            this.embedInGround = Boolean.parseBoolean(embed);
+        }
+
+        List<BlockPos> saved = db.loadSpawnprooferSupply();
+        if (!saved.isEmpty()) {
+            supplyChests.clear();
+            supplyChests.addAll(saved);
+        }
+    }
+
+    // Lifecycle
 
     /**
      * Start spawnproofing the configured area.
@@ -290,7 +435,7 @@ public class SpawnProofer {
         }
     }
 
-    // ── Tick ────────────────────────────────────────────────────────────
+    // Tick
 
     /**
      * Drive the state machine. Call every client tick.
@@ -298,8 +443,16 @@ public class SpawnProofer {
     public void tick() {
         if (state == State.IDLE || state == State.DONE || state == State.PAUSED) return;
 
+        /*? if >=26.1 {*//*
+        Minecraft mc = Minecraft.getInstance();
+        *//*?} else {*/
         MinecraftClient mc = MinecraftClient.getInstance();
+        /*?}*/
+        /*? if >=26.1 {*//*
+        if (mc == null || mc.player == null || mc.level == null) return;
+        *//*?} else {*/
         if (mc == null || mc.player == null || mc.world == null) return;
+        /*?}*/
 
         tickCounter++;
 
@@ -314,14 +467,22 @@ public class SpawnProofer {
         }
     }
 
-    // ── State handlers ──────────────────────────────────────────────────
+    // State handlers
 
     /**
      * Scan the area for dark spawnable positions.
      * Done in a single tick since it's just light level queries.
      */
+    /*? if >=26.1 {*//*
+    private void tickScanning(Minecraft mc) {
+    *//*?} else {*/
     private void tickScanning(MinecraftClient mc) {
+    /*?}*/
+        /*? if >=26.1 {*//*
+        Level world = mc.level;
+        *//*?} else {*/
         World world = mc.world;
+        /*?}*/
         int minY = Math.min(corner1.getY(), corner2.getY());
         int maxY = Math.max(corner1.getY(), corner2.getY());
 
@@ -400,7 +561,11 @@ public class SpawnProofer {
     /**
      * Walk toward the next placement position.
      */
+    /*? if >=26.1 {*//*
+    private void tickWalking(Minecraft mc) {
+    *//*?} else {*/
     private void tickWalking(MinecraftClient mc) {
+    /*?}*/
         if (placementQueue.isEmpty()) {
             // Rescan to check if we missed anything
             state = State.SCANNING;
@@ -408,9 +573,17 @@ public class SpawnProofer {
         }
 
         BlockPos target = placementQueue.peek();
+        /*? if >=26.1 {*//*
+        LocalPlayer player = mc.player;
+        *//*?} else {*/
         ClientPlayerEntity player = mc.player;
+        /*?}*/
 
+        /*? if >=26.1 {*//*
+        double distSq = player.distanceToSqr(
+        *//*?} else {*/
         double distSq = player.squaredDistanceTo(
+        /*?}*/
                 target.getX() + 0.5, target.getY() + 0.5, target.getZ() + 0.5);
 
         if (distSq <= PLACE_REACH * PLACE_REACH) {
@@ -437,6 +610,7 @@ public class SpawnProofer {
             PathWalker.stop();
             // Skip this position and try the next one
             ChatHelper.info("§eSkipping unreachable position " + formatPos(target));
+            placeRetryTicks = 0;
             placementQueue.poll();
             if (placementQueue.isEmpty()) {
                 state = State.SCANNING;
@@ -453,7 +627,11 @@ public class SpawnProofer {
      * (where the light source block goes), NOT dark-surface positions.
      * The greedy solver already validated each via canPlaceLightAt.
      */
+    /*? if >=26.1 {*//*
+    private void tickPlacing(Minecraft mc) {
+    *//*?} else {*/
     private void tickPlacing(MinecraftClient mc) {
+    /*?}*/
         if (PlacementEngine.isBusy()) {
             PlacementEngine.tick();
             return;
@@ -465,11 +643,20 @@ public class SpawnProofer {
         }
 
         BlockPos target = placementQueue.peek();
+        /*? if >=26.1 {*//*
+        Level world = mc.level;
+        *//*?} else {*/
         World world = mc.world;
+        /*?}*/
 
         // Check if this spot already has light (resolved by a nearby placement).
         // target IS the placement position — check light level right there.
+        /*? if >=26.1 {*//*
+        if (world.getBrightness(LightLayer.BLOCK, target) > 0) {
+        *//*?} else {*/
         if (world.getLightLevel(LightType.BLOCK, target) > 0) {
+        /*?}*/
+            placeRetryTicks = 0;
             placementQueue.poll();
             if (placementQueue.isEmpty()) {
                 state = State.SCANNING;
@@ -487,7 +674,11 @@ public class SpawnProofer {
                 return;
             }
             // Save current position and go restock
+            /*? if >=26.1 {*//*
+            returnPos = mc.player.blockPosition();
+            *//*?} else {*/
             returnPos = mc.player.getBlockPos();
+            /*?}*/
             state = State.RESUPPLYING;
             return;
         }
@@ -504,6 +695,7 @@ public class SpawnProofer {
             BlockState surfaceState = world.getBlockState(placePos);
             if (surfaceState.getBlock() == lightSource) {
                 // Already has our light source — skip
+                placeRetryTicks = 0;
                 placementQueue.poll();
                 if (placementQueue.isEmpty()) {
                     state = State.SCANNING;
@@ -517,15 +709,27 @@ public class SpawnProofer {
             // PlacementEngine's correction pipeline will mine it. We do NOT
             // poll the queue — after breaking finishes the position becomes
             // air and the next tick will place the light source normally.
+            /*? if >=26.1 {*//*
+            if (!surfaceState.isAir() && !surfaceState.canBeReplaced()) {
+            *//*?} else {*/
             if (!surfaceState.isAir() && !surfaceState.isReplaceable()) {
+            /*?}*/
+                /*? if >=26.1 {*//*
+                double distSq = mc.player.distanceToSqr(
+                *//*?} else {*/
                 double distSq = mc.player.squaredDistanceTo(
+                /*?}*/
                         placePos.getX() + 0.5, placePos.getY() + 0.5, placePos.getZ() + 0.5);
                 if (distSq > PLACE_REACH * PLACE_REACH) {
                     state = State.WALKING;
                     return;
                 }
                 if (!PlacementEngine.canPlace()) return;
+                /*? if >=26.1 {*//*
+                BlockState desired = lightSource.defaultBlockState();
+                *//*?} else {*/
                 BlockState desired = lightSource.getDefaultState();
+                /*?}*/
                 // Start breaking — placeBlock will enter correction pipeline
                 PlacementEngine.placeBlock(placePos, desired, true);
                 // Stay in PLACING state; isBusy() gate at top will tick the breaker
@@ -536,8 +740,13 @@ public class SpawnProofer {
             // Normal mode: target is the air/replaceable block above the surface.
             if (!canPlaceLightAt(world, placePos)) {
                 // Position invalidated — try to find a nearby alternative.
+                /*? if >=26.1 {*//*
+                placePos = findPlacementPosition(world, target.below());
+                *//*?} else {*/
                 placePos = findPlacementPosition(world, target.down());
+                /*?}*/
                 if (placePos == null) {
+                    placeRetryTicks = 0;
                     placementQueue.poll();
                     if (placementQueue.isEmpty()) {
                         state = State.SCANNING;
@@ -550,7 +759,11 @@ public class SpawnProofer {
         }
 
         // Check reach
+        /*? if >=26.1 {*//*
+        double distSq = mc.player.distanceToSqr(
+        *//*?} else {*/
         double distSq = mc.player.squaredDistanceTo(
+        /*?}*/
                 placePos.getX() + 0.5, placePos.getY() + 0.5, placePos.getZ() + 0.5);
         if (distSq > PLACE_REACH * PLACE_REACH) {
             state = State.WALKING;
@@ -560,7 +773,11 @@ public class SpawnProofer {
         if (!PlacementEngine.canPlace()) return;
 
         // Place the light source
+        /*? if >=26.1 {*//*
+        BlockState desired = lightSource.defaultBlockState();
+        *//*?} else {*/
         BlockState desired = lightSource.getDefaultState();
+        /*?}*/
 
         // For torches, determine wall vs floor placement
         if (!embedding && lightSource instanceof TorchBlock && !(lightSource instanceof WallTorchBlock)) {
@@ -571,6 +788,7 @@ public class SpawnProofer {
             placedPositions.add(placePos);
             placementQueue.poll();
             totalPlaced++;
+            placeRetryTicks = 0;
             PlacementEngine.recordPlacement();
 
             if (placementQueue.isEmpty()) {
@@ -579,20 +797,41 @@ public class SpawnProofer {
             } else {
                 state = State.WALKING;
             }
+        } else {
+            placeRetryTicks++;
+            if (placeRetryTicks >= MAX_PLACE_RETRIES) {
+                LOGGER.debug("SpawnProofer: placement failed {} times at {}, skipping",
+                        placeRetryTicks, placePos);
+                placementQueue.poll();
+                placeRetryTicks = 0;
+                if (placementQueue.isEmpty()) {
+                    state = State.SCANNING;
+                } else {
+                    state = State.WALKING;
+                }
+            }
         }
     }
 
     /**
      * Walk to nearest supply chest for more light sources.
      */
+    /*? if >=26.1 {*//*
+    private void tickResupplying(Minecraft mc) {
+    *//*?} else {*/
     private void tickResupplying(MinecraftClient mc) {
+    /*?}*/
         if (supplyChests.isEmpty()) {
             pause();
             return;
         }
 
         // Find nearest supply chest
+        /*? if >=26.1 {*//*
+        BlockPos nearest = findNearestChest(mc.player.blockPosition());
+        *//*?} else {*/
         BlockPos nearest = findNearestChest(mc.player.getBlockPos());
+        /*?}*/
         if (nearest == null) {
             ChatHelper.info("§cNo reachable supply chests.");
             pause();
@@ -628,7 +867,11 @@ public class SpawnProofer {
      * Wait for the player to open the chest and take items.
      * Auto-takes light source items from the chest.
      */
+    /*? if >=26.1 {*//*
+    private void tickRestocking(Minecraft mc) {
+    *//*?} else {*/
     private void tickRestocking(MinecraftClient mc) {
+    /*?}*/
         // For now, we just wait a bit and check if the player grabbed items
         // A full auto-restock implementation would interact with the chest screen
         if (tickCounter % 20 == 0) {
@@ -651,7 +894,11 @@ public class SpawnProofer {
     /**
      * Return to the build area after restocking.
      */
+    /*? if >=26.1 {*//*
+    private void tickReturning(Minecraft mc) {
+    *//*?} else {*/
     private void tickReturning(MinecraftClient mc) {
+    /*?}*/
         if (returnPos == null) {
             state = State.WALKING;
             return;
@@ -675,7 +922,7 @@ public class SpawnProofer {
         PathWalker.tick();
     }
 
-    // ── Light level analysis ────────────────────────────────────────────
+    // Light level analysis
 
     /**
      * Check if a position is a dark, spawnable surface.
@@ -686,20 +933,48 @@ public class SpawnProofer {
      * 3. The block two above pos is air or passable (headroom)
      * 4. Block light level at pos+1 (where the mob stands) is 0
      */
+    /*? if >=26.1 {*//*
+    private boolean isDarkSpawnable(Level world, BlockPos pos) {
+    *//*?} else {*/
     private boolean isDarkSpawnable(World world, BlockPos pos) {
+    /*?}*/
         BlockState surface = world.getBlockState(pos);
+        /*? if >=26.1 {*//*
+        BlockState above = world.getBlockState(pos.above());
+        *//*?} else {*/
         BlockState above = world.getBlockState(pos.up());
+        /*?}*/
+        /*? if >=26.1 {*//*
+        BlockState above2 = world.getBlockState(pos.above(2));
+        *//*?} else {*/
         BlockState above2 = world.getBlockState(pos.up(2));
+        /*?}*/
 
         // Surface must be solid and opaque on top
+        /*? if >=26.1 {*//*
+        if (!surface.isSolidRender()) return false;
+        *//*?} else {*/
         if (!surface.isSolidBlock(world, pos)) return false;
+        /*?}*/
 
         // Space above must be empty
+        /*? if >=26.1 {*//*
+        if (!above.isAir() && above.getCollisionShape(world, pos.above()).isEmpty() == false) return false;
+        *//*?} else {*/
         if (!above.isAir() && above.getCollisionShape(world, pos.up()).isEmpty() == false) return false;
+        /*?}*/
+        /*? if >=26.1 {*//*
+        if (!above2.isAir() && above2.getCollisionShape(world, pos.above(2)).isEmpty() == false) return false;
+        *//*?} else {*/
         if (!above2.isAir() && above2.getCollisionShape(world, pos.up(2)).isEmpty() == false) return false;
+        /*?}*/
 
         // Check block light level at mob-standing position (one above surface)
+        /*? if >=26.1 {*//*
+        int blockLight = world.getBrightness(LightLayer.BLOCK, pos.above());
+        *//*?} else {*/
         int blockLight = world.getLightLevel(LightType.BLOCK, pos.up());
+        /*?}*/
 
         // In the Overworld since 1.18, monsters spawn only at block light 0
         return blockLight == 0;
@@ -710,24 +985,48 @@ public class SpawnProofer {
      * The position must be air or replaceable vegetation (short grass, ferns, etc.)
      * and have proper support for the light source type.
      */
+    /*? if >=26.1 {*//*
+    private boolean canPlaceLightAt(Level world, BlockPos pos) {
+    *//*?} else {*/
     private boolean canPlaceLightAt(World world, BlockPos pos) {
+    /*?}*/
         BlockState current = world.getBlockState(pos);
         // Accept air or replaceable blocks (short grass, tall grass, ferns, flowers, etc.)
         // Minecraft allows placing blocks where replaceable vegetation exists.
+        /*? if >=26.1 {*//*
+        if (!current.isAir() && !current.canBeReplaced()) return false;
+        *//*?} else {*/
         if (!current.isAir() && !current.isReplaceable()) return false;
+        /*?}*/
 
         // For torches: need solid surface below or to the side
         if (lightSource instanceof TorchBlock) {
             // Floor torch needs solid below
+            /*? if >=26.1 {*//*
+            BlockState below = world.getBlockState(pos.below());
+            *//*?} else {*/
             BlockState below = world.getBlockState(pos.down());
+            /*?}*/
+            /*? if >=26.1 {*//*
+            if (below.isFaceSturdy(world, pos.below(), Direction.UP)) {
+            *//*?} else {*/
             if (below.isSideSolidFullSquare(world, pos.down(), Direction.UP)) {
+            /*?}*/
                 return true;
             }
             // Wall torch needs solid wall adjacent
             for (Direction dir : new Direction[]{Direction.NORTH, Direction.SOUTH,
                     Direction.EAST, Direction.WEST}) {
+                /*? if >=26.1 {*//*
+                BlockState neighbor = world.getBlockState(pos.relative(dir));
+                *//*?} else {*/
                 BlockState neighbor = world.getBlockState(pos.offset(dir));
+                /*?}*/
+                /*? if >=26.1 {*//*
+                if (neighbor.isFaceSturdy(world, pos.relative(dir), dir.getOpposite())) {
+                *//*?} else {*/
                 if (neighbor.isSideSolidFullSquare(world, pos.offset(dir), dir.getOpposite())) {
+                /*?}*/
                     return true;
                 }
             }
@@ -736,10 +1035,26 @@ public class SpawnProofer {
 
         // For lanterns: can hang from ceiling or sit on floor
         if (lightSource instanceof LanternBlock) {
+            /*? if >=26.1 {*//*
+            BlockState below = world.getBlockState(pos.below());
+            *//*?} else {*/
             BlockState below = world.getBlockState(pos.down());
+            /*?}*/
+            /*? if >=26.1 {*//*
+            BlockState above = world.getBlockState(pos.above());
+            *//*?} else {*/
             BlockState above = world.getBlockState(pos.up());
+            /*?}*/
+            /*? if >=26.1 {*//*
+            return below.isFaceSturdy(world, pos.below(), Direction.UP)
+            *//*?} else {*/
             return below.isSideSolidFullSquare(world, pos.down(), Direction.UP)
+            /*?}*/
+                    /*? if >=26.1 {*//*
+                    || above.isFaceSturdy(world, pos.above(), Direction.DOWN);
+                    *//*?} else {*/
                     || above.isSideSolidFullSquare(world, pos.up(), Direction.DOWN);
+                    /*?}*/
         }
 
         // For full blocks (glowstone, sea lantern, shroomlight, etc.):
@@ -751,19 +1066,39 @@ public class SpawnProofer {
      * Find the best position to place a light source to cover a dark spot.
      * Prefers placing ON TOP of the spawnable surface (pos.up()).
      */
+    /*? if >=26.1 {*//*
+    private BlockPos findPlacementPosition(Level world, BlockPos darkSurface) {
+    *//*?} else {*/
     private BlockPos findPlacementPosition(World world, BlockPos darkSurface) {
+    /*?}*/
         // Best case: place directly on top of the dark surface
+        /*? if >=26.1 {*//*
+        BlockPos onTop = darkSurface.above();
+        *//*?} else {*/
         BlockPos onTop = darkSurface.up();
+        /*?}*/
         if (canPlaceLightAt(world, onTop)) return onTop;
 
         // Try adjacent positions on the same Y level
+        /*? if >=26.1 {*//*
+        for (Direction dir : Direction.Plane.HORIZONTAL) {
+        *//*?} else {*/
         for (Direction dir : Direction.Type.HORIZONTAL) {
+        /*?}*/
+            /*? if >=26.1 {*//*
+            BlockPos adj = onTop.relative(dir);
+            *//*?} else {*/
             BlockPos adj = onTop.offset(dir);
+            /*?}*/
             if (canPlaceLightAt(world, adj)) return adj;
         }
 
         // Try one block up (wall mount, etc.)
+        /*? if >=26.1 {*//*
+        BlockPos higher = onTop.above();
+        *//*?} else {*/
         BlockPos higher = onTop.up();
+        /*?}*/
         if (canPlaceLightAt(world, higher)) return higher;
 
         return null;
@@ -772,11 +1107,27 @@ public class SpawnProofer {
     /**
      * Determine the correct torch blockstate (floor vs wall).
      */
+    /*? if >=26.1 {*//*
+    private BlockState determineTorchState(Level world, BlockPos pos) {
+    *//*?} else {*/
     private BlockState determineTorchState(World world, BlockPos pos) {
+    /*?}*/
         // Prefer floor placement
+        /*? if >=26.1 {*//*
+        BlockState below = world.getBlockState(pos.below());
+        *//*?} else {*/
         BlockState below = world.getBlockState(pos.down());
+        /*?}*/
+        /*? if >=26.1 {*//*
+        if (below.isFaceSturdy(world, pos.below(), Direction.UP)) {
+        *//*?} else {*/
         if (below.isSideSolidFullSquare(world, pos.down(), Direction.UP)) {
+        /*?}*/
+            /*? if >=26.1 {*//*
+            return Blocks.TORCH.defaultBlockState();
+            *//*?} else {*/
             return Blocks.TORCH.getDefaultState();
+            /*?}*/
         }
 
         // Try wall placement
@@ -784,134 +1135,139 @@ public class SpawnProofer {
                 ? Blocks.SOUL_WALL_TORCH : Blocks.WALL_TORCH;
         for (Direction dir : new Direction[]{Direction.NORTH, Direction.SOUTH,
                 Direction.EAST, Direction.WEST}) {
+            /*? if >=26.1 {*//*
+            BlockState neighbor = world.getBlockState(pos.relative(dir));
+            *//*?} else {*/
             BlockState neighbor = world.getBlockState(pos.offset(dir));
+            /*?}*/
+            /*? if >=26.1 {*//*
+            if (neighbor.isFaceSturdy(world, pos.relative(dir), dir.getOpposite())) {
+            *//*?} else {*/
             if (neighbor.isSideSolidFullSquare(world, pos.offset(dir), dir.getOpposite())) {
+            /*?}*/
+                /*? if >=26.1 {*//*
+                return wallTorch.defaultBlockState().setValue(WallTorchBlock.FACING, dir.getOpposite());
+                *//*?} else {*/
                 return wallTorch.getDefaultState().with(WallTorchBlock.FACING, dir.getOpposite());
+                /*?}*/
             }
         }
 
+        /*? if >=26.1 {*//*
+        return lightSource.defaultBlockState();
+        *//*?} else {*/
         return lightSource.getDefaultState();
+        /*?}*/
     }
 
-    // ── Greedy solver ───────────────────────────────────────────────────
+    // Greedy solver
 
     /**
-     * Greedy set-cover solver: find the minimum set of light source
-     * positions that illuminate all dark spots.
+     * Linear sweep solver: iterate dark spots, place a light source for
+     * each uncovered spot, and predict coverage to skip nearby spots.
      *
-     * Algorithm:
-     * 1. For each candidate position, compute how many dark spots it would cover
-     * 2. Pick the candidate that covers the most dark spots
-     * 3. Remove covered spots from the set, repeat
-     *
-     * A light source at position P with luminance L covers a dark spot D
-     * if the taxicab distance |Px-Dx| + |Py-Dy| + |Pz-Dz| is less than L.
-     * This is a simplification — actual light propagation is affected by
-     * occlusion. We use a conservative radius of L-1 to account for one
-     * layer of occlusion.
+     * Much faster than greedy set-cover (O(n × p) vs O(n² × p) where
+     * n = dark spots, p = placements).  Produces slightly more placements
+     * than optimal, but a verification rescan catches any residual dark
+     * spots and adds a small follow-up pass.
      */
+    /*? if >=26.1 {*//*
+    private void solvePlacements(Level world) {
+    *//*?} else {*/
     private void solvePlacements(World world) {
+    /*?}*/
         placementQueue.clear();
 
         boolean embedding = useEmbedMode();
 
-        Set<BlockPos> remaining = new HashSet<>(darkSpots);
-        Set<BlockPos> candidates = new LinkedHashSet<>();
+        if (darkSpots.isEmpty()) return;
 
-        if (embedding) {
-            // Embed mode: candidates are the dark surface blocks themselves.
-            // The light source replaces the ground block.
-            for (BlockPos dark : darkSpots) {
-                if (!placedPositions.contains(dark)) {
-                    candidates.add(dark);
-                }
+        // Coverage radius: a light source with luminance L keeps block light > 0
+        // up to taxicab distance L-1.  Subtract 2 extra as a conservative margin
+        // that accounts for 1-2 blocks of terrain occlusion.
+        int radius = Math.max(1, lightSourceLuminance - 2);
+
+        // Track which dark spots are predicted to be illuminated by queued
+        // placements.  Keyed by packed (x, y, z) long for O(1) lookup.
+        Set<Long> covered = new HashSet<>();
+        Set<Long> addedPositions = new HashSet<>();
+
+        for (BlockPos dark : darkSpots) {
+            if (covered.contains(packPos(dark))) continue;
+
+            // Find a valid placement position
+            BlockPos placePos;
+            if (embedding) {
+                placePos = placedPositions.contains(dark) ? null : dark;
+            } else {
+                placePos = findPlacementPosition(world, dark);
             }
-        } else {
-            // Normal mode: candidates are air/replaceable positions above or
-            // adjacent to the dark surface.
-            for (BlockPos dark : darkSpots) {
-                BlockPos onTop = dark.up();
-                if (!placedPositions.contains(onTop) && canPlaceLightAt(world, onTop))
-                    candidates.add(onTop);
+            if (placePos == null || placedPositions.contains(placePos)) continue;
 
-                for (Direction dir : Direction.Type.HORIZONTAL) {
-                    BlockPos adj = onTop.offset(dir);
-                    if (!placedPositions.contains(adj) && canPlaceLightAt(world, adj))
-                        candidates.add(adj);
-                }
-            }
-        }
+            // Avoid duplicates (adjacent dark spots can resolve to the same placement)
+            long placeKey = packPos(placePos);
+            if (!addedPositions.add(placeKey)) continue;
 
-        if (candidates.isEmpty()) return;
+            placementQueue.add(placePos);
 
-        // Conservative coverage radius — real light propagation is reduced by
-        // terrain occlusion. Use luminance/2 to avoid over-estimating and
-        // placing too few lights.
-        int radius = Math.max(1, lightSourceLuminance / 2);
-
-        // Greedy set cover
-        while (!remaining.isEmpty() && !candidates.isEmpty()) {
-            BlockPos bestCandidate = null;
-            int bestCoverage = 0;
-
-            for (BlockPos cand : candidates) {
-                int coverage = 0;
-                for (BlockPos dark : remaining) {
-                    // For embed mode the light source is at the surface level,
-                    // but light level is checked at dark.up() (where the mob
-                    // stands).  For normal mode the candidate IS at dark.up()
-                    // level already.  Either way, compare candidate to the
-                    // mob-standing position.
-                    BlockPos standPos = dark.up();
-                    int dist = taxicabDistance(cand, standPos);
-                    if (dist < radius) {
-                        coverage++;
+            // Predict coverage: mark all dark spots within radius as covered.
+            // Instead of iterating all dark spots, enumerate the diamond volume
+            // around the placement and mark every position in the covered set.
+            // This is O(radius³) per placement (~1500 for radius 12) — much
+            // faster than scanning all dark spots.
+            for (int dx = -radius + 1; dx < radius; dx++) {
+                int rem = radius - 1 - Math.abs(dx);
+                for (int dz = -rem; dz <= rem; dz++) {
+                    int remY = rem - Math.abs(dz);
+                    for (int dy = -remY; dy <= remY; dy++) {
+                        // Dark surface is 1 below the standing pos that the
+                        // torch illuminates, so offset Y by -1 when embedding
+                        // is off (placement is at standing level).
+                        int darkY = embedding
+                                ? placePos.getY() + dy
+                                : placePos.getY() + dy - 1;
+                        covered.add(packPos(
+                                placePos.getX() + dx,
+                                darkY,
+                                placePos.getZ() + dz));
                     }
                 }
-                if (coverage > bestCoverage) {
-                    bestCoverage = coverage;
-                    bestCandidate = cand;
-                }
-            }
-
-            if (bestCandidate == null || bestCoverage == 0) break;
-
-            placementQueue.add(bestCandidate);
-            candidates.remove(bestCandidate);
-
-            // Remove covered dark spots
-            Iterator<BlockPos> it = remaining.iterator();
-            while (it.hasNext()) {
-                BlockPos dark = it.next();
-                if (taxicabDistance(bestCandidate, dark.up()) < radius) {
-                    it.remove();
-                }
-            }
-        }
-
-        // Any remaining dark spots that couldn't be covered:
-        // add direct placements for them
-        for (BlockPos dark : remaining) {
-            BlockPos pos;
-            if (embedding) {
-                pos = placedPositions.contains(dark) ? null : dark;
-            } else {
-                pos = findPlacementPosition(world, dark);
-            }
-            if (pos != null) {
-                placementQueue.add(pos);
             }
         }
 
         // Sort the queue by distance from player for efficiency
+        /*? if >=26.1 {*//*
+        LocalPlayer player = Minecraft.getInstance().player;
+        *//*?} else {*/
         ClientPlayerEntity player = MinecraftClient.getInstance().player;
+        /*?}*/
         if (player != null) {
             List<BlockPos> sorted = new ArrayList<>(placementQueue);
+            /*? if >=26.1 {*//*
+            BlockPos playerPos = player.blockPosition();
+            *//*?} else {*/
             BlockPos playerPos = player.getBlockPos();
+            /*?}*/
+            /*? if >=26.1 {*//*
+            sorted.sort(Comparator.comparingDouble(p -> p.distSqr(playerPos)));
+            *//*?} else {*/
             sorted.sort(Comparator.comparingDouble(p -> p.getSquaredDistance(playerPos)));
+            /*?}*/
             placementQueue.clear();
             placementQueue.addAll(sorted);
         }
+    }
+
+    /** Pack a BlockPos into a long key for set lookups. */
+    private static long packPos(BlockPos pos) {
+        return packPos(pos.getX(), pos.getY(), pos.getZ());
+    }
+
+    /** Pack x/y/z into a long key for set lookups. */
+    private static long packPos(int x, int y, int z) {
+        return ((long) (x & 0x3FFFFFF) << 38)
+                | ((long) (z & 0x3FFFFFF) << 12)
+                | (y & 0xFFF);
     }
 
     /** Taxicab (Manhattan) distance between two positions. */
@@ -930,15 +1286,27 @@ public class SpawnProofer {
         return embedInGround && isFullBlockLightSource();
     }
 
-    // ── Inventory helpers ───────────────────────────────────────────────
+    // Inventory helpers
 
     /**
      * Check if the player has at least one light source item.
      */
+    /*? if >=26.1 {*//*
+    private boolean hasLightSourceInInventory(Minecraft mc) {
+    *//*?} else {*/
     private boolean hasLightSourceInInventory(MinecraftClient mc) {
+    /*?}*/
         if (mc.player == null) return false;
+        /*? if >=26.1 {*//*
+        for (int i = 0; i < mc.player.getInventory().getContainerSize(); i++) {
+        *//*?} else {*/
         for (int i = 0; i < mc.player.getInventory().size(); i++) {
+        /*?}*/
+            /*? if >=26.1 {*//*
+            if (mc.player.getInventory().getItem(i).getItem() == lightSourceItem) {
+            *//*?} else {*/
             if (mc.player.getInventory().getStack(i).getItem() == lightSourceItem) {
+            /*?}*/
                 return true;
             }
         }
@@ -948,18 +1316,34 @@ public class SpawnProofer {
     /**
      * Count how many light source items the player has.
      */
+    /*? if >=26.1 {*//*
+    public int countLightSourceInInventory(Minecraft mc) {
+    *//*?} else {*/
     public int countLightSourceInInventory(MinecraftClient mc) {
+    /*?}*/
         if (mc.player == null) return 0;
         int count = 0;
+        /*? if >=26.1 {*//*
+        for (int i = 0; i < mc.player.getInventory().getContainerSize(); i++) {
+        *//*?} else {*/
         for (int i = 0; i < mc.player.getInventory().size(); i++) {
+        /*?}*/
+            /*? if >=26.1 {*//*
+            if (mc.player.getInventory().getItem(i).getItem() == lightSourceItem) {
+            *//*?} else {*/
             if (mc.player.getInventory().getStack(i).getItem() == lightSourceItem) {
+            /*?}*/
+                /*? if >=26.1 {*//*
+                count += mc.player.getInventory().getItem(i).getCount();
+                *//*?} else {*/
                 count += mc.player.getInventory().getStack(i).getCount();
+                /*?}*/
             }
         }
         return count;
     }
 
-    // ── Supply chest ────────────────────────────────────────────────────
+    // Supply chest
 
     /**
      * Find the nearest supply chest.
@@ -968,7 +1352,11 @@ public class SpawnProofer {
         BlockPos best = null;
         double bestDist = Double.MAX_VALUE;
         for (BlockPos chest : supplyChests) {
+            /*? if >=26.1 {*//*
+            double dist = chest.distSqr(from);
+            *//*?} else {*/
             double dist = chest.getSquaredDistance(from);
+            /*?}*/
             if (dist < bestDist) {
                 bestDist = dist;
                 best = chest;
@@ -977,7 +1365,7 @@ public class SpawnProofer {
         return best;
     }
 
-    // ── Utility ─────────────────────────────────────────────────────────
+    // Utility
 
     /** Format a position for display. */
     private static String formatPos(BlockPos pos) {

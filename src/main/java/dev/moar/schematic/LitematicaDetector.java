@@ -5,10 +5,26 @@ import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 import net.fabricmc.loader.api.FabricLoader;
+/*? if >=26.1 {*//*
+import net.minecraft.world.level.block.state.BlockState;
+*//*?} else {*/
 import net.minecraft.block.BlockState;
+/*?}*/
+/*? if >=26.1 {*//*
+import net.minecraft.client.Minecraft;
+*//*?} else {*/
 import net.minecraft.client.MinecraftClient;
+/*?}*/
+/*? if >=26.1 {*//*
+import net.minecraft.core.BlockPos;
+*//*?} else {*/
 import net.minecraft.util.math.BlockPos;
+/*?}*/
+/*? if >=26.1 {*//*
+import net.minecraft.world.level.Level;
+*//*?} else {*/
 import net.minecraft.world.World;
+/*?}*/
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -20,40 +36,21 @@ import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
 
-// Detects schematics that Litematica has loaded/placed in the world.
-// Scans Litematica's JSON config files (config/litematica/) for enabled
-// placements with schematic paths, world-space origins, and dimensions.
+// Detects Litematica schematic placements via reflection or JSON configs.
 public final class LitematicaDetector {
 
     private static final Logger LOGGER = LoggerFactory.getLogger("MOAR/Detector");
 
     private LitematicaDetector() {}
 
-    /**
-     * A detected Litematica schematic placement.
-     *
-     * @param schematicPath absolute path to the .litematic file
-     * @param name          human-readable placement name
-     * @param originX       world-space X of the placement origin
-     * @param originY       world-space Y of the placement origin
-     * @param originZ       world-space Z of the placement origin
-     */
+    // A detected Litematica schematic placement.
     public record DetectedPlacement(
             Path schematicPath,
             String name,
             int originX, int originY, int originZ
     ) {}
 
-    /**
-     * Scan all Litematica per-dimension config files and return every
-     * enabled schematic placement whose .litematic file
-     * still exists on disk.
-     *
-     * Tries Litematica's in-memory state first (via reflection), then
-     * falls back to parsing on-disk JSON configs.
-     *
-     * @return list of detected placements (may be empty, never null)
-     */
+    // Return all enabled placements (reflection first, JSON fallback).
     public static List<DetectedPlacement> detectPlacements() {
         // Primary: read live placements from Litematica's memory.
         // This works even before Litematica saves its config to disk.
@@ -90,17 +87,9 @@ public final class LitematicaDetector {
         return all.isEmpty() ? null : all.get(0);
     }
 
-    // ── internals ───────────────────────────────────────────────────────
+    // internals
 
-    // Read Litematica's in-memory placements via reflection.
-    // Works immediately when the user loads/moves a schematic,
-    // without waiting for a config save.
-    //
-    // Reflection chain:
-    //   DataManager.getSchematicPlacementManager()
-    //     .getAllSchematicsPlacements() -> List<SchematicPlacement>
-    //   Each SchematicPlacement has getOrigin(),
-    //   getSchematicFile(), isEnabled(), getName().
+    // Read placements from Litematica memory via reflection.
     private static List<DetectedPlacement> detectFromMemory() {
         List<DetectedPlacement> results = new ArrayList<>();
         try {
@@ -218,33 +207,31 @@ public final class LitematicaDetector {
         return results;
     }
 
-    // ── SchematicWorld anchor correlation ───────────────────────────────
+    // SchematicWorld anchor correlation
 
     /**
-     * Detect the correct anchor by reading blocks directly from
-     * Litematica's in-memory SchematicWorld.  This is the
-     * "hologram world" — all blocks that the user sees rendered as
-     * transparent overlays exist at their exact world positions in this
-     * synthetic world.
-     *
-     * The method scans blocks near the player in the SchematicWorld,
-     * finds non-air ones, and correlates them against the loaded
-     * schematic to compute the anchor offset.  This does not depend on
-     * Litematica's placement origin logic at all.
-     *
-     * @param schematic the loaded schematic to correlate against
-     * @return the computed anchor, or null if detection failed
+     * Detect anchor by reading blocks from Litematica's SchematicWorld.
+     * Scans near the player, correlates against the schematic to compute
+     * the anchor offset. Returns null if detection fails.
      */
     public static BlockPos detectAnchorFromSchematicWorld(LitematicaSchematic schematic) {
         if (schematic == null) return null;
 
+        /*? if >=26.1 {*//*
+        Minecraft mc = Minecraft.getInstance();
+        *//*?} else {*/
         MinecraftClient mc = MinecraftClient.getInstance();
+        /*?}*/
         if (mc.player == null) return null;
 
         // Access Litematica's SchematicWorld via reflection:
         // SchematicWorldHandler.getSchematicWorld() → WorldSchematic
         // WorldSchematic extends World, so getBlockState(BlockPos) works.
+        /*? if >=26.1 {*//*
+        Level schematicWorld;
+        *//*?} else {*/
         World schematicWorld;
+        /*?}*/
         try {
             Class<?> swh = Class.forName("fi.dy.masa.litematica.world.SchematicWorldHandler");
             Object world = swh.getMethod("getSchematicWorld").invoke(null);
@@ -252,11 +239,23 @@ public final class LitematicaDetector {
                 LOGGER.debug("SchematicWorld is null — no schematic loaded in Litematica");
                 return null;
             }
+            /*? if >=26.1 {*//*
+            if (!(world instanceof Level)) {
+            *//*?} else {*/
             if (!(world instanceof World)) {
+            /*?}*/
+                /*? if >=26.1 {*//*
+                LOGGER.warn("SchematicWorld is not a Level instance: {}", world.getClass());
+                *//*?} else {*/
                 LOGGER.warn("SchematicWorld is not a World instance: {}", world.getClass());
+                /*?}*/
                 return null;
             }
+            /*? if >=26.1 {*//*
+            schematicWorld = (Level) world;
+            *//*?} else {*/
             schematicWorld = (World) world;
+            /*?}*/
         } catch (ClassNotFoundException e) {
             LOGGER.debug("Litematica SchematicWorldHandler not found");
             return null;
@@ -265,7 +264,11 @@ public final class LitematicaDetector {
             return null;
         }
 
+        /*? if >=26.1 {*//*
+        BlockPos playerPos = mc.player.blockPosition();
+        *//*?} else {*/
         BlockPos playerPos = mc.player.getBlockPos();
+        /*?}*/
         int scanRadius = 64;
 
         // Phase 1: find non-air blocks in the SchematicWorld near the player.
@@ -277,7 +280,11 @@ public final class LitematicaDetector {
         for (int dy = -scanRadius; dy <= scanRadius && hologramBlocks.size() < 20; dy++) {
             for (int dx = -scanRadius; dx <= scanRadius && hologramBlocks.size() < 20; dx++) {
                 for (int dz = -scanRadius; dz <= scanRadius && hologramBlocks.size() < 20; dz++) {
+                    /*? if >=26.1 {*//*
+                    BlockPos wp = playerPos.offset(dx, dy, dz);
+                    *//*?} else {*/
                     BlockPos wp = playerPos.add(dx, dy, dz);
+                    /*?}*/
                     BlockState bs = schematicWorld.getBlockState(wp);
                     if (!bs.isAir()) {
                         hologramBlocks.add(wp);

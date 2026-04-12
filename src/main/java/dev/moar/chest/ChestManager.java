@@ -1,69 +1,102 @@
 package dev.moar.chest;
 
-import com.google.gson.Gson;
-import com.google.gson.GsonBuilder;
+import dev.moar.MoarMod;
+import dev.moar.stash.StashDatabase;
 import dev.moar.util.ChatHelper;
 import dev.moar.util.PathWalker;
-import net.fabricmc.loader.api.FabricLoader;
+/*? if >=26.1 {*//*
+import net.minecraft.world.level.block.*;
+import net.minecraft.world.level.block.state.*;
+import net.minecraft.world.level.block.piston.*;
+*//*?} else {*/
 import net.minecraft.block.*;
+/*?}*/
+/*? if >=26.1 {*//*
+import net.minecraft.client.Minecraft;
+*//*?} else {*/
 import net.minecraft.client.MinecraftClient;
+/*?}*/
+/*? if >=26.1 {*//*
+import net.minecraft.client.player.LocalPlayer;
+*//*?} else {*/
 import net.minecraft.client.network.ClientPlayerEntity;
+/*?}*/
+/*? if >=26.1 {*//*
+import net.minecraft.core.component.DataComponents;
+*//*?} else {*/
 import net.minecraft.component.DataComponentTypes;
+/*?}*/
+/*? if >=26.1 {*//*
+import net.minecraft.world.item.component.ItemContainerContents;
+*//*?} else {*/
 import net.minecraft.component.type.ContainerComponent;
+/*?}*/
+/*? if >=26.1 {*//*
+import net.minecraft.world.item.BlockItem;
+*//*?} else {*/
 import net.minecraft.item.BlockItem;
+/*?}*/
+/*? if >=26.1 {*//*
+import net.minecraft.world.item.Item;
+*//*?} else {*/
 import net.minecraft.item.Item;
+/*?}*/
+/*? if >=26.1 {*//*
+import net.minecraft.world.item.ItemStack;
+*//*?} else {*/
 import net.minecraft.item.ItemStack;
+/*?}*/
+/*? if >=26.1 {*//*
+import net.minecraft.core.registries.BuiltInRegistries;
+*//*?} else {*/
 import net.minecraft.registry.Registries;
+/*?}*/
+/*? if >=26.1 {*//*
+import net.minecraft.world.inventory.ChestMenu;
+*//*?} else {*/
 import net.minecraft.screen.GenericContainerScreenHandler;
+/*?}*/
+/*? if >=26.1 {*//*
+import net.minecraft.world.inventory.AbstractContainerMenu;
+*//*?} else {*/
 import net.minecraft.screen.ScreenHandler;
+/*?}*/
+/*? if >=26.1 {*//*
+import net.minecraft.world.inventory.ContainerInput;
+*//*?} else {*/
 import net.minecraft.screen.slot.SlotActionType;
+/*?}*/
+/*? if >=26.1 {*//*
+import net.minecraft.core.BlockPos;
+*//*?} else {*/
 import net.minecraft.util.math.BlockPos;
+/*?}*/
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import java.io.Reader;
-import java.io.Writer;
-import java.nio.file.Files;
-import java.nio.file.Path;
 import java.util.*;
 import java.util.stream.Collectors;
 
-/**
- * Unified manager for all chest-related operations in MOAR.
- *
- * Consolidates:
- *   - Supply chest registration and persistence (positions saved to JSON)
- *   - Inventory snapshot caching (in-memory, populated when player opens chests)
- *   - Chest scanning / indexing (reads chest and shulker box contents)
- *   - Best-chest ranking for resupply (match count, distance, indexed vs unindexed)
- *   - Storage chest sorting (deposit planning, type assignments, overflow)
- *
- * This class is a singleton held in MoarMod and ticked every
- * client tick to drive the sorting state machine.
- */
+// Supply-chest registry, inventory snapshots, scanning, ranking, and sorting.
 public final class ChestManager {
 
     private static final Logger LOGGER = LoggerFactory.getLogger("MOAR/ChestManager");
 
-    // ═══════════════════════════════════════════════════════════════════
-    //  SUPPLY CHEST INDEX — positions (persisted) + snapshots (ephemeral)
-    // ═══════════════════════════════════════════════════════════════════
+    // --- SUPPLY CHEST INDEX — positions (persisted) + snapshots (ephemeral)
 
-    /** Registered supply-chest positions. Persisted to disk. */
+    /** Registered supply-chest positions. Persisted to database. */
     private final Set<BlockPos> supplyPositions = new LinkedHashSet<>();
 
-    private static final Gson GSON = new GsonBuilder().setPrettyPrinting().create();
-    private static final Path SUPPLY_FILE = FabricLoader.getInstance()
-            .getConfigDir()
-            .resolve("moar")
-            .resolve("printer_supply.json");
-
-    // ── Supply chest registration ───────────────────────────────────────
+    // Supply chest registration
 
     /** Register a supply chest position. Returns false if already registered. */
     public boolean addSupplyChest(BlockPos pos) {
+        /*? if >=26.1 {*//*
+        BlockPos immutable = pos.immutable();
+        *//*?} else {*/
         BlockPos immutable = pos.toImmutable();
+        /*?}*/
         if (!supplyPositions.add(immutable)) return false;
         saveSupplyChests();
         return true;
@@ -71,7 +104,11 @@ public final class ChestManager {
 
     /** Unregister a supply chest position. */
     public boolean removeSupplyChest(BlockPos pos) {
+        /*? if >=26.1 {*//*
+        BlockPos immutable = pos.immutable();
+        *//*?} else {*/
         BlockPos immutable = pos.toImmutable();
+        /*?}*/
         boolean removed = supplyPositions.remove(immutable);
         if (removed) {
             snapshots.remove(immutable);
@@ -97,20 +134,13 @@ public final class ChestManager {
         return supplyPositions.size();
     }
 
-    // ── Inventory snapshots (in-memory) ─────────────────────────────────
+    // Inventory snapshots (in-memory)
 
-    /**
-     * Snapshot of a single supply chest's contents at the time it was last
-     * opened.  Includes items directly in the chest and items found inside
-     * shulker boxes within it.
-     */
+    // Snapshot of a supply chest's contents (direct + shulker items).
     public record ChestSnapshot(
             BlockPos pos,
-            /** Item ID to total count (direct + shulker contents). */
             Map<String, Integer> items,
-            /** Number of shulker boxes found in this chest. */
             int shulkerCount,
-            /** System.currentTimeMillis() when this snapshot was taken. */
             long timestamp
     ) {
         public boolean contains(String itemId) {
@@ -139,17 +169,29 @@ public final class ChestManager {
 
     /** Store a snapshot for a chest position. */
     public void putSnapshot(BlockPos pos, ChestSnapshot snapshot) {
+        /*? if >=26.1 {*//*
+        snapshots.put(pos.immutable(), snapshot);
+        *//*?} else {*/
         snapshots.put(pos.toImmutable(), snapshot);
+        /*?}*/
     }
 
     /** Get the cached snapshot for a chest, or null if not scanned. */
     public ChestSnapshot getSnapshot(BlockPos pos) {
+        /*? if >=26.1 {*//*
+        return snapshots.get(pos.immutable());
+        *//*?} else {*/
         return snapshots.get(pos.toImmutable());
+        /*?}*/
     }
 
     /** Invalidate the cached snapshot for a chest (e.g. after modifying contents). */
     public void invalidateSnapshot(BlockPos pos) {
+        /*? if >=26.1 {*//*
+        snapshots.remove(pos.immutable());
+        *//*?} else {*/
         snapshots.remove(pos.toImmutable());
+        /*?}*/
     }
 
     /** Clear all snapshots (positions are retained). */
@@ -157,23 +199,42 @@ public final class ChestManager {
         snapshots.clear();
     }
 
-    // ── Chest scanning / indexing ───────────────────────────────────────
+    // Chest scanning / indexing
 
-    // Scans an open chest and stores the snapshot.
-    // Call when the player opens a supply chest that should be indexed.
+    // Scan an open chest and cache its contents.
+    /*? if >=26.1 {*//*
+    public void scanOpenChest(BlockPos chestPos, ChestMenu handler) {
+    *//*?} else {*/
     public void scanOpenChest(BlockPos chestPos, GenericContainerScreenHandler handler) {
+    /*?}*/
         if (chestPos == null || handler == null) return;
 
+        /*? if >=26.1 {*//*
+        BlockPos key = chestPos.immutable();
+        *//*?} else {*/
         BlockPos key = chestPos.toImmutable();
+        /*?}*/
         Map<String, Integer> items = new HashMap<>();
         int shulkerCount = 0;
 
+        /*? if >=26.1 {*//*
+        int chestSlots = handler.getRowCount() * 9;
+        *//*?} else {*/
         int chestSlots = handler.getRows() * 9;
+        /*?}*/
         for (int slot = 0; slot < chestSlots; slot++) {
+            /*? if >=26.1 {*//*
+            ItemStack stack = handler.getSlot(slot).getItem();
+            *//*?} else {*/
             ItemStack stack = handler.getSlot(slot).getStack();
+            /*?}*/
             if (stack.isEmpty()) continue;
 
+            /*? if >=26.1 {*//*
+            String itemId = BuiltInRegistries.ITEM.getKey(stack.getItem()).toString();
+            *//*?} else {*/
             String itemId = Registries.ITEM.getId(stack.getItem()).toString();
+            /*?}*/
 
             if (isShulkerBox(stack)) {
                 shulkerCount++;
@@ -200,11 +261,23 @@ public final class ChestManager {
         Map<String, Integer> contents = new HashMap<>();
         if (shulkerStack == null || shulkerStack.isEmpty()) return contents;
 
+        /*? if >=26.1 {*//*
+        ItemContainerContents cc = shulkerStack.get(DataComponents.CONTAINER);
+        *//*?} else {*/
         ContainerComponent cc = shulkerStack.get(DataComponentTypes.CONTAINER);
+        /*?}*/
         if (cc == null) return contents;
 
+        /*? if >=26.1 {*//*
+        for (ItemStack inner : cc.nonEmptyItemCopyStream().toList()) {
+        *//*?} else {*/
         for (ItemStack inner : cc.iterateNonEmpty()) {
+        /*?}*/
+            /*? if >=26.1 {*//*
+            String innerId = BuiltInRegistries.ITEM.getKey(inner.getItem()).toString();
+            *//*?} else {*/
             String innerId = Registries.ITEM.getId(inner.getItem()).toString();
+            /*?}*/
             contents.merge(innerId, inner.getCount(), Integer::sum);
         }
         return contents;
@@ -216,7 +289,7 @@ public final class ChestManager {
                 && bi.getBlock() instanceof ShulkerBoxBlock;
     }
 
-    // ── Best-chest ranking ──────────────────────────────────────────────
+    // Best-chest ranking
 
     /**
      * Find the best supply chest for a set of needed item IDs.
@@ -247,7 +320,11 @@ public final class ChestManager {
 
         for (BlockPos pos : supplyPositions) {
             if (exclude.contains(pos)) continue;
+            /*? if >=26.1 {*//*
+            double dist = from.distSqr(pos);
+            *//*?} else {*/
             double dist = from.getSquaredDistance(pos);
+            /*?}*/
             ChestSnapshot snapshot = snapshots.get(pos);
 
             if (snapshot == null) {
@@ -286,7 +363,11 @@ public final class ChestManager {
         BlockPos nearest = null;
         double nearestDist = Double.MAX_VALUE;
         for (BlockPos pos : supplyPositions) {
+            /*? if >=26.1 {*//*
+            double dist = from.distSqr(pos);
+            *//*?} else {*/
             double dist = from.getSquaredDistance(pos);
+            /*?}*/
             if (dist < nearestDist) {
                 nearestDist = dist;
                 nearest = pos;
@@ -345,9 +426,7 @@ public final class ChestManager {
         return new ChestIndexSummary(indexed, unindexed, totalItems, allTypes.size(), totalShulkers);
     }
 
-    // ═══════════════════════════════════════════════════════════════════
-    //  STORAGE CHEST SORTING — deposit planning + state machine
-    // ═══════════════════════════════════════════════════════════════════
+    // --- STORAGE CHEST SORTING — deposit planning + state machine
 
     /** Sorting state machine states. */
     public enum SortState {
@@ -367,7 +446,7 @@ public final class ChestManager {
 
     private SortState sortState = SortState.IDLE;
 
-    // ── Storage chest configuration ─────────────────────────────────────
+    // Storage chest configuration
 
     /** Storage chest positions (order matters — first chest gets first item type). */
     private final List<BlockPos> storageChests = new ArrayList<>();
@@ -387,7 +466,7 @@ public final class ChestManager {
     /** Items to keep in inventory (tools, food, light sources). */
     private final Set<Item> keepItems = new HashSet<>();
 
-    // ── Sorting runtime state ───────────────────────────────────────────
+    // Sorting runtime state
 
     /** Items to deposit, grouped by target chest. */
     private final Map<BlockPos, List<Integer>> depositPlan = new LinkedHashMap<>();
@@ -416,7 +495,7 @@ public final class ChestManager {
     /** Position to return to after sorting. */
     private BlockPos sortReturnPos;
 
-    // ── Storage chest API ───────────────────────────────────────────────
+    // Storage chest API
 
     /** Get the current sort state. */
     public SortState getSortState() { return sortState; }
@@ -430,6 +509,7 @@ public final class ChestManager {
     public void addStorageChest(BlockPos pos) {
         if (!storageChests.contains(pos)) {
             storageChests.add(pos);
+            saveSortingConfig();
         }
     }
 
@@ -437,6 +517,7 @@ public final class ChestManager {
     public void removeStorageChest(BlockPos pos) {
         storageChests.remove(pos);
         chestTypes.remove(pos);
+        saveSortingConfig();
     }
 
     /** Get storage chest positions. */
@@ -450,6 +531,7 @@ public final class ChestManager {
         if (!storageChests.contains(pos)) {
             storageChests.add(pos);
         }
+        saveSortingConfig();
     }
 
     /** Get the overflow chest, if set. */
@@ -463,16 +545,19 @@ public final class ChestManager {
     /** Manually assign a chest type. */
     public void setChestType(BlockPos pos, String itemId) {
         chestTypes.put(pos, itemId);
+        saveSortingConfig();
     }
 
     /** Add an item to the keep list (won't be deposited). */
     public void addKeepItem(Item item) {
         keepItems.add(item);
+        saveKeepItems();
     }
 
     /** Remove an item from the keep list. */
     public void removeKeepItem(Item item) {
         keepItems.remove(item);
+        saveKeepItems();
     }
 
     /** Get keep item set. */
@@ -483,19 +568,84 @@ public final class ChestManager {
     /** Clear all chest type assignments. */
     public void clearTypes() {
         chestTypes.clear();
+        saveSortingConfig();
     }
 
-    // ── Sorting lifecycle ───────────────────────────────────────────────
+    // Sorting persistence
+
+    /** Save storage chest layout (positions, types, overflow) to the database. */
+    public void saveSortingConfig() {
+        StashDatabase db = MoarMod.getDatabase();
+        if (db.isOpen()) db.saveStorageChests(storageChests, chestTypes, overflowChest);
+    }
+
+    /** Load storage chest layout from the database. */
+    public void loadSortingConfig() {
+        StashDatabase db = MoarMod.getDatabase();
+        if (!db.isOpen()) return;
+        StashDatabase.StorageChestConfig cfg = db.loadStorageChests();
+        storageChests.clear();
+        storageChests.addAll(cfg.chests());
+        chestTypes.clear();
+        chestTypes.putAll(cfg.chestTypes());
+        overflowChest = cfg.overflowChest();
+    }
+
+    /** Save keep-items set to the database. */
+    private void saveKeepItems() {
+        StashDatabase db = MoarMod.getDatabase();
+        if (!db.isOpen()) return;
+        Set<String> ids = new LinkedHashSet<>();
+        for (Item item : keepItems) {
+            /*? if >=26.1 {*//*
+            ids.add(BuiltInRegistries.ITEM.getKey(item).toString());
+            *//*?} else {*/
+            ids.add(Registries.ITEM.getId(item).toString());
+            /*?}*/
+        }
+        db.saveKeepItems(ids);
+    }
+
+    /** Load keep-items set from the database. */
+    public void loadKeepItems() {
+        StashDatabase db = MoarMod.getDatabase();
+        if (!db.isOpen()) return;
+        Set<String> ids = db.loadKeepItems();
+        keepItems.clear();
+        for (String id : ids) {
+            /*? if >=26.1 {*//*
+            var resLoc = net.minecraft.resources.Identifier.tryParse(id);
+            if (resLoc != null) {
+                Item item = BuiltInRegistries.ITEM.getValue(resLoc);
+            *//*?} else {*/
+            var identifier = net.minecraft.util.Identifier.tryParse(id);
+            if (identifier != null) {
+                Item item = Registries.ITEM.get(identifier);
+            /*?}*/
+                if (item != null) keepItems.add(item);
+            }
+        }
+    }
+
+    // Sorting lifecycle
 
     /**
      * Check if the player's inventory is full enough to warrant sorting.
      * Returns true if fewer than 4 empty slots remain.
      */
+    /*? if >=26.1 {*//*
+    public boolean isInventoryFull(Minecraft mc) {
+    *//*?} else {*/
     public boolean isInventoryFull(MinecraftClient mc) {
+    /*?}*/
         if (mc.player == null) return false;
         int empty = 0;
         for (int i = 0; i < 36; i++) {
+            /*? if >=26.1 {*//*
+            if (mc.player.getInventory().getItem(i).isEmpty()) {
+            *//*?} else {*/
             if (mc.player.getInventory().getStack(i).isEmpty()) {
+            /*?}*/
                 empty++;
             }
         }
@@ -506,7 +656,11 @@ public final class ChestManager {
      * Start the sorting process.
      * Analyzes inventory and builds a deposit plan.
      */
+    /*? if >=26.1 {*//*
+    public boolean startSort(Minecraft mc) {
+    *//*?} else {*/
     public boolean startSort(MinecraftClient mc) {
+    /*?}*/
         if (storageChests.isEmpty()) {
             ChatHelper.info("§cNo storage chests configured. Use /spawnproof chest add");
             return false;
@@ -514,7 +668,11 @@ public final class ChestManager {
 
         if (mc.player == null) return false;
 
+        /*? if >=26.1 {*//*
+        sortReturnPos = mc.player.blockPosition();
+        *//*?} else {*/
         sortReturnPos = mc.player.getBlockPos();
+        /*?}*/
         buildDepositPlan(mc);
 
         if (depositPlan.isEmpty()) {
@@ -551,7 +709,7 @@ public final class ChestManager {
     /** Get the return position after sorting. */
     public BlockPos getSortReturnPos() { return sortReturnPos; }
 
-    // ── Sorting tick ────────────────────────────────────────────────────
+    // Sorting tick
 
     /**
      * Drive the sorting state machine. Call every client tick.
@@ -559,8 +717,16 @@ public final class ChestManager {
     public void tick() {
         if (sortState == SortState.IDLE || sortState == SortState.DONE) return;
 
+        /*? if >=26.1 {*//*
+        Minecraft mc = Minecraft.getInstance();
+        *//*?} else {*/
         MinecraftClient mc = MinecraftClient.getInstance();
+        /*?}*/
+        /*? if >=26.1 {*//*
+        if (mc == null || mc.player == null || mc.level == null) return;
+        *//*?} else {*/
         if (mc == null || mc.player == null || mc.world == null) return;
+        /*?}*/
 
         sortTickCounter++;
 
@@ -572,16 +738,28 @@ public final class ChestManager {
         }
     }
 
-    // ── Sorting state handlers ──────────────────────────────────────────
+    // Sorting state handlers
 
+    /*? if >=26.1 {*//*
+    private void tickSortWalking(Minecraft mc) {
+    *//*?} else {*/
     private void tickSortWalking(MinecraftClient mc) {
+    /*?}*/
         if (sortTarget == null) {
             sortState = SortState.DONE;
             return;
         }
 
+        /*? if >=26.1 {*//*
+        LocalPlayer player = mc.player;
+        *//*?} else {*/
         ClientPlayerEntity player = mc.player;
+        /*?}*/
+        /*? if >=26.1 {*//*
+        double distSq = player.distanceToSqr(
+        *//*?} else {*/
         double distSq = player.squaredDistanceTo(
+        /*?}*/
                 sortTarget.getX() + 0.5,
                 sortTarget.getY() + 0.5,
                 sortTarget.getZ() + 0.5);
@@ -614,30 +792,60 @@ public final class ChestManager {
         PathWalker.tick();
     }
 
+    /*? if >=26.1 {*//*
+    private void tickSortOpening(Minecraft mc) {
+    *//*?} else {*/
     private void tickSortOpening(MinecraftClient mc) {
+    /*?}*/
         openWaitTicks++;
 
+        /*? if >=26.1 {*//*
+        if (mc.player.containerMenu instanceof ChestMenu) {
+        *//*?} else {*/
         if (mc.player.currentScreenHandler instanceof GenericContainerScreenHandler) {
+        /*?}*/
             depositIndex = 0;
             sortState = SortState.DEPOSITING;
             return;
         }
 
         if (openWaitTicks == 1) {
+            /*? if >=26.1 {*//*
+            BlockState chestState = mc.level.getBlockState(sortTarget);
+            *//*?} else {*/
             BlockState chestState = mc.world.getBlockState(sortTarget);
+            /*?}*/
             if (chestState.getBlock() instanceof ChestBlock
                     || chestState.getBlock() instanceof BarrelBlock
                     || chestState.getBlock() instanceof ShulkerBoxBlock) {
+                /*? if >=26.1 {*//*
+                mc.gameMode.useItemOn(
+                *//*?} else {*/
                 mc.interactionManager.interactBlock(
+                /*?}*/
                         mc.player,
-                        /*? if >=1.21.10 {*//*
+                        /*? if >=26.1 {*//*
+                        mc.player.getUsedItemHand(),
+                        *//*?} else if >=1.21.10 {*//*
                         mc.player.getActiveHand(),
                         *//*?} else {*/
                         mc.player.getActiveHand(),
                         /*?}*/
+                        /*? if >=26.1 {*//*
+                        new net.minecraft.world.phys.BlockHitResult(
+                        *//*?} else {*/
                         new net.minecraft.util.hit.BlockHitResult(
+                        /*?}*/
+                                /*? if >=26.1 {*//*
+                                net.minecraft.world.phys.Vec3.atCenterOf(sortTarget),
+                                *//*?} else {*/
                                 net.minecraft.util.math.Vec3d.ofCenter(sortTarget),
+                                /*?}*/
+                                /*? if >=26.1 {*//*
+                                net.minecraft.core.Direction.UP,
+                                *//*?} else {*/
                                 net.minecraft.util.math.Direction.UP,
+                                /*?}*/
                                 sortTarget,
                                 false
                         )
@@ -652,9 +860,21 @@ public final class ChestManager {
         }
     }
 
+    /*? if >=26.1 {*//*
+    private void tickSortDepositing(Minecraft mc) {
+    *//*?} else {*/
     private void tickSortDepositing(MinecraftClient mc) {
+    /*?}*/
+        /*? if >=26.1 {*//*
+        AbstractContainerMenu handler = mc.player.containerMenu;
+        *//*?} else {*/
         ScreenHandler handler = mc.player.currentScreenHandler;
+        /*?}*/
+        /*? if >=26.1 {*//*
+        if (!(handler instanceof ChestMenu containerHandler)) {
+        *//*?} else {*/
         if (!(handler instanceof GenericContainerScreenHandler containerHandler)) {
+        /*?}*/
             advanceToNextSortChest();
             return;
         }
@@ -662,30 +882,54 @@ public final class ChestManager {
         if (sortTickCounter % CLICK_COOLDOWN_TICKS != 0) return;
 
         if (currentSlots == null || depositIndex >= currentSlots.size()) {
+            /*? if >=26.1 {*//*
+            mc.player.clientSideCloseContainer();
+            *//*?} else {*/
             mc.player.closeHandledScreen();
+            /*?}*/
             assignChestType(sortTarget, mc);
             advanceToNextSortChest();
             return;
         }
 
         int playerSlot = currentSlots.get(depositIndex);
+        /*? if >=26.1 {*//*
+        ItemStack stack = mc.player.getInventory().getItem(playerSlot);
+        *//*?} else {*/
         ItemStack stack = mc.player.getInventory().getStack(playerSlot);
+        /*?}*/
 
         if (stack.isEmpty()) {
             depositIndex++;
             return;
         }
 
+        /*? if >=26.1 {*//*
+        int chestSlotCount = containerHandler.getRowCount() * 9;
+        *//*?} else {*/
         int chestSlotCount = containerHandler.getRows() * 9;
+        /*?}*/
         boolean hasRoom = false;
         for (int i = 0; i < chestSlotCount; i++) {
+            /*? if >=26.1 {*//*
+            ItemStack chestStack = containerHandler.getSlot(i).getItem();
+            *//*?} else {*/
             ItemStack chestStack = containerHandler.getSlot(i).getStack();
+            /*?}*/
             if (chestStack.isEmpty()) {
                 hasRoom = true;
                 break;
             }
+            /*? if >=26.1 {*//*
+            if (ItemStack.isSameItem(chestStack, stack)
+            *//*?} else {*/
             if (ItemStack.areItemsEqual(chestStack, stack)
+            /*?}*/
+                    /*? if >=26.1 {*//*
+                    && chestStack.getCount() < chestStack.getMaxStackSize()) {
+                    *//*?} else {*/
                     && chestStack.getCount() < chestStack.getMaxCount()) {
+                    /*?}*/
                 hasRoom = true;
                 break;
             }
@@ -694,7 +938,11 @@ public final class ChestManager {
         if (!hasRoom) {
             ChatHelper.info("§eChest full at "
                     + sortTarget.getX() + " " + sortTarget.getY() + " " + sortTarget.getZ());
+            /*? if >=26.1 {*//*
+            mc.player.clientSideCloseContainer();
+            *//*?} else {*/
             mc.player.closeHandledScreen();
+            /*?}*/
             advanceToNextSortChest();
             return;
         }
@@ -706,33 +954,61 @@ public final class ChestManager {
             containerSlotIndex = chestSlotCount + playerSlot - 9;
         }
 
+        /*? if >=26.1 {*//*
+        mc.gameMode.handleContainerInput(
+        *//*?} else {*/
         mc.interactionManager.clickSlot(
+        /*?}*/
+                /*? if >=26.1 {*//*
+                containerHandler.containerId,
+                *//*?} else {*/
                 containerHandler.syncId,
+                /*?}*/
                 containerSlotIndex,
                 0,
+                /*? if >=26.1 {*//*
+                ContainerInput.QUICK_MOVE,
+                *//*?} else {*/
                 SlotActionType.QUICK_MOVE,
+                /*?}*/
                 mc.player
         );
 
         depositIndex++;
     }
 
-    // ── Deposit planning ────────────────────────────────────────────────
+    // Deposit planning
 
+    /*? if >=26.1 {*//*
+    private void buildDepositPlan(Minecraft mc) {
+    *//*?} else {*/
     private void buildDepositPlan(MinecraftClient mc) {
+    /*?}*/
         depositPlan.clear();
 
+        /*? if >=26.1 {*//*
+        LocalPlayer player = mc.player;
+        *//*?} else {*/
         ClientPlayerEntity player = mc.player;
+        /*?}*/
         if (player == null) return;
 
         Map<String, List<Integer>> itemSlots = new LinkedHashMap<>();
 
         for (int i = 0; i < 36; i++) {
+            /*? if >=26.1 {*//*
+            ItemStack stack = player.getInventory().getItem(i);
+            *//*?} else {*/
             ItemStack stack = player.getInventory().getStack(i);
+            /*?}*/
             if (stack.isEmpty()) continue;
             if (keepItems.contains(stack.getItem())) continue;
 
+            /*? if >=26.1 {*//*
+            String itemId = BuiltInRegistries.ITEM.getKey(stack.getItem()).toString();
+            *//*?} else {*/
             String itemId = Registries.ITEM.getId(stack.getItem()).toString();
+            /*?}*/
             itemSlots.computeIfAbsent(itemId, k -> new ArrayList<>()).add(i);
         }
 
@@ -789,16 +1065,40 @@ public final class ChestManager {
         }
     }
 
+    /*? if >=26.1 {*//*
+    private void assignChestType(BlockPos chest, Minecraft mc) {
+    *//*?} else {*/
     private void assignChestType(BlockPos chest, MinecraftClient mc) {
+    /*?}*/
         if (chestTypes.containsKey(chest)) return;
         if (Objects.equals(chest, overflowChest)) return;
 
+        /*? if >=26.1 {*//*
+        AbstractContainerMenu handler = mc.player.containerMenu;
+        *//*?} else {*/
         ScreenHandler handler = mc.player.currentScreenHandler;
+        /*?}*/
+        /*? if >=26.1 {*//*
+        if (handler instanceof ChestMenu containerHandler) {
+        *//*?} else {*/
         if (handler instanceof GenericContainerScreenHandler containerHandler) {
+        /*?}*/
+            /*? if >=26.1 {*//*
+            for (int i = 0; i < containerHandler.getRowCount() * 9; i++) {
+            *//*?} else {*/
             for (int i = 0; i < containerHandler.getRows() * 9; i++) {
+            /*?}*/
+                /*? if >=26.1 {*//*
+                ItemStack stack = containerHandler.getSlot(i).getItem();
+                *//*?} else {*/
                 ItemStack stack = containerHandler.getSlot(i).getStack();
+                /*?}*/
                 if (!stack.isEmpty()) {
+                    /*? if >=26.1 {*//*
+                    String itemId = BuiltInRegistries.ITEM.getKey(stack.getItem()).toString();
+                    *//*?} else {*/
                     String itemId = Registries.ITEM.getId(stack.getItem()).toString();
+                    /*?}*/
                     chestTypes.put(chest, itemId);
                     ChatHelper.info("§7Chest assigned type: §f" + itemId);
                     return;
@@ -842,57 +1142,111 @@ public final class ChestManager {
         };
     }
 
-    // ═══════════════════════════════════════════════════════════════════
-    //  PERSISTENCE — supply chest positions
-    // ═══════════════════════════════════════════════════════════════════
+    // --- PERSISTENCE — supply chest positions
 
-    /** Load supply-chest positions from disk. */
+    /** Load supply-chest positions from the database. */
     public void loadSupplyChests() {
-        try {
-            if (!Files.exists(SUPPLY_FILE)) return;
-            try (Reader reader = Files.newBufferedReader(SUPPLY_FILE)) {
-                SavedChestData data = GSON.fromJson(reader, SavedChestData.class);
-                if (data == null || data.positions == null) return;
-                supplyPositions.clear();
-                for (int[] pos : data.positions) {
-                    if (pos.length >= 3) {
-                        supplyPositions.add(new BlockPos(pos[0], pos[1], pos[2]));
-                    }
-                }
-            }
-        } catch (Exception e) {
-            LOGGER.error("Failed to load supply chests", e);
+        StashDatabase db = MoarMod.getDatabase();
+        if (!db.isOpen()) return;
+        List<BlockPos> loaded = db.loadSupplyChests();
+        if (!loaded.isEmpty()) {
+            supplyPositions.clear();
+            supplyPositions.addAll(loaded);
         }
     }
 
-    /** Save supply-chest positions to disk. */
+    /** Save supply-chest positions to the database. */
     public void saveSupplyChests() {
-        try {
-            Files.createDirectories(SUPPLY_FILE.getParent());
-            SavedChestData data = new SavedChestData();
-            data.positions = new ArrayList<>();
-            for (BlockPos pos : supplyPositions) {
-                data.positions.add(new int[] { pos.getX(), pos.getY(), pos.getZ() });
+        StashDatabase db = MoarMod.getDatabase();
+        if (db.isOpen()) db.saveSupplyChests(supplyPositions);
+    }
+
+    // --- DUMP CHEST INDEX — positions for depositing mined items
+
+    /** Registered dump-chest positions (for depositing items during clearing). */
+    private final Set<BlockPos> dumpPositions = new LinkedHashSet<>();
+
+    /** Register a dump chest position. Returns false if already registered. */
+    public boolean addDumpChest(BlockPos pos) {
+        /*? if >=26.1 {*//*
+        BlockPos immutable = pos.immutable();
+        *//*?} else {*/
+        BlockPos immutable = pos.toImmutable();
+        /*?}*/
+        if (!dumpPositions.add(immutable)) return false;
+        saveDumpChests();
+        return true;
+    }
+
+    /** Unregister a dump chest position. */
+    public boolean removeDumpChest(BlockPos pos) {
+        /*? if >=26.1 {*//*
+        BlockPos immutable = pos.immutable();
+        *//*?} else {*/
+        BlockPos immutable = pos.toImmutable();
+        /*?}*/
+        boolean removed = dumpPositions.remove(immutable);
+        if (removed) saveDumpChests();
+        return removed;
+    }
+
+    /** Remove all dump chest registrations. */
+    public void clearDumpChests() {
+        dumpPositions.clear();
+        saveDumpChests();
+    }
+
+    /** Unmodifiable snapshot of all registered dump-chest positions. */
+    public List<BlockPos> getDumpPositions() {
+        return List.copyOf(dumpPositions);
+    }
+
+    /** Number of registered dump chests. */
+    public int dumpChestCount() {
+        return dumpPositions.size();
+    }
+
+    /** Find the nearest dump chest to the given position, or null. */
+    public BlockPos findNearestDumpChest(BlockPos from) {
+        if (dumpPositions.isEmpty()) return null;
+        BlockPos best = null;
+        double bestDist = Double.MAX_VALUE;
+        for (BlockPos pos : dumpPositions) {
+            /*? if >=26.1 {*//*
+            double d = from.distSqr(pos);
+            *//*?} else {*/
+            double d = from.getSquaredDistance(pos);
+            /*?}*/
+            if (d < bestDist) {
+                bestDist = d;
+                best = pos;
             }
-            try (Writer writer = Files.newBufferedWriter(SUPPLY_FILE)) {
-                GSON.toJson(data, writer);
-            }
-        } catch (Exception e) {
-            LOGGER.error("Failed to save supply chests", e);
+        }
+        return best;
+    }
+
+    /** Load dump-chest positions from the database. */
+    public void loadDumpChests() {
+        StashDatabase db = MoarMod.getDatabase();
+        if (!db.isOpen()) return;
+        List<BlockPos> loaded = db.loadDumpChests();
+        if (!loaded.isEmpty()) {
+            dumpPositions.clear();
+            dumpPositions.addAll(loaded);
         }
     }
 
-    private static class SavedChestData {
-        List<int[]> positions;
+    /** Save dump-chest positions to the database. */
+    public void saveDumpChests() {
+        StashDatabase db = MoarMod.getDatabase();
+        if (db.isOpen()) db.saveDumpChests(dumpPositions);
     }
 
-    // ═══════════════════════════════════════════════════════════════════
-    //  GLOBAL OPERATIONS
-    // ═══════════════════════════════════════════════════════════════════
+    // --- GLOBAL OPERATIONS
 
     /**
      * Clear all build-session chest data (snapshots only).
-     * Supply-chest positions are retained (they're persistent config).
+     * Supply/dump chest positions are retained (persistent config).
      */
     public void clearSessionData() {
         snapshots.clear();
