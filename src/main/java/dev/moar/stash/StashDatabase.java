@@ -206,6 +206,23 @@ public final class StashDatabase {
                     value TEXT NOT NULL
                 )
                 """);
+
+            stmt.executeUpdate("""
+                CREATE TABLE IF NOT EXISTS kits (
+                    name       TEXT PRIMARY KEY,
+                    created_at INTEGER NOT NULL
+                )
+                """);
+
+            stmt.executeUpdate("""
+                CREATE TABLE IF NOT EXISTS kit_items (
+                    kit_name TEXT    NOT NULL,
+                    item_id  TEXT    NOT NULL,
+                    quantity INTEGER NOT NULL,
+                    PRIMARY KEY (kit_name, item_id),
+                    FOREIGN KEY (kit_name) REFERENCES kits(name) ON DELETE CASCADE
+                )
+                """);
         }
         connection.commit();
     }
@@ -938,6 +955,204 @@ public final class StashDatabase {
             return rs.next() ? rs.getInt(1) : 0;
         } catch (SQLException e) {
             LOGGER.error("Failed to count total items", e);
+            return 0;
+        }
+    }
+
+    // Kit operations
+
+    /** Maximum item slots in a kit (matches shulker box capacity). */
+    public static final int KIT_MAX_SLOTS = 27;
+
+    /** Create a new empty kit. Returns false if the name already exists. */
+    public boolean createKit(String name) {
+        if (!isOpen()) return false;
+        try (PreparedStatement ps = connection.prepareStatement(
+                "INSERT OR IGNORE INTO kits (name, created_at) VALUES (?, ?)")) {
+            ps.setString(1, name);
+            ps.setLong(2, System.currentTimeMillis());
+            int rows = ps.executeUpdate();
+            connection.commit();
+            return rows > 0;
+        } catch (SQLException e) {
+            LOGGER.error("Failed to create kit '{}'", name, e);
+            rollback();
+            return false;
+        }
+    }
+
+    /** Delete a kit and all its items. */
+    public boolean deleteKit(String name) {
+        if (!isOpen()) return false;
+        try {
+            try (PreparedStatement ps = connection.prepareStatement(
+                    "DELETE FROM kit_items WHERE kit_name = ?")) {
+                ps.setString(1, name);
+                ps.executeUpdate();
+            }
+            try (PreparedStatement ps = connection.prepareStatement(
+                    "DELETE FROM kits WHERE name = ?")) {
+                ps.setString(1, name);
+                int rows = ps.executeUpdate();
+                connection.commit();
+                return rows > 0;
+            }
+        } catch (SQLException e) {
+            LOGGER.error("Failed to delete kit '{}'", name, e);
+            rollback();
+            return false;
+        }
+    }
+
+    /** Add or update an item in a kit. Returns false if the kit would exceed 27 slots. */
+    public boolean addKitItem(String kitName, String itemId, int quantity) {
+        if (!isOpen()) return false;
+        try {
+            boolean exists;
+            try (PreparedStatement ps = connection.prepareStatement(
+                    "SELECT 1 FROM kit_items WHERE kit_name = ? AND item_id = ?")) {
+                ps.setString(1, kitName);
+                ps.setString(2, itemId);
+                try (ResultSet rs = ps.executeQuery()) {
+                    exists = rs.next();
+                }
+            }
+
+            if (!exists) {
+                int currentSlots = countKitSlots(kitName);
+                if (currentSlots >= KIT_MAX_SLOTS) return false;
+            }
+
+            try (PreparedStatement ps = connection.prepareStatement(
+                    "INSERT INTO kit_items (kit_name, item_id, quantity) VALUES (?, ?, ?) " +
+                    "ON CONFLICT(kit_name, item_id) DO UPDATE SET quantity = excluded.quantity")) {
+                ps.setString(1, kitName);
+                ps.setString(2, itemId);
+                ps.setInt(3, quantity);
+                ps.executeUpdate();
+            }
+            connection.commit();
+            return true;
+        } catch (SQLException e) {
+            LOGGER.error("Failed to add item to kit '{}'", kitName, e);
+            rollback();
+            return false;
+        }
+    }
+
+    /** Remove an item from a kit. Returns false if the item wasn't in the kit. */
+    public boolean removeKitItem(String kitName, String itemId) {
+        if (!isOpen()) return false;
+        try (PreparedStatement ps = connection.prepareStatement(
+                "DELETE FROM kit_items WHERE kit_name = ? AND item_id = ?")) {
+            ps.setString(1, kitName);
+            ps.setString(2, itemId);
+            int rows = ps.executeUpdate();
+            connection.commit();
+            return rows > 0;
+        } catch (SQLException e) {
+            LOGGER.error("Failed to remove item from kit '{}'", kitName, e);
+            rollback();
+            return false;
+        }
+    }
+
+    /** Save a full kit from a snapshot (replaces all items). Truncates to 27 slots. */
+    public boolean snapshotKit(String kitName, Map<String, Integer> items) {
+        if (!isOpen()) return false;
+        try {
+            try (PreparedStatement ps = connection.prepareStatement(
+                    "INSERT OR IGNORE INTO kits (name, created_at) VALUES (?, ?)")) {
+                ps.setString(1, kitName);
+                ps.setLong(2, System.currentTimeMillis());
+                ps.executeUpdate();
+            }
+
+            try (PreparedStatement ps = connection.prepareStatement(
+                    "DELETE FROM kit_items WHERE kit_name = ?")) {
+                ps.setString(1, kitName);
+                ps.executeUpdate();
+            }
+
+            try (PreparedStatement ps = connection.prepareStatement(
+                    "INSERT INTO kit_items (kit_name, item_id, quantity) VALUES (?, ?, ?)")) {
+                int slots = 0;
+                for (var entry : items.entrySet()) {
+                    if (slots >= KIT_MAX_SLOTS) break;
+                    ps.setString(1, kitName);
+                    ps.setString(2, entry.getKey());
+                    ps.setInt(3, entry.getValue());
+                    ps.addBatch();
+                    slots++;
+                }
+                ps.executeBatch();
+            }
+            connection.commit();
+            return true;
+        } catch (SQLException e) {
+            LOGGER.error("Failed to snapshot kit '{}'", kitName, e);
+            rollback();
+            return false;
+        }
+    }
+
+    /** List all kit names. */
+    public List<String> listKits() {
+        List<String> names = new ArrayList<>();
+        if (!isOpen()) return names;
+        try (Statement stmt = connection.createStatement();
+             ResultSet rs = stmt.executeQuery("SELECT name FROM kits ORDER BY name")) {
+            while (rs.next()) {
+                names.add(rs.getString("name"));
+            }
+        } catch (SQLException e) {
+            LOGGER.error("Failed to list kits", e);
+        }
+        return names;
+    }
+
+    /** Check if a kit exists. */
+    public boolean kitExists(String name) {
+        if (!isOpen()) return false;
+        try (PreparedStatement ps = connection.prepareStatement(
+                "SELECT 1 FROM kits WHERE name = ?")) {
+            ps.setString(1, name);
+            try (ResultSet rs = ps.executeQuery()) {
+                return rs.next();
+            }
+        } catch (SQLException e) {
+            return false;
+        }
+    }
+
+    /** Load all items for a kit. Returns an ordered map of item_id -> quantity. */
+    public Map<String, Integer> loadKitItems(String kitName) {
+        Map<String, Integer> items = new LinkedHashMap<>();
+        if (!isOpen()) return items;
+        try (PreparedStatement ps = connection.prepareStatement(
+                "SELECT item_id, quantity FROM kit_items WHERE kit_name = ? ORDER BY item_id")) {
+            ps.setString(1, kitName);
+            try (ResultSet rs = ps.executeQuery()) {
+                while (rs.next()) {
+                    items.put(rs.getString("item_id"), rs.getInt("quantity"));
+                }
+            }
+        } catch (SQLException e) {
+            LOGGER.error("Failed to load kit items for '{}'", kitName, e);
+        }
+        return items;
+    }
+
+    /** Count unique item slots used in a kit. */
+    public int countKitSlots(String kitName) {
+        if (!isOpen()) return 0;
+        try (PreparedStatement ps = connection.prepareStatement(
+                "SELECT COUNT(*) FROM kit_items WHERE kit_name = ?")) {
+            ps.setString(1, kitName);
+            try (ResultSet rs = ps.executeQuery()) {
+                return rs.next() ? rs.getInt(1) : 0;
+            }
+        } catch (SQLException e) {
             return 0;
         }
     }

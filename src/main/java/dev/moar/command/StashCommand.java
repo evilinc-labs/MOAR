@@ -1,11 +1,17 @@
 package dev.moar.command;
 
 import com.mojang.brigadier.arguments.IntegerArgumentType;
+import com.mojang.brigadier.arguments.StringArgumentType;
 import dev.moar.MoarMod;
 import dev.moar.chest.ChestManager;
+import dev.moar.stash.StashDatabase;
+import dev.moar.stash.StashDatabase.SearchResult;
 import dev.moar.stash.StashManager;
+import dev.moar.stash.StashManager.ContainerEntry;
 import dev.moar.stash.StashOrganizer;
+import dev.moar.stash.StashRetriever;
 import dev.moar.util.ChatHelper;
+import dev.moar.util.ItemIdentifier;
 /*? if >=26.1 {*//*
 import net.fabricmc.fabric.api.client.command.v2.ClientCommands;
 *//*?} else {*/
@@ -23,6 +29,11 @@ import net.minecraft.core.BlockPos;
 import net.minecraft.util.math.BlockPos;
 /*?}*/
 /*? if >=26.1 {*//*
+import net.minecraft.world.item.ItemStack;
+*//*?} else {*/
+import net.minecraft.item.ItemStack;
+/*?}*/
+/*? if >=26.1 {*//*
 import net.minecraft.world.level.block.*;
 import net.minecraft.world.level.block.piston.*;
 *//*?} else {*/
@@ -38,7 +49,9 @@ import net.minecraft.util.hit.HitResult;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 
 // Registers all /stash client commands.
 public final class StashCommand {
@@ -71,6 +84,9 @@ public final class StashCommand {
                 ChatHelper.labelled("Stash", "  §f/stash dump remove §8— unmark nearest dump chest");
                 ChatHelper.labelled("Stash", "  §f/stash dump list §8— show all dump chests");
                 ChatHelper.labelled("Stash", "  §f/stash dump clear §8— clear all dump chests");
+                ChatHelper.labelled("Stash", "  §f/stash kit §8— kit management (create, snapshot, show, etc.)");
+                ChatHelper.labelled("Stash", "  §f/stash search <item> §8— find items in scanned containers");
+                ChatHelper.labelled("Stash", "  §f/stash get <item> §7[count] §8— retrieve items from stash");
                 ChatHelper.labelled("Stash", "§7Scans chests, barrels, shulker boxes, and hoppers.");
                 ChatHelper.labelled("Stash", "§7Uses incremental waypoints for regions beyond render distance.");
                 return 1;
@@ -224,6 +240,8 @@ public final class StashCommand {
             /*?}*/
                     .executes(ctx -> {
                         getManager().stop();
+                        StashRetriever retriever = getManager().getRetriever();
+                        if (retriever.isActive()) retriever.stop();
                         return 1;
                     })
             );
@@ -275,9 +293,98 @@ public final class StashCommand {
             // /stash dump (add, remove, list, clear)
             root.then(buildDumpSubcommand());
 
+            // /stash kit (create, snapshot, add, remove, show, list, delete)
+            root.then(buildKitSubcommand());
+
+            // /stash search <item>
+            /*? if >=26.1 {*//*
+            root.then(ClientCommands.literal("search")
+                    .then(ClientCommands.argument("item", StringArgumentType.greedyString())
+            *//*?} else {*/
+            root.then(ClientCommandManager.literal("search")
+                    .then(ClientCommandManager.argument("item", StringArgumentType.greedyString())
+            /*?}*/
+                            .executes(ctx -> {
+                                String fragment = StringArgumentType.getString(ctx, "item");
+                                StashDatabase db = MoarMod.getDatabase();
+                                if (db == null) {
+                                    ChatHelper.labelled("Stash", "§cDatabase not available.");
+                                    return 0;
+                                }
+                                List<SearchResult> results = db.searchItem(fragment);
+                                if (results.isEmpty()) {
+                                    ChatHelper.labelled("Stash", "§cNo results for '§f" + fragment + "§c'.");
+                                    return 0;
+                                }
+                                int totalItems = results.stream()
+                                        .mapToInt(SearchResult::totalQuantity).sum();
+                                ChatHelper.labelled("Stash", "§lSearch '§e" + fragment
+                                        + "§r§l' — " + totalItems + " items in "
+                                        + results.size() + " container(s):");
+                                int shown = 0;
+                                for (SearchResult sr : results) {
+                                    if (shown >= 10) {
+                                        ChatHelper.labelled("Stash", "§8  ... and "
+                                                + (results.size() - shown) + " more.");
+                                        break;
+                                    }
+                                    StringBuilder line = new StringBuilder();
+                                    line.append(" §7[§e")
+                                        .append(sr.pos().getX()).append(" ")
+                                        .append(sr.pos().getY()).append(" ")
+                                        .append(sr.pos().getZ()).append("§7] ");
+                                    for (var e : sr.matchedItems().entrySet()) {
+                                        String shortId = e.getKey().startsWith("minecraft:")
+                                                ? e.getKey().substring(10) : e.getKey();
+                                        line.append("§f").append(shortId)
+                                            .append(" §7x").append(e.getValue()).append("  ");
+                                    }
+                                    ChatHelper.labelled("Stash", line.toString().trim());
+                                    shown++;
+                                }
+                                return 1;
+                            })
+                    )
+            );
+
+            // /stash get <item> [count]
+            /*? if >=26.1 {*//*
+            root.then(ClientCommands.literal("get")
+                    .then(ClientCommands.argument("item", StringArgumentType.word())
+            *//*?} else {*/
+            root.then(ClientCommandManager.literal("get")
+                    .then(ClientCommandManager.argument("item", StringArgumentType.word())
+            /*?}*/
+                            .executes(ctx -> {
+                                String item = StringArgumentType.getString(ctx, "item");
+                                return handleGet(item, 64);
+                            })
+                            /*? if >=26.1 {*//*
+                            .then(ClientCommands.argument("count", IntegerArgumentType.integer(1))
+                            *//*?} else {*/
+                            .then(ClientCommandManager.argument("count", IntegerArgumentType.integer(1))
+                            /*?}*/
+                                    .executes(ctx -> {
+                                        String item = StringArgumentType.getString(ctx, "item");
+                                        int count = IntegerArgumentType.getInteger(ctx, "count");
+                                        return handleGet(item, count);
+                                    })
+                            )
+                    )
+            );
+
             dispatcher.register(root);
             LOGGER.info("StashCommand: /stash registered");
         });
+    }
+
+    private static int handleGet(String item, int count) {
+        StashRetriever retriever = getManager().getRetriever();
+        if (retriever.isActive()) {
+            ChatHelper.labelled("Stash", "§cRetrieval already in progress. Use §f/stash stop §cto cancel.");
+            return 0;
+        }
+        return retriever.start(item, count) ? 1 : 0;
     }
 
     /** Build the /stash dump sub-tree (add, remove, list, clear). */
@@ -427,6 +534,301 @@ public final class StashCommand {
         );
 
         return dump;
+    }
+
+    /** Build the /stash kit sub-tree. */
+    private static com.mojang.brigadier.builder.LiteralArgumentBuilder<
+            net.fabricmc.fabric.api.client.command.v2.FabricClientCommandSource> buildKitSubcommand() {
+        /*? if >=26.1 {*//*
+        var kit = ClientCommands.literal("kit");
+        *//*?} else {*/
+        var kit = ClientCommandManager.literal("kit");
+        /*?}*/
+
+        // /stash kit  (help)
+        kit.executes(ctx -> {
+            ChatHelper.labelled("Stash", "§7Kit management — save item loadouts (max 27 slots).");
+            ChatHelper.labelled("Stash", "  §f/stash kit create <name> §8— create an empty kit");
+            ChatHelper.labelled("Stash", "  §f/stash kit snapshot <name> §8— snapshot inventory into kit");
+            ChatHelper.labelled("Stash", "  §f/stash kit add <name> <item> [count] §8— add item to kit");
+            ChatHelper.labelled("Stash", "  §f/stash kit remove <name> <item> §8— remove item from kit");
+            ChatHelper.labelled("Stash", "  §f/stash kit show <name> §8— show kit contents & availability");
+            ChatHelper.labelled("Stash", "  §f/stash kit list §8— list all kits");
+            ChatHelper.labelled("Stash", "  §f/stash kit delete <name> §8— delete a kit");
+            return 1;
+        });
+
+        // /stash kit create <name>
+        /*? if >=26.1 {*//*
+        kit.then(ClientCommands.literal("create")
+                .then(ClientCommands.argument("name", StringArgumentType.word())
+        *//*?} else {*/
+        kit.then(ClientCommandManager.literal("create")
+                .then(ClientCommandManager.argument("name", StringArgumentType.word())
+        /*?}*/
+                        .executes(ctx -> {
+                            String name = StringArgumentType.getString(ctx, "name");
+                            StashDatabase db = MoarMod.getDatabase();
+                            if (db == null) {
+                                ChatHelper.labelled("Stash", "§cDatabase not available.");
+                                return 0;
+                            }
+                            if (db.kitExists(name)) {
+                                ChatHelper.labelled("Stash", "§cKit '§e" + name + "§c' already exists.");
+                                return 0;
+                            }
+                            db.createKit(name);
+                            ChatHelper.labelled("Stash", "§aCreated kit '§e" + name + "§a'.");
+                            return 1;
+                        })
+                )
+        );
+
+        // /stash kit snapshot <name>
+        /*? if >=26.1 {*//*
+        kit.then(ClientCommands.literal("snapshot")
+                .then(ClientCommands.argument("name", StringArgumentType.word())
+        *//*?} else {*/
+        kit.then(ClientCommandManager.literal("snapshot")
+                .then(ClientCommandManager.argument("name", StringArgumentType.word())
+        /*?}*/
+                        .executes(ctx -> {
+                            String name = StringArgumentType.getString(ctx, "name");
+                            StashDatabase db = MoarMod.getDatabase();
+                            if (db == null) {
+                                ChatHelper.labelled("Stash", "§cDatabase not available.");
+                                return 0;
+                            }
+                            /*? if >=26.1 {*//*
+                            Minecraft mc = Minecraft.getInstance();
+                            *//*?} else {*/
+                            MinecraftClient mc = MinecraftClient.getInstance();
+                            /*?}*/
+                            if (mc.player == null) return 0;
+
+                            if (!db.kitExists(name)) {
+                                db.createKit(name);
+                            }
+
+                            Map<String, Integer> items = new LinkedHashMap<>();
+                            for (int i = 0; i < 36; i++) {
+                                /*? if >=26.1 {*//*
+                                ItemStack stack = mc.player.getInventory().getItem(i);
+                                *//*?} else {*/
+                                ItemStack stack = mc.player.getInventory().getStack(i);
+                                /*?}*/
+                                if (stack.isEmpty()) continue;
+                                String itemId = ItemIdentifier.getItemId(stack);
+                                items.merge(itemId, stack.getCount(), Integer::sum);
+                            }
+
+                            if (items.isEmpty()) {
+                                ChatHelper.labelled("Stash", "§cInventory is empty — nothing to snapshot.");
+                                return 0;
+                            }
+
+                            int uniqueBefore = items.size();
+                            db.snapshotKit(name, items);
+                            int slots = db.countKitSlots(name);
+                            String msg = "§aSnapshot saved to kit '§e" + name + "§a' (" + slots + " slots).";
+                            if (uniqueBefore > StashDatabase.KIT_MAX_SLOTS) {
+                                msg += " §e(Truncated from " + uniqueBefore + " unique items to " + StashDatabase.KIT_MAX_SLOTS + ".)";
+                            }
+                            ChatHelper.labelled("Stash", msg);
+                            return 1;
+                        })
+                )
+        );
+
+        // /stash kit add <name> <item> [count]
+        /*? if >=26.1 {*//*
+        kit.then(ClientCommands.literal("add")
+                .then(ClientCommands.argument("name", StringArgumentType.word())
+                        .then(ClientCommands.argument("item", StringArgumentType.word())
+        *//*?} else {*/
+        kit.then(ClientCommandManager.literal("add")
+                .then(ClientCommandManager.argument("name", StringArgumentType.word())
+                        .then(ClientCommandManager.argument("item", StringArgumentType.word())
+        /*?}*/
+                                .executes(ctx -> {
+                                    return handleKitAdd(ctx, 1);
+                                })
+                                /*? if >=26.1 {*//*
+                                .then(ClientCommands.argument("count", IntegerArgumentType.integer(1))
+                                *//*?} else {*/
+                                .then(ClientCommandManager.argument("count", IntegerArgumentType.integer(1))
+                                /*?}*/
+                                        .executes(ctx -> {
+                                            int count = IntegerArgumentType.getInteger(ctx, "count");
+                                            return handleKitAdd(ctx, count);
+                                        })
+                                )
+                        )
+                )
+        );
+
+        // /stash kit remove <name> <item>
+        /*? if >=26.1 {*//*
+        kit.then(ClientCommands.literal("remove")
+                .then(ClientCommands.argument("name", StringArgumentType.word())
+                        .then(ClientCommands.argument("item", StringArgumentType.word())
+        *//*?} else {*/
+        kit.then(ClientCommandManager.literal("remove")
+                .then(ClientCommandManager.argument("name", StringArgumentType.word())
+                        .then(ClientCommandManager.argument("item", StringArgumentType.word())
+        /*?}*/
+                                .executes(ctx -> {
+                                    String name = StringArgumentType.getString(ctx, "name");
+                                    String item = StringArgumentType.getString(ctx, "item");
+                                    StashDatabase db = MoarMod.getDatabase();
+                                    if (db == null) {
+                                        ChatHelper.labelled("Stash", "§cDatabase not available.");
+                                        return 0;
+                                    }
+                                    if (!db.kitExists(name)) {
+                                        ChatHelper.labelled("Stash", "§cKit '§e" + name + "§c' not found.");
+                                        return 0;
+                                    }
+                                    if (db.removeKitItem(name, item)) {
+                                        ChatHelper.labelled("Stash", "§aRemoved '§f" + item + "§a' from kit '§e" + name + "§a'.");
+                                    } else {
+                                        ChatHelper.labelled("Stash", "§cItem '§f" + item + "§c' not in kit '§e" + name + "§c'.");
+                                    }
+                                    return 1;
+                                })
+                        )
+                )
+        );
+
+        // /stash kit show <name>
+        /*? if >=26.1 {*//*
+        kit.then(ClientCommands.literal("show")
+                .then(ClientCommands.argument("name", StringArgumentType.word())
+        *//*?} else {*/
+        kit.then(ClientCommandManager.literal("show")
+                .then(ClientCommandManager.argument("name", StringArgumentType.word())
+        /*?}*/
+                        .executes(ctx -> {
+                            String name = StringArgumentType.getString(ctx, "name");
+                            StashDatabase db = MoarMod.getDatabase();
+                            if (db == null) {
+                                ChatHelper.labelled("Stash", "§cDatabase not available.");
+                                return 0;
+                            }
+                            if (!db.kitExists(name)) {
+                                ChatHelper.labelled("Stash", "§cKit '§e" + name + "§c' not found.");
+                                return 0;
+                            }
+                            Map<String, Integer> kitItems = db.loadKitItems(name);
+                            if (kitItems.isEmpty()) {
+                                ChatHelper.labelled("Stash", "Kit '§e" + name + "§f' is empty.");
+                                return 1;
+                            }
+
+                            // Build aggregate item totals from the stash index
+                            Map<String, Integer> stashTotals = new LinkedHashMap<>();
+                            for (ContainerEntry entry : getManager().getIndex().values()) {
+                                for (var e : entry.items().entrySet()) {
+                                    stashTotals.merge(e.getKey(), e.getValue(), Integer::sum);
+                                }
+                            }
+
+                            ChatHelper.labelled("Stash", "§lKit '§e" + name + "§r§l' (" + kitItems.size() + " slots):");
+                            int fulfilled = 0;
+                            for (var e : kitItems.entrySet()) {
+                                String itemId = e.getKey();
+                                int needed = e.getValue();
+                                int available = stashTotals.getOrDefault(itemId, 0);
+                                boolean ok = available >= needed;
+                                if (ok) fulfilled++;
+                                String symbol = ok ? "§a✓" : "§c✗";
+                                String shortId = itemId.startsWith("minecraft:") ? itemId.substring(10) : itemId;
+                                ChatHelper.labelled("Stash", " " + symbol + " §f" + shortId
+                                        + " §7x" + needed + " §8(stash: " + available + ")");
+                            }
+                            ChatHelper.labelled("Stash", "§7Fulfilled: " + fulfilled + "/" + kitItems.size());
+                            return 1;
+                        })
+                )
+        );
+
+        // /stash kit list
+        /*? if >=26.1 {*//*
+        kit.then(ClientCommands.literal("list")
+        *//*?} else {*/
+        kit.then(ClientCommandManager.literal("list")
+        /*?}*/
+                .executes(ctx -> {
+                    StashDatabase db = MoarMod.getDatabase();
+                    if (db == null) {
+                        ChatHelper.labelled("Stash", "§cDatabase not available.");
+                        return 0;
+                    }
+                    List<String> kits = db.listKits();
+                    if (kits.isEmpty()) {
+                        ChatHelper.labelled("Stash", "No kits defined. Use §f/stash kit create <name>§7.");
+                        return 1;
+                    }
+                    ChatHelper.labelled("Stash", "§lKits (" + kits.size() + "):");
+                    for (String k : kits) {
+                        int slots = db.countKitSlots(k);
+                        ChatHelper.labelled("Stash", " §7- §e" + k + " §8(" + slots + " slots)");
+                    }
+                    return 1;
+                })
+        );
+
+        // /stash kit delete <name>
+        /*? if >=26.1 {*//*
+        kit.then(ClientCommands.literal("delete")
+                .then(ClientCommands.argument("name", StringArgumentType.word())
+        *//*?} else {*/
+        kit.then(ClientCommandManager.literal("delete")
+                .then(ClientCommandManager.argument("name", StringArgumentType.word())
+        /*?}*/
+                        .executes(ctx -> {
+                            String name = StringArgumentType.getString(ctx, "name");
+                            StashDatabase db = MoarMod.getDatabase();
+                            if (db == null) {
+                                ChatHelper.labelled("Stash", "§cDatabase not available.");
+                                return 0;
+                            }
+                            if (!db.kitExists(name)) {
+                                ChatHelper.labelled("Stash", "§cKit '§e" + name + "§c' not found.");
+                                return 0;
+                            }
+                            db.deleteKit(name);
+                            ChatHelper.labelled("Stash", "§aDeleted kit '§e" + name + "§a'.");
+                            return 1;
+                        })
+                )
+        );
+
+        return kit;
+    }
+
+    private static int handleKitAdd(com.mojang.brigadier.context.CommandContext<
+            net.fabricmc.fabric.api.client.command.v2.FabricClientCommandSource> ctx, int count) {
+        String name = StringArgumentType.getString(ctx, "name");
+        String item = StringArgumentType.getString(ctx, "item");
+        StashDatabase db = MoarMod.getDatabase();
+        if (db == null) {
+            ChatHelper.labelled("Stash", "§cDatabase not available.");
+            return 0;
+        }
+        if (!db.kitExists(name)) {
+            ChatHelper.labelled("Stash", "§cKit '§e" + name + "§c' not found. Create it first.");
+            return 0;
+        }
+        if (db.addKitItem(name, item, count)) {
+            int slots = db.countKitSlots(name);
+            ChatHelper.labelled("Stash", "§aAdded §f" + item + " §7x" + count
+                    + "§a to kit '§e" + name + "§a'. §8(" + slots + "/" + StashDatabase.KIT_MAX_SLOTS + " slots)");
+        } else {
+            ChatHelper.labelled("Stash", "§cKit '§e" + name + "§c' is full ("
+                    + StashDatabase.KIT_MAX_SLOTS + " slots). Remove an item first.");
+        }
+        return 1;
     }
 
     /** Find the container block the player is targeting (crosshair > feet > below). */
