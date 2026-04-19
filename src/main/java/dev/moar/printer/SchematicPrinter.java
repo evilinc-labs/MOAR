@@ -279,7 +279,9 @@ public class SchematicPrinter {
     private static final int SKIPPED_RECHECK_INTERVAL = 200; // ~10s
     /** Max consecutive server-rejected placements before repositioning. */
     private static final int SERVER_REJECT_THRESHOLD = 6;
-    /** True when placing deferred liquids (after all solids done). */
+    /** True during the redstone placement pass. */
+    private boolean redstonePass;
+    /** True during the liquid placement pass. */
     private boolean liquidPass;
     /** True if waypoint-based supply retry was already attempted. */
     private boolean triedWaypointRestock;
@@ -387,6 +389,8 @@ public class SchematicPrinter {
     private int  cachedCountRemaining = -1;
     private long solidsCacheTick = Long.MIN_VALUE;
     private boolean cachedHasSolids;
+    private long redstoneCacheTick = Long.MIN_VALUE;
+    private boolean cachedHasRedstone;
     private long liquidsCacheTick = Long.MIN_VALUE;
     private boolean cachedHasLiquids;
 
@@ -468,6 +472,7 @@ public class SchematicPrinter {
         restockFailures = 0;
         unreachableChests.clear();
         skippedItems.clear();
+        redstonePass = false;
         liquidPass = false;
         triedWaypointRestock = false;
         triedLinearRestock = false;
@@ -1162,9 +1167,9 @@ public class SchematicPrinter {
         // consecutive placements, the player is in an invalid position
         // (e.g. swimming, falling, wrong angle).  Stop trying to place
         // and navigate to a better position.
-        if (PlacementEngine.getConsecutiveRejections() >= SERVER_REJECT_THRESHOLD) {
+        if (PlacementEngine.getConsecutiveFailures() >= SERVER_REJECT_THRESHOLD) {
             PlacementEngine.resetRejectionCounters();
-            LOGGER.debug("Server rejected {} placements — repositioning",
+            LOGGER.debug("Server failed to confirm {} placements — repositioning",
                     SERVER_REJECT_THRESHOLD);
             if (!tryWalkToNextZone(mc)) {
                 /*? if >=26.1 {*//*
@@ -1406,15 +1411,31 @@ public class SchematicPrinter {
                         return;
                     }
                 }
-                // All solid blocks done — transition to liquid pass
-                // if there are remaining water/lava source blocks.
-                // Double-check that solids are TRULY done — the stuck
-                // loop can exhaust zones via failedZones while blocks
-                // remain.  Only switch to liquid pass when confirmed.
+                // Structural done — switch to redstone pass if any remain.
                 /*? if >=26.1 {*//*
-                if (!liquidPass && !hasRemainingSolids(mc.level)
+                if (!redstonePass && !liquidPass && !hasRemainingSolids(mc.level)
                 *//*?} else {*/
-                if (!liquidPass && !hasRemainingSolids(mc.world)
+                if (!redstonePass && !liquidPass && !hasRemainingSolids(mc.world)
+                /*?}*/
+                        /*? if >=26.1 {*//*
+                        && hasRemainingRedstone(mc.level)) {
+                        *//*?} else {*/
+                        && hasRemainingRedstone(mc.world)) {
+                        /*?}*/
+                    redstonePass = true;
+                    noProgressTicks = 0;
+                    stuckCycles = 0;
+                    failedZones.clear();
+                    if (statusMessages) {
+                        ChatHelper.info("§bStructural blocks done — placing redstone components...");
+                    }
+                    autoState = AutoState.BUILDING;
+                    return;
+                }
+                /*? if >=26.1 {*//*
+                if (!liquidPass && !hasRemainingSolids(mc.level) && !hasRemainingRedstone(mc.level)
+                *//*?} else {*/
+                if (!liquidPass && !hasRemainingSolids(mc.world) && !hasRemainingRedstone(mc.world)
                 /*?}*/
                         /*? if >=26.1 {*//*
                         && hasRemainingLiquids(mc.level)) {
@@ -1422,12 +1443,13 @@ public class SchematicPrinter {
                         && hasRemainingLiquids(mc.world)) {
                         /*?}*/
                     liquidPass = true;
+                    redstonePass = false;
                     noProgressTicks = 0;
                     stuckCycles = 0;
                     failedZones.clear();
                     PathWalker.stop(); // stop Baritone — it can't path through liquids
                     if (statusMessages) {
-                        ChatHelper.info("§bSolid blocks done — placing liquids...");
+                        ChatHelper.info("§bRedstone done — placing liquids...");
                     }
                     autoState = AutoState.BUILDING;
                     return;
@@ -1452,6 +1474,7 @@ public class SchematicPrinter {
 
                 // Build appears complete — check for scaffold to clean up.
                 liquidPass = false; // reset for next build
+                redstonePass = false;
                 MoarMod.getChestManager().clearSnapshots();
                 if (PrinterDatabase.hasScaffold()) {
                     autoState = AutoState.CLEANING_SCAFFOLD;
@@ -3269,14 +3292,12 @@ public class SchematicPrinter {
         *//*?} else {*/
         BlockPos playerFeet = player.getBlockPos();
         /*?}*/
-        /*? if >=26.1 {*//*
-        BlockPos playerHead = playerFeet.above();
-        *//*?} else {*/
-        BlockPos playerHead = playerFeet.up();
-        /*?}*/
-        // Search in a wider area around the player, including below
+        // Skip positions overlapping the player bounding box (0.6×1.8).
+        // Prefer non-interactive support blocks to avoid chest/barrel GUI.
+        double px = player.getX(), py = player.getY(), pz = player.getZ();
         BlockPos best = null;
         double bestDist = Double.MAX_VALUE;
+        boolean bestIsInteractive = true;
         for (int dx = -3; dx <= 3; dx++) {
             for (int dz = -3; dz <= 3; dz++) {
                 for (int dy = -1; dy <= 1; dy++) {
@@ -3285,8 +3306,12 @@ public class SchematicPrinter {
                     *//*?} else {*/
                     BlockPos pos = playerFeet.add(dx, dy, dz);
                     /*?}*/
-                    // Don't place where the player is standing
-                    if (pos.equals(playerFeet) || pos.equals(playerHead)) continue;
+                    // Skip: player collision
+                    if (px - 0.3 < pos.getX() + 1 && px + 0.3 > pos.getX()
+                            && py < pos.getY() + 1 && py + 1.8 > pos.getY()
+                            && pz - 0.3 < pos.getZ() + 1 && pz + 0.3 > pos.getZ()) {
+                        continue;
+                    }
                     BlockState state = world.getBlockState(pos);
                     /*? if >=26.1 {*//*
                     BlockState below = world.getBlockState(pos.below());
@@ -3320,9 +3345,18 @@ public class SchematicPrinter {
                         *//*?} else {*/
                         double dist = player.getEyePos().squaredDistanceTo(Vec3d.ofCenter(pos));
                         /*?}*/
-                        if (dist <= 4.5 * 4.5 && dist < bestDist) {
-                            bestDist = dist;
+                        if (dist > 4.5 * 4.5) continue;
+                        boolean interactive = PlacementEngine.isInteractive(below.getBlock());
+                        // Prefer non-interactive support, then nearest
+                        if (bestIsInteractive && !interactive) {
+                            // non-interactive wins
                             best = pos;
+                            bestDist = dist;
+                            bestIsInteractive = false;
+                        } else if (interactive == bestIsInteractive && dist < bestDist) {
+                            best = pos;
+                            bestDist = dist;
+                            bestIsInteractive = interactive;
                         }
                     }
                 }
@@ -3849,12 +3883,11 @@ public class SchematicPrinter {
                         MathHelper.clamp(placePitch, -90.0f, 90.0f));
                         /*?}*/
 
-                // Wait one more tick after rotating for the server to
-                // receive the updated look direction.
+                // Wait for server to process look rotation.
                 if (shulkerUnloadTicks < 4) return;
 
-                // Release sneak so we place the block, not use the held item
-                Runnable restoreSneak = PlacementEngine.releaseForInteraction(player);
+                // Sneak to place on interactive blocks (chests, barrels…)
+                Runnable restoreSneak = PlacementEngine.ensureSneakForPlacement(player);
 
                 // Place the shulker on top of the block below the target
                 BlockHitResult hit = new BlockHitResult(
@@ -4426,13 +4459,31 @@ public class SchematicPrinter {
             return; // still missing, stay idle
         }
 
-        // Normal idle scan — look for unfinished zones (e.g. build complete check)
-        // Also check for deferred liquids that haven't been placed yet.
-        // Only switch to liquid pass when ALL solid blocks are confirmed done.
+        // Phase transitions: structural → redstone → liquid
         /*? if >=26.1 {*//*
-        if (!liquidPass && !hasRemainingSolids(mc.level)
+        if (!redstonePass && !liquidPass && !hasRemainingSolids(mc.level)
         *//*?} else {*/
-        if (!liquidPass && !hasRemainingSolids(mc.world)
+        if (!redstonePass && !liquidPass && !hasRemainingSolids(mc.world)
+        /*?}*/
+                /*? if >=26.1 {*//*
+                && hasRemainingRedstone(mc.level)) {
+                *//*?} else {*/
+                && hasRemainingRedstone(mc.world)) {
+                /*?}*/
+            redstonePass = true;
+            noProgressTicks = 0;
+            stuckCycles = 0;
+            failedZones.clear();
+            if (statusMessages) {
+                ChatHelper.info("§bResuming — placing redstone components...");
+            }
+            autoState = AutoState.BUILDING;
+            return;
+        }
+        /*? if >=26.1 {*//*
+        if (!liquidPass && !hasRemainingSolids(mc.level) && !hasRemainingRedstone(mc.level)
+        *//*?} else {*/
+        if (!liquidPass && !hasRemainingSolids(mc.world) && !hasRemainingRedstone(mc.world)
         /*?}*/
                 /*? if >=26.1 {*//*
                 && hasRemainingLiquids(mc.level)) {
@@ -4440,6 +4491,7 @@ public class SchematicPrinter {
                 && hasRemainingLiquids(mc.world)) {
                 /*?}*/
             liquidPass = true;
+            redstonePass = false;
             noProgressTicks = 0;
             stuckCycles = 0;
             failedZones.clear();
@@ -5146,10 +5198,16 @@ public class SchematicPrinter {
                         /*?}*/
                         if (isEffectivelyPlaced(world.getBlockState(new BlockPos(wx, wy, wz)), target)) continue;
 
-                        // Liquid deferral — only count items for the current pass
+                        // Three-pass deferral — only count items for the current pass
                         boolean isLiquid = isLiquidSource(target);
-                        if (!liquidPass && isLiquid) continue;
-                        if (liquidPass && !isLiquid) continue;
+                        boolean isRedstone = !isLiquid && BlockDependency.isRedstoneComponent(target);
+                        if (liquidPass) {
+                            if (!isLiquid) continue;
+                        } else if (redstonePass) {
+                            if (!isRedstone) continue;
+                        } else {
+                            if (isLiquid || isRedstone) continue;
+                        }
 
                         /*? if >=26.1 {*//*
                         double distSq = playerPos.distSqr(new BlockPos(wx, wy, wz));
@@ -5385,6 +5443,21 @@ public class SchematicPrinter {
                     /*?}*/
         }
 
+        // Reserve a slot for the shulker if one is needed from this chest.
+        boolean hasNeededShulker = false;
+        for (int slot = 0; slot < chestSlots; slot++) {
+            /*? if >=26.1 {*//*
+            ItemStack stack = handler.getSlot(slot).getItem();
+            *//*?} else {*/
+            ItemStack stack = handler.getSlot(slot).getStack();
+            /*?}*/
+            if (isShulkerBox(stack) && shulkerContainsNeeded(stack, neededItems)) {
+                hasNeededShulker = true;
+                break;
+            }
+        }
+        int reservedFreeSlots = hasNeededShulker ? 1 : 0;
+
         // Pass 1: grab all loose (non-shulker) needed items
         for (int slot = 0; slot < chestSlots; slot++) {
             /*? if >=26.1 {*//*
@@ -5400,6 +5473,36 @@ public class SchematicPrinter {
             String itemId = Registries.ITEM.getId(stack.getItem()).toString();
             /*?}*/
             if (neededItems.contains(itemId) && !isShulkerBox(stack)) {
+                boolean wouldStack = false;
+                int freeSlots = 0;
+                for (int pi = playerSlotStart; pi < playerSlotEnd; pi++) {
+                    /*? if >=26.1 {*//*
+                    ItemStack invStack = handler.getSlot(pi).getItem();
+                    *//*?} else {*/
+                    ItemStack invStack = handler.getSlot(pi).getStack();
+                    /*?}*/
+                    if (invStack.isEmpty()) {
+                        freeSlots++;
+                        continue;
+                    }
+                    if (
+                            /*? if >=26.1 {*//*
+                            ItemStack.isSameItem(invStack, stack)
+                            *//*?} else {*/
+                            ItemStack.areItemsEqual(invStack, stack)
+                            /*?}*/
+                            /*? if >=26.1 {*//*
+                            && invStack.getCount() < invStack.getMaxStackSize()) {
+                            *//*?} else {*/
+                            && invStack.getCount() < invStack.getMaxCount()) {
+                            /*?}*/
+                        wouldStack = true;
+                        break;
+                    }
+                }
+                if (!wouldStack && freeSlots <= reservedFreeSlots) {
+                    continue;
+                }
                 /*? if >=26.1 {*//*
                 mc.gameMode.handleContainerInput(
                 *//*?} else {*/
@@ -5504,8 +5607,7 @@ public class SchematicPrinter {
         BlockPos.Mutable mutablePos = new BlockPos.Mutable();
         /*?}*/
 
-        // Scan all Y-levels; prefer lowest unbuilt layer, progressing
-        // to higher layers when lower ones are all in failedZones.
+        // Scan Y-levels bottom-up, skipping failedZones.
         for (LitematicaSchematic.Region region : schematic.getRegions()) {
             for (int y = 0; y < region.absY; y++) {
                 for (int z = 0; z < region.absZ; z++) {
@@ -5515,11 +5617,16 @@ public class SchematicPrinter {
                         if (!isPlaceable(target) && !isLiquidSource(target)) continue;
                         if (isAutoCreatedPart(target)) continue;
 
-                        // Liquid deferral — skip liquids during solid pass,
-                        // skip solids during liquid pass
+                        // Three-pass deferral — structural → redstone → liquid
                         boolean isLiquid = isLiquidSource(target);
-                        if (!liquidPass && isLiquid) continue;
-                        if (liquidPass && !isLiquid) continue;
+                        boolean isRedstone = !isLiquid && BlockDependency.isRedstoneComponent(target);
+                        if (liquidPass) {
+                            if (!isLiquid) continue;
+                        } else if (redstonePass) {
+                            if (!isRedstone) continue;
+                        } else {
+                            if (isLiquid || isRedstone) continue;
+                        }
 
                         int wx = anchor.getX() + region.originX + x;
                         int wy = anchor.getY() + region.originY + y;
@@ -5861,10 +5968,60 @@ public class SchematicPrinter {
                         if (target.isAir()) continue;
                         if (!isPlaceable(target)) continue;
                         if (isAutoCreatedPart(target)) continue;
-                        // Only count solid blocks — liquids are handled
-                        // separately by hasRemainingLiquids
+                        // Structural only — skip liquids and redstone
                         if (isLiquidSource(target)) continue;
+                        if (BlockDependency.isRedstoneComponent(target)) continue;
 
+                        int wx = anchor.getX() + region.originX + x;
+                        int wy = anchor.getY() + region.originY + y;
+                        int wz = anchor.getZ() + region.originZ + z;
+                        /*? if >=26.1 {*//*
+                        if (!world.hasChunk(wx >> 4, wz >> 4)) continue;
+                        *//*?} else {*/
+                        if (!world.isChunkLoaded(wx >> 4, wz >> 4)) continue;
+                        /*?}*/
+                        if (!isEffectivelyPlaced(world.getBlockState(new BlockPos(wx, wy, wz)), target)) {
+                            return true;
+                        }
+                    }
+                }
+            }
+        }
+        return false;
+    }
+
+    /** True if unplaced redstone components remain (TTL-cached). */
+    /*? if >=26.1 {*//*
+    private boolean hasRemainingRedstone(Level world) {
+    *//*?} else {*/
+    private boolean hasRemainingRedstone(World world) {
+    /*?}*/
+        if (schematic == null || anchor == null) return false;
+        /*? if >=26.1 {*//*
+        long tick = world.getGameTime();
+        *//*?} else {*/
+        long tick = world.getTime();
+        /*?}*/
+        if (tick - redstoneCacheTick < REMAINING_CACHE_TTL) return cachedHasRedstone;
+        redstoneCacheTick = tick;
+        cachedHasRedstone = hasRemainingRedstoneUncached(world);
+        return cachedHasRedstone;
+    }
+
+    /*? if >=26.1 {*//*
+    private boolean hasRemainingRedstoneUncached(Level world) {
+    *//*?} else {*/
+    private boolean hasRemainingRedstoneUncached(World world) {
+    /*?}*/
+        for (LitematicaSchematic.Region region : schematic.getRegions()) {
+            for (int y = 0; y < region.absY; y++) {
+                for (int z = 0; z < region.absZ; z++) {
+                    for (int x = 0; x < region.absX; x++) {
+                        BlockState target = region.getBlockState(x, y, z);
+                        if (target.isAir()) continue;
+                        if (!isPlaceable(target)) continue;
+                        if (isAutoCreatedPart(target)) continue;
+                        if (!BlockDependency.isRedstoneComponent(target)) continue;
                         int wx = anchor.getX() + region.originX + x;
                         int wy = anchor.getY() + region.originY + y;
                         int wz = anchor.getZ() + region.originZ + z;
@@ -6106,6 +6263,11 @@ public class SchematicPrinter {
 
         // Note blocks — INSTRUMENT is neighbor-computed, NOTE and POWERED are dynamic
         if (block instanceof NoteBlock) {
+            return true;
+        }
+
+        // Shulker boxes — FACING is cosmetic, same color is enough
+        if (block instanceof ShulkerBoxBlock) {
             return true;
         }
 
@@ -6778,11 +6940,16 @@ public class SchematicPrinter {
                     if (!isPlaceable(target) && !isLiquidSource(target)) continue;
                     if (isAutoCreatedPart(target)) continue;
 
-                    // Liquid deferral: skip liquids during normal build,
-                    // skip solids during liquid pass
+                    // Three-pass deferral: structural → redstone → liquid.
                     boolean isLiquid = isLiquidSource(target);
-                    if (!liquidPass && isLiquid) continue;
-                    if (liquidPass && !isLiquid) continue;
+                    boolean isRedstone = !isLiquid && BlockDependency.isRedstoneComponent(target);
+                    if (liquidPass) {
+                        if (!isLiquid) continue;
+                    } else if (redstonePass) {
+                        if (!isRedstone) continue;
+                    } else {
+                        if (isLiquid || isRedstone) continue;
+                    }
 
                     // This block needs placing — count it for debug
                     dbgTotal++;

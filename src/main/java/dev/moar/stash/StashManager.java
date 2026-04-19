@@ -124,10 +124,12 @@ public final class StashManager {
     private static final Logger LOGGER = LoggerFactory.getLogger("MOAR/Stash");
 
     private final StashOrganizer organizer = new StashOrganizer();
+    private final StashRetriever retriever = new StashRetriever();
 
     { organizer.setStashManager(this); }
 
     public StashOrganizer getOrganizer() { return organizer; }
+    public StashRetriever getRetriever() { return retriever; }
 
     // State machine
 
@@ -378,6 +380,7 @@ public final class StashManager {
 
     public void tick() {
         organizer.tick();
+        retriever.tick();
         if (state == State.IDLE || state == State.DONE) return;
 
         /*? if >=26.1 {*//*
