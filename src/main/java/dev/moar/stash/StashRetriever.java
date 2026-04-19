@@ -1,6 +1,7 @@
 package dev.moar.stash;
 
 import dev.moar.MoarMod;
+import dev.moar.chest.ChestManager;
 import dev.moar.stash.StashDatabase.SearchResult;
 import dev.moar.util.ChatHelper;
 import dev.moar.util.ItemIdentifier;
@@ -71,7 +72,11 @@ import org.slf4j.LoggerFactory;
 
 import java.util.ArrayDeque;
 import java.util.Deque;
+import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Map;
+import java.util.Set;
 
 /**
  * Lightweight state machine that walks to containers and retrieves items
@@ -93,6 +98,9 @@ public final class StashRetriever {
     private String targetItemId;
     private int targetCount;
     private int takenCount;
+
+    /** Kit-mode: item_id -> quantity still needed. null for single-item mode. */
+    private Map<String, Integer> kitRemaining;
 
     // Walking / opening
     private final Deque<BlockPos> containerQueue = new ArrayDeque<>();
@@ -182,11 +190,66 @@ public final class StashRetriever {
         targetItemId = exactId;
         targetCount = count;
         takenCount = 0;
+        kitRemaining = null;
 
         advanceToNextContainer();
         String shortId = exactId.startsWith("minecraft:") ? exactId.substring(10) : exactId;
         ChatHelper.labelled("Stash", "§aRetrieving §f" + shortId + " §7x" + count
                 + " §afrom " + containerQueue.size() + " container(s)...");
+        return true;
+    }
+
+    /** Start kit-mode retrieval: find kit items in stash DB, walk to containers, collect. */
+    public boolean startKit(String kitName, Map<String, Integer> kitItems) {
+        StashDatabase db = MoarMod.getDatabase();
+        if (db == null) {
+            ChatHelper.labelled("Stash", "§cDatabase not available.");
+            return false;
+        }
+
+        /*? if >=26.1 {*//*
+        Minecraft mc = Minecraft.getInstance();
+        *//*?} else {*/
+        MinecraftClient mc = MinecraftClient.getInstance();
+        /*?}*/
+        if (mc == null || mc.player == null) return false;
+
+        /*? if >=26.1 {*//*
+        BlockPos playerPos = mc.player.blockPosition();
+        *//*?} else {*/
+        BlockPos playerPos = mc.player.getBlockPos();
+        /*?}*/
+
+        // Find containers holding kit items (incl. shulker contents).
+        Map<BlockPos, Map<String, Integer>> containerMap = db.findContainersForExactItems(kitItems.keySet());
+        Set<BlockPos> containers = containerMap.keySet();
+
+        if (containers.isEmpty()) {
+            ChatHelper.labelled("Stash", "§cNo containers found holding items from kit '§e" + kitName + "§c'.");
+            return false;
+        }
+
+        // Sort by distance to player
+        List<BlockPos> sorted = new java.util.ArrayList<>(containers);
+        sorted.sort((a, b) -> {
+            /*? if >=26.1 {*//*
+            return Double.compare(playerPos.distSqr(a), playerPos.distSqr(b));
+            *//*?} else {*/
+            return Double.compare(playerPos.getSquaredDistance(a), playerPos.getSquaredDistance(b));
+            /*?}*/
+        });
+
+        containerQueue.clear();
+        containerQueue.addAll(sorted);
+
+        kitRemaining = new LinkedHashMap<>(kitItems);
+        targetItemId = null;
+        targetCount = 0;
+        takenCount = 0;
+
+        advanceToNextContainer();
+        ChatHelper.labelled("Stash", "§aLoading kit '§e" + kitName + "§a' (" + kitItems.size()
+                + " items from " + containers.size() + " container(s))...");
         return true;
     }
 
@@ -206,6 +269,7 @@ public final class StashRetriever {
         }
         state = State.IDLE;
         containerQueue.clear();
+        kitRemaining = null;
         ChatHelper.labelled("Stash", "§eRetrieval stopped.");
     }
 
@@ -367,7 +431,7 @@ public final class StashRetriever {
         if (actionCooldown > 0) { actionCooldown--; return; }
 
         // Check if we've taken enough
-        if (takenCount >= targetCount) {
+        if (isDone()) {
             /*? if >=26.1 {*//*
             mc.player.clientSideCloseContainer();
             *//*?} else {*/
@@ -405,9 +469,22 @@ public final class StashRetriever {
             /*?}*/
             if (!stack.isEmpty()) {
                 String itemId = ItemIdentifier.getItemId(stack);
-                if (itemId.equals(targetItemId)) {
+                boolean wanted = isWanted(itemId);
+
+                // If not directly wanted, check if it's a shulker containing wanted items
+                if (!wanted && ChestManager.isShulkerBox(stack)) {
+                    Map<String, Integer> contents = ItemIdentifier.readShulkerContents(stack);
+                    for (String innerItem : contents.keySet()) {
+                        if (isWanted(innerItem)) {
+                            wanted = true;
+                            break;
+                        }
+                    }
+                }
+
+                if (wanted) {
                     if (!hasInventoryRoom(mc.player)) {
-                        ChatHelper.labelled("Stash", "§eInventory full. Retrieved §f" + takenCount + "§e items.");
+                        ChatHelper.labelled("Stash", "§eInventory full.");
                         /*? if >=26.1 {*//*
                         mc.player.clientSideCloseContainer();
                         *//*?} else {*/
@@ -436,7 +513,19 @@ public final class StashRetriever {
                             /*?}*/
                             mc.player
                     );
-                    takenCount += stack.getCount();
+
+                    // If we took a shulker, count the inner contents toward fulfillment
+                    if (ChestManager.isShulkerBox(stack)) {
+                        Map<String, Integer> contents = ItemIdentifier.readShulkerContents(stack);
+                        for (var e : contents.entrySet()) {
+                            if (isWanted(e.getKey())) {
+                                recordTaken(e.getKey(), e.getValue());
+                            }
+                        }
+                    } else {
+                        recordTaken(itemId, stack.getCount());
+                    }
+
                     actionSlotIndex++;
                     actionCooldown = CLICK_COOLDOWN_TICKS;
                     return;
@@ -470,12 +559,55 @@ public final class StashRetriever {
         PathWalker.stop();
         state = State.IDLE;
         containerQueue.clear();
-        String shortId = targetItemId.startsWith("minecraft:") ? targetItemId.substring(10) : targetItemId;
-        if (takenCount > 0) {
-            ChatHelper.labelled("Stash", "§aRetrieved §f" + shortId + " §7x" + takenCount + "§a.");
+        if (kitRemaining != null) {
+            if (kitRemaining.isEmpty()) {
+                ChatHelper.labelled("Stash", "§aKit fully loaded.");
+            } else {
+                ChatHelper.labelled("Stash", "§eKit partially loaded. Still need:");
+                for (var e : kitRemaining.entrySet()) {
+                    String shortId = e.getKey().startsWith("minecraft:") ? e.getKey().substring(10) : e.getKey();
+                    ChatHelper.labelled("Stash", " §c" + shortId + " §7x" + e.getValue());
+                }
+            }
+            kitRemaining = null;
         } else {
-            ChatHelper.labelled("Stash", "§cCould not retrieve any §f" + shortId + "§c.");
+            String shortId = targetItemId.startsWith("minecraft:") ? targetItemId.substring(10) : targetItemId;
+            if (takenCount > 0) {
+                ChatHelper.labelled("Stash", "§aRetrieved §f" + shortId + " §7x" + takenCount + "§a.");
+            } else {
+                ChatHelper.labelled("Stash", "§cCould not retrieve any §f" + shortId + "§c.");
+            }
         }
+    }
+
+    /** True if itemId is still needed in current retrieval. */
+    private boolean isWanted(String itemId) {
+        if (kitRemaining != null) {
+            return kitRemaining.containsKey(itemId) && kitRemaining.get(itemId) > 0;
+        }
+        return itemId.equals(targetItemId) && takenCount < targetCount;
+    }
+
+    /** Record that we took some items. */
+    private void recordTaken(String itemId, int count) {
+        if (kitRemaining != null) {
+            int remaining = kitRemaining.getOrDefault(itemId, 0) - count;
+            if (remaining <= 0) {
+                kitRemaining.remove(itemId);
+            } else {
+                kitRemaining.put(itemId, remaining);
+            }
+        } else {
+            takenCount += count;
+        }
+    }
+
+    /** True when all target items have been collected. */
+    private boolean isDone() {
+        if (kitRemaining != null) {
+            return kitRemaining.isEmpty();
+        }
+        return takenCount >= targetCount;
     }
 
     /*? if >=26.1 {*//*

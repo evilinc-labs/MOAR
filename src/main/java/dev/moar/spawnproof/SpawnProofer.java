@@ -155,6 +155,9 @@ public class SpawnProofer {
     /** Queue target currently associated with timeout retries. */
     private BlockPos pendingTimeoutTarget;
 
+    /** Timeout-reposition cycles for the current target. */
+    private int pendingTimeoutCycles;
+
     /** Supply chest positions (reuses PrinterDatabase if available). */
     private final List<BlockPos> supplyChests = new ArrayList<>();
 
@@ -194,6 +197,9 @@ public class SpawnProofer {
 
     /** Retry silent placement timeouts a couple of times before repositioning. */
     private static final int MAX_TIMEOUT_RETRIES = 2;
+
+    /** Max timeout cycles before skipping target. */
+    private static final int MAX_TIMEOUT_CYCLES = 3;
 
     // Public API
 
@@ -496,9 +502,9 @@ public class SpawnProofer {
         PlacementEngine.tickVerification();
 
         // Auto-pause if the server keeps rejecting placements (Folia cross-region, anti-cheat)
-        if (PlacementEngine.getConsecutiveRejections() >= REJECT_PAUSE_THRESHOLD) {
+        if (PlacementEngine.getConsecutiveFailures() >= REJECT_PAUSE_THRESHOLD) {
             PlacementEngine.resetRejectionCounters();
-            ChatHelper.info("§cServer rejected " + REJECT_PAUSE_THRESHOLD
+            ChatHelper.info("§cServer failed to confirm " + REJECT_PAUSE_THRESHOLD
                     + " consecutive placements — pausing spawnproofer");
             pause();
             return;
@@ -1520,6 +1526,7 @@ public class SpawnProofer {
             pendingTimeoutTarget = queueTarget.toImmutable();
             /*?}*/
             pendingPlacementTimeouts = 0;
+            pendingTimeoutCycles = 0;
         }
         placeRetryTicks = 0;
         pendingPlacementTimeouts++;
@@ -1530,14 +1537,35 @@ public class SpawnProofer {
             return;
         }
 
-        LOGGER.debug("SpawnProofer: placement confirmation timed out {} times at {}, repositioning",
-                pendingPlacementTimeouts, failedPos);
-        resetPlacementTimeoutTracking();
+        pendingPlacementTimeouts = 0;
+        pendingTimeoutCycles++;
+        if (pendingTimeoutCycles >= MAX_TIMEOUT_CYCLES) {
+            LOGGER.debug("SpawnProofer: placement confirmation timed out for {} cycles at {}, skipping",
+                    pendingTimeoutCycles, failedPos);
+            if (queueTarget != null) {
+                if (!placementQueue.isEmpty() && queueTarget.equals(placementQueue.peek())) {
+                    placementQueue.poll();
+                } else {
+                    placementQueue.removeFirstOccurrence(queueTarget);
+                }
+            }
+            resetPlacementTimeoutTracking();
+            if (placementQueue.isEmpty()) {
+                state = State.SCANNING;
+            } else {
+                state = State.WALKING;
+            }
+            return;
+        }
+
+        LOGGER.debug("SpawnProofer: placement confirmation timed out for cycle {} at {}, repositioning",
+                pendingTimeoutCycles, failedPos);
         state = State.WALKING;
     }
 
     private void resetPlacementTimeoutTracking() {
         pendingPlacementTimeouts = 0;
+        pendingTimeoutCycles = 0;
         pendingTimeoutTarget = null;
     }
 

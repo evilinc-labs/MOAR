@@ -894,10 +894,18 @@ public final class StashDatabase {
         List<SearchResult> results = new ArrayList<>();
         if (!isOpen()) return results;
 
+        // Includes items nested inside shulker boxes
         try (PreparedStatement ps = connection.prepareStatement(
-                "SELECT i.x, i.y, i.z, i.item_id, i.quantity " +
-                "FROM items i WHERE i.item_id LIKE ?")) {
+                "SELECT x, y, z, item_id, quantity FROM (" +
+                "  SELECT i.x, i.y, i.z, i.item_id, i.quantity FROM items i WHERE i.item_id LIKE ?" +
+                "  UNION ALL" +
+                "  SELECT s.x, s.y, s.z, si.item_id, si.quantity" +
+                "    FROM shulker_items si" +
+                "    JOIN shulkers s ON s.id = si.shulker_id" +
+                "    WHERE si.item_id LIKE ?" +
+                ")")) {
             ps.setString(1, "%" + itemIdFragment + "%");
+            ps.setString(2, "%" + itemIdFragment + "%");
             try (ResultSet rs = ps.executeQuery()) {
                 // group by position
                 Map<BlockPos, Map<String, Integer>> posItems = new LinkedHashMap<>();
@@ -922,6 +930,43 @@ public final class StashDatabase {
 
     /** Result of an item search against the database. */
     public record SearchResult(BlockPos pos, Map<String, Integer> matchedItems, int totalQuantity) {}
+
+    /** Find containers holding any of the given item IDs (including shulker contents). */
+    public Map<BlockPos, Map<String, Integer>> findContainersForExactItems(Set<String> itemIds) {
+        Map<BlockPos, Map<String, Integer>> result = new LinkedHashMap<>();
+        if (!isOpen() || itemIds.isEmpty()) return result;
+
+        // Build IN clause: (?, ?, ...)
+        String placeholders = String.join(",", itemIds.stream().map(id -> "?").toList());
+        String sql = "SELECT x, y, z, item_id, quantity FROM (" +
+                "  SELECT i.x, i.y, i.z, i.item_id, i.quantity FROM items i WHERE i.item_id IN (" + placeholders + ")" +
+                "  UNION ALL" +
+                "  SELECT s.x, s.y, s.z, si.item_id, si.quantity" +
+                "    FROM shulker_items si" +
+                "    JOIN shulkers s ON s.id = si.shulker_id" +
+                "    WHERE si.item_id IN (" + placeholders + ")" +
+                ")";
+
+        try (PreparedStatement ps = connection.prepareStatement(sql)) {
+            int idx = 1;
+            for (String id : itemIds) {
+                ps.setString(idx++, id);
+            }
+            for (String id : itemIds) {
+                ps.setString(idx++, id);
+            }
+            try (ResultSet rs = ps.executeQuery()) {
+                while (rs.next()) {
+                    BlockPos pos = new BlockPos(rs.getInt("x"), rs.getInt("y"), rs.getInt("z"));
+                    result.computeIfAbsent(pos, k -> new HashMap<>())
+                            .merge(rs.getString("item_id"), rs.getInt("quantity"), Integer::sum);
+                }
+            }
+        } catch (SQLException e) {
+            LOGGER.error("Failed to find containers for exact items", e);
+        }
+        return result;
+    }
 
     /** Count total containers stored in the database. */
     public int countContainers() {

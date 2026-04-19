@@ -230,6 +230,8 @@ public final class PlacementEngine {
     private static final int VERIFY_DELAY_TICKS = 8;
     private static final int VERIFY_TIMEOUT_TICKS = 24;
     private static final int MAX_VERIFY_QUEUE = 32;
+    private static int consecutiveFailures = 0;
+    private static int totalTimeouts = 0;
     private static int consecutiveRejections = 0;
     private static int totalRejections = 0;
 
@@ -246,6 +248,10 @@ public final class PlacementEngine {
     private static final ArrayDeque<PendingVerification> verifyQueue = new ArrayDeque<>();
     private static final Map<BlockPos, VerificationSnapshot> verificationStates = new HashMap<>();
 
+    /** Number of consecutive placements that failed confirmation. */
+    public static int getConsecutiveFailures() { return consecutiveFailures; }
+    /** Total placements that timed out since last reset. */
+    public static int getTotalTimeouts() { return totalTimeouts; }
     /** Number of consecutive placements that were rejected by the server. */
     public static int getConsecutiveRejections() { return consecutiveRejections; }
     /** Total placements rejected since last reset. */
@@ -253,6 +259,8 @@ public final class PlacementEngine {
     public static void resetRejectionCounters() {
         verifyQueue.clear();
         verificationStates.clear();
+        consecutiveFailures = 0;
+        totalTimeouts = 0;
         consecutiveRejections = 0;
         totalRejections = 0;
     }
@@ -303,12 +311,14 @@ public final class PlacementEngine {
                 verifyQueue.poll();
                 verificationStates.put(pv.pos,
                         new VerificationSnapshot(pv.expected, VerificationStatus.ACCEPTED));
+                consecutiveFailures = 0;
                 consecutiveRejections = 0;
             } else if (actual.getBlock() != pv.original.getBlock()) {
                 // Another server-side update won the race, so this attempt was rejected.
                 verifyQueue.poll();
                 verificationStates.put(pv.pos,
                         new VerificationSnapshot(pv.expected, VerificationStatus.REJECTED));
+                consecutiveFailures++;
                 consecutiveRejections++;
                 totalRejections++;
             } else if (elapsedTicks >= VERIFY_TIMEOUT_TICKS) {
@@ -316,6 +326,8 @@ public final class PlacementEngine {
                 verifyQueue.poll();
                 verificationStates.put(pv.pos,
                         new VerificationSnapshot(pv.expected, VerificationStatus.TIMEOUT));
+                consecutiveFailures++;
+                totalTimeouts++;
             } else {
                 verificationStates.put(pv.pos,
                         new VerificationSnapshot(pv.expected, VerificationStatus.PENDING));
@@ -2089,6 +2101,35 @@ public final class PlacementEngine {
         /*?}*/
     }
 
+    /** Forces sneak on for placement; returns a Runnable that restores it. */
+    /*? if >=26.1 {*//*
+    public static Runnable ensureSneakForPlacement(LocalPlayer player) {
+    *//*?} else {*/
+    public static Runnable ensureSneakForPlacement(ClientPlayerEntity player) {
+    /*?}*/
+        boolean wasAbsoluteSneak = SneakOverride.isForceAbsoluteSneak();
+        boolean wasForceSneak = SneakOverride.isForceSneak();
+        SneakOverride.setForceSneak(true);
+        /*? if >=26.1 {*//*
+        player.setShiftKeyDown(true);
+        *//*?} else {*/
+        player.setSneaking(true);
+        /*?}*/
+        pressSneakPacket(player);
+        return () -> {
+            if (!wasAbsoluteSneak) SneakOverride.setForceAbsoluteSneak(false);
+            if (!wasForceSneak) SneakOverride.setForceSneak(false);
+            if (!wasAbsoluteSneak && !wasForceSneak) {
+                /*? if >=26.1 {*//*
+                player.setShiftKeyDown(false);
+                *//*?} else {*/
+                player.setSneaking(false);
+                /*?}*/
+                releaseSneakPacket();
+            }
+        };
+    }
+
     /** Releases sneak for interaction; returns a Runnable that restores it. */
     /*? if >=26.1 {*//*
     public static Runnable releaseForInteraction(LocalPlayer player) {
@@ -3238,6 +3279,25 @@ public final class PlacementEngine {
             if (preferred != null) return preferred;
             // No matching face — air placement fallback
             return null;
+        }
+
+        // Shulker boxes — click opposite face for correct FACING.
+        if (block instanceof ShulkerBoxBlock) {
+            /*? if >=26.1 {*//*
+            if (desired.hasProperty(BlockStateProperties.FACING)) {
+            *//*?} else {*/
+            if (desired.contains(Properties.FACING)) {
+            /*?}*/
+                /*? if >=26.1 {*//*
+                Direction facing = desired.getValue(BlockStateProperties.FACING);
+                *//*?} else {*/
+                Direction facing = desired.get(Properties.FACING);
+                /*?}*/
+                Direction supportDir = facing.getOpposite();
+                Direction result = requireSolidFace(world, target, supportDir);
+                if (result != null) return result;
+            }
+            return findPlacementFace(world, target);
         }
 
         return findPlacementFace(world, target);

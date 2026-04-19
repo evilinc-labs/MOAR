@@ -34,6 +34,15 @@ import net.minecraft.world.item.ItemStack;
 import net.minecraft.item.ItemStack;
 /*?}*/
 /*? if >=26.1 {*//*
+import net.minecraft.world.item.Item;
+import net.minecraft.core.registries.BuiltInRegistries;
+*//*?} else {*/
+import net.minecraft.item.Item;
+import net.minecraft.registry.Registries;
+/*?}*/
+import com.mojang.brigadier.suggestion.SuggestionProvider;
+import net.fabricmc.fabric.api.client.command.v2.FabricClientCommandSource;
+/*? if >=26.1 {*//*
 import net.minecraft.world.level.block.*;
 import net.minecraft.world.level.block.piston.*;
 *//*?} else {*/
@@ -60,6 +69,23 @@ public final class StashCommand {
 
     private StashCommand() {}
 
+    /** Suggests all Minecraft item IDs (path only, no namespace). */
+    private static final SuggestionProvider<FabricClientCommandSource> SUGGEST_ITEMS = (ctx, builder) -> {
+        String remaining = builder.getRemaining().toLowerCase(java.util.Locale.ROOT);
+        /*? if >=26.1 {*//*
+        for (Item item : BuiltInRegistries.ITEM) {
+            String path = BuiltInRegistries.ITEM.getKey(item).getPath();
+        *//*?} else {*/
+        for (Item item : Registries.ITEM) {
+            String path = Registries.ITEM.getId(item).getPath();
+        /*?}*/
+            if (path.startsWith(remaining)) {
+                builder.suggest(path);
+            }
+        }
+        return builder.buildFuture();
+    };
+
     public static void register() {
         ClientCommandRegistrationCallback.EVENT.register((dispatcher, registryAccess) -> {
             /*? if >=26.1 {*//*
@@ -84,7 +110,8 @@ public final class StashCommand {
                 ChatHelper.labelled("Stash", "  §f/stash dump remove §8— unmark nearest dump chest");
                 ChatHelper.labelled("Stash", "  §f/stash dump list §8— show all dump chests");
                 ChatHelper.labelled("Stash", "  §f/stash dump clear §8— clear all dump chests");
-                ChatHelper.labelled("Stash", "  §f/stash kit §8— kit management (create, snapshot, show, etc.)");
+                ChatHelper.labelled("Stash", "  §f/stash kit §8— kit management (create, snapshot, load, etc.)");
+                ChatHelper.labelled("Stash", "  §f/stash region §8— save/load named region profiles");
                 ChatHelper.labelled("Stash", "  §f/stash search <item> §8— find items in scanned containers");
                 ChatHelper.labelled("Stash", "  §f/stash get <item> §7[count] §8— retrieve items from stash");
                 ChatHelper.labelled("Stash", "§7Scans chests, barrels, shulker boxes, and hoppers.");
@@ -293,16 +320,21 @@ public final class StashCommand {
             // /stash dump (add, remove, list, clear)
             root.then(buildDumpSubcommand());
 
-            // /stash kit (create, snapshot, add, remove, show, list, delete)
+            // /stash kit (create, snapshot, load, add, remove, show, list, delete)
             root.then(buildKitSubcommand());
+
+            // /stash region (save, load, list, delete)
+            root.then(buildRegionSubcommand());
 
             // /stash search <item>
             /*? if >=26.1 {*//*
             root.then(ClientCommands.literal("search")
-                    .then(ClientCommands.argument("item", StringArgumentType.greedyString())
+                    .then(ClientCommands.argument("item", StringArgumentType.word())
+                            .suggests(SUGGEST_ITEMS)
             *//*?} else {*/
             root.then(ClientCommandManager.literal("search")
-                    .then(ClientCommandManager.argument("item", StringArgumentType.greedyString())
+                    .then(ClientCommandManager.argument("item", StringArgumentType.word())
+                            .suggests(SUGGEST_ITEMS)
             /*?}*/
                             .executes(ctx -> {
                                 String fragment = StringArgumentType.getString(ctx, "item");
@@ -351,9 +383,11 @@ public final class StashCommand {
             /*? if >=26.1 {*//*
             root.then(ClientCommands.literal("get")
                     .then(ClientCommands.argument("item", StringArgumentType.word())
+                            .suggests(SUGGEST_ITEMS)
             *//*?} else {*/
             root.then(ClientCommandManager.literal("get")
                     .then(ClientCommandManager.argument("item", StringArgumentType.word())
+                            .suggests(SUGGEST_ITEMS)
             /*?}*/
                             .executes(ctx -> {
                                 String item = StringArgumentType.getString(ctx, "item");
@@ -550,6 +584,7 @@ public final class StashCommand {
             ChatHelper.labelled("Stash", "§7Kit management — save item loadouts (max 27 slots).");
             ChatHelper.labelled("Stash", "  §f/stash kit create <name> §8— create an empty kit");
             ChatHelper.labelled("Stash", "  §f/stash kit snapshot <name> §8— snapshot inventory into kit");
+            ChatHelper.labelled("Stash", "  §f/stash kit load <name> §8— retrieve kit items from stash");
             ChatHelper.labelled("Stash", "  §f/stash kit add <name> <item> [count] §8— add item to kit");
             ChatHelper.labelled("Stash", "  §f/stash kit remove <name> <item> §8— remove item from kit");
             ChatHelper.labelled("Stash", "  §f/stash kit show <name> §8— show kit contents & availability");
@@ -645,10 +680,12 @@ public final class StashCommand {
         kit.then(ClientCommands.literal("add")
                 .then(ClientCommands.argument("name", StringArgumentType.word())
                         .then(ClientCommands.argument("item", StringArgumentType.word())
+                                .suggests(SUGGEST_ITEMS)
         *//*?} else {*/
         kit.then(ClientCommandManager.literal("add")
                 .then(ClientCommandManager.argument("name", StringArgumentType.word())
                         .then(ClientCommandManager.argument("item", StringArgumentType.word())
+                                .suggests(SUGGEST_ITEMS)
         /*?}*/
                                 .executes(ctx -> {
                                     return handleKitAdd(ctx, 1);
@@ -672,10 +709,12 @@ public final class StashCommand {
         kit.then(ClientCommands.literal("remove")
                 .then(ClientCommands.argument("name", StringArgumentType.word())
                         .then(ClientCommands.argument("item", StringArgumentType.word())
+                                .suggests(SUGGEST_ITEMS)
         *//*?} else {*/
         kit.then(ClientCommandManager.literal("remove")
                 .then(ClientCommandManager.argument("name", StringArgumentType.word())
                         .then(ClientCommandManager.argument("item", StringArgumentType.word())
+                                .suggests(SUGGEST_ITEMS)
         /*?}*/
                                 .executes(ctx -> {
                                     String name = StringArgumentType.getString(ctx, "name");
@@ -804,6 +843,40 @@ public final class StashCommand {
                 )
         );
 
+        // /stash kit load <name>
+        /*? if >=26.1 {*//*
+        kit.then(ClientCommands.literal("load")
+                .then(ClientCommands.argument("name", StringArgumentType.word())
+        *//*?} else {*/
+        kit.then(ClientCommandManager.literal("load")
+                .then(ClientCommandManager.argument("name", StringArgumentType.word())
+        /*?}*/
+                        .executes(ctx -> {
+                            String name = StringArgumentType.getString(ctx, "name");
+                            StashDatabase db = MoarMod.getDatabase();
+                            if (db == null) {
+                                ChatHelper.labelled("Stash", "§cDatabase not available.");
+                                return 0;
+                            }
+                            if (!db.kitExists(name)) {
+                                ChatHelper.labelled("Stash", "§cKit '§e" + name + "§c' not found.");
+                                return 0;
+                            }
+                            Map<String, Integer> kitItems = db.loadKitItems(name);
+                            if (kitItems.isEmpty()) {
+                                ChatHelper.labelled("Stash", "§cKit '§e" + name + "§c' is empty.");
+                                return 0;
+                            }
+                            StashRetriever retriever = getManager().getRetriever();
+                            if (retriever.isActive()) {
+                                ChatHelper.labelled("Stash", "§cRetrieval already in progress. Use §f/stash stop §cto cancel.");
+                                return 0;
+                            }
+                            return retriever.startKit(name, kitItems) ? 1 : 0;
+                        })
+                )
+        );
+
         return kit;
     }
 
@@ -874,5 +947,143 @@ public final class StashCommand {
 
     private static StashManager getManager() {
         return MoarMod.getStashManager();
+    }
+
+    /** Build the /stash region sub-tree (save, load, list, delete). */
+    private static com.mojang.brigadier.builder.LiteralArgumentBuilder<
+            net.fabricmc.fabric.api.client.command.v2.FabricClientCommandSource> buildRegionSubcommand() {
+        /*? if >=26.1 {*//*
+        var region = ClientCommands.literal("region");
+        *//*?} else {*/
+        var region = ClientCommandManager.literal("region");
+        /*?}*/
+
+        // /stash region  (help)
+        region.executes(ctx -> {
+            ChatHelper.labelled("Stash", "§7Region profiles — save and restore named region corners.");
+            ChatHelper.labelled("Stash", "  §f/stash region save <name> §8— save current pos1/pos2 as a profile");
+            ChatHelper.labelled("Stash", "  §f/stash region load <name> §8— restore a saved profile");
+            ChatHelper.labelled("Stash", "  §f/stash region list §8— list all saved profiles");
+            ChatHelper.labelled("Stash", "  §f/stash region delete <name> §8— delete a profile");
+            return 1;
+        });
+
+        // /stash region save <name>
+        /*? if >=26.1 {*//*
+        region.then(ClientCommands.literal("save")
+                .then(ClientCommands.argument("name", StringArgumentType.word())
+        *//*?} else {*/
+        region.then(ClientCommandManager.literal("save")
+                .then(ClientCommandManager.argument("name", StringArgumentType.word())
+        /*?}*/
+                        .executes(ctx -> {
+                            String name = StringArgumentType.getString(ctx, "name");
+                            StashManager mgr = getManager();
+                            if (mgr.getCorner1() == null || mgr.getCorner2() == null) {
+                                ChatHelper.labelled("Stash", "§cSet both corners first: §f/stash pos1 §cand §f/stash pos2");
+                                return 0;
+                            }
+                            StashDatabase db = MoarMod.getDatabase();
+                            if (db == null) {
+                                ChatHelper.labelled("Stash", "§cDatabase not available.");
+                                return 0;
+                            }
+                            db.saveRegion(name, mgr.getCorner1(), mgr.getCorner2());
+                            ChatHelper.labelled("Stash", "§aSaved region '§e" + name + "§a' (" +
+                                    mgr.getCorner1().getX() + " " + mgr.getCorner1().getY() + " " + mgr.getCorner1().getZ() +
+                                    " → " +
+                                    mgr.getCorner2().getX() + " " + mgr.getCorner2().getY() + " " + mgr.getCorner2().getZ() + ").");
+                            return 1;
+                        })
+                )
+        );
+
+        // /stash region load <name>
+        /*? if >=26.1 {*//*
+        region.then(ClientCommands.literal("load")
+                .then(ClientCommands.argument("name", StringArgumentType.word())
+        *//*?} else {*/
+        region.then(ClientCommandManager.literal("load")
+                .then(ClientCommandManager.argument("name", StringArgumentType.word())
+        /*?}*/
+                        .executes(ctx -> {
+                            String name = StringArgumentType.getString(ctx, "name");
+                            StashDatabase db = MoarMod.getDatabase();
+                            if (db == null) {
+                                ChatHelper.labelled("Stash", "§cDatabase not available.");
+                                return 0;
+                            }
+                            BlockPos[] corners = db.loadRegion(name);
+                            if (corners == null) {
+                                ChatHelper.labelled("Stash", "§cRegion '§e" + name + "§c' not found.");
+                                return 0;
+                            }
+                            StashManager mgr = getManager();
+                            mgr.setCorner1(corners[0]);
+                            mgr.setCorner2(corners[1]);
+                            ChatHelper.labelled("Stash", "§aLoaded region '§e" + name + "§a' (" +
+                                    corners[0].getX() + " " + corners[0].getY() + " " + corners[0].getZ() +
+                                    " → " +
+                                    corners[1].getX() + " " + corners[1].getY() + " " + corners[1].getZ() + ").");
+                            return 1;
+                        })
+                )
+        );
+
+        // /stash region list
+        /*? if >=26.1 {*//*
+        region.then(ClientCommands.literal("list")
+        *//*?} else {*/
+        region.then(ClientCommandManager.literal("list")
+        /*?}*/
+                .executes(ctx -> {
+                    StashDatabase db = MoarMod.getDatabase();
+                    if (db == null) {
+                        ChatHelper.labelled("Stash", "§cDatabase not available.");
+                        return 0;
+                    }
+                    Map<String, BlockPos[]> regions = db.loadAllRegions();
+                    if (regions.isEmpty()) {
+                        ChatHelper.labelled("Stash", "§7No saved regions.");
+                        return 1;
+                    }
+                    ChatHelper.labelled("Stash", "§lSaved regions (" + regions.size() + "):");
+                    for (var entry : regions.entrySet()) {
+                        BlockPos[] c = entry.getValue();
+                        ChatHelper.labelled("Stash", " §7- §e" + entry.getKey() + " §8(" +
+                                c[0].getX() + " " + c[0].getY() + " " + c[0].getZ() +
+                                " → " +
+                                c[1].getX() + " " + c[1].getY() + " " + c[1].getZ() + ")");
+                    }
+                    return 1;
+                })
+        );
+
+        // /stash region delete <name>
+        /*? if >=26.1 {*//*
+        region.then(ClientCommands.literal("delete")
+                .then(ClientCommands.argument("name", StringArgumentType.word())
+        *//*?} else {*/
+        region.then(ClientCommandManager.literal("delete")
+                .then(ClientCommandManager.argument("name", StringArgumentType.word())
+        /*?}*/
+                        .executes(ctx -> {
+                            String name = StringArgumentType.getString(ctx, "name");
+                            StashDatabase db = MoarMod.getDatabase();
+                            if (db == null) {
+                                ChatHelper.labelled("Stash", "§cDatabase not available.");
+                                return 0;
+                            }
+                            if (db.deleteRegion(name)) {
+                                ChatHelper.labelled("Stash", "§aDeleted region '§e" + name + "§a'.");
+                            } else {
+                                ChatHelper.labelled("Stash", "§cRegion '§e" + name + "§c' not found.");
+                            }
+                            return 1;
+                        })
+                )
+        );
+
+        return region;
     }
 }
