@@ -88,7 +88,7 @@ public final class StashCommand {
 
     /** Suggests saved kit names from the stash database. */
     private static final SuggestionProvider<FabricClientCommandSource> SUGGEST_KITS = (ctx, builder) -> {
-        StashDatabase db = MoarMod.getDatabase();
+        StashDatabase db = getOpenDatabase();
         if (db == null) return builder.buildFuture();
         String remaining = builder.getRemaining().toLowerCase(java.util.Locale.ROOT);
         for (String name : db.listKits()) {
@@ -101,7 +101,7 @@ public final class StashCommand {
 
     /** Suggests saved region profile names from the stash database. */
     private static final SuggestionProvider<FabricClientCommandSource> SUGGEST_REGIONS = (ctx, builder) -> {
-        StashDatabase db = MoarMod.getDatabase();
+        StashDatabase db = getOpenDatabase();
         if (db == null) return builder.buildFuture();
         String remaining = builder.getRemaining().toLowerCase(java.util.Locale.ROOT);
         for (String name : db.listRegions()) {
@@ -629,7 +629,7 @@ public final class StashCommand {
         /*?}*/
                         .executes(ctx -> {
                             String name = StringArgumentType.getString(ctx, "name");
-                            StashDatabase db = MoarMod.getDatabase();
+                            StashDatabase db = getOpenDatabase();
                             if (db == null) {
                                 ChatHelper.labelled("Stash", "§cDatabase not available.");
                                 return 0;
@@ -657,7 +657,7 @@ public final class StashCommand {
         /*?}*/
                         .executes(ctx -> {
                             String name = StringArgumentType.getString(ctx, "name");
-                            StashDatabase db = MoarMod.getDatabase();
+                            StashDatabase db = getOpenDatabase();
                             if (db == null) {
                                 ChatHelper.labelled("Stash", "§cDatabase not available.");
                                 return 0;
@@ -670,7 +670,10 @@ public final class StashCommand {
                             if (mc.player == null) return 0;
 
                             if (!db.kitExists(name)) {
-                                db.createKit(name);
+                                if (!db.createKit(name)) {
+                                    ChatHelper.labelled("Stash", "§cFailed to create kit '§e" + name + "§c'.");
+                                    return 0;
+                                }
                             }
 
                             Map<String, Integer> items = new LinkedHashMap<>();
@@ -691,8 +694,29 @@ public final class StashCommand {
                             }
 
                             int uniqueBefore = items.size();
-                            db.snapshotKit(name, items);
+                            Map<String, Integer> expectedPersisted = new LinkedHashMap<>();
+                            int kept = 0;
+                            for (var e : items.entrySet()) {
+                                if (kept >= StashDatabase.KIT_MAX_SLOTS) break;
+                                expectedPersisted.put(e.getKey(), e.getValue());
+                                kept++;
+                            }
+                            if (!db.snapshotKit(name, items)) {
+                                ChatHelper.labelled("Stash", "§cFailed to save snapshot for kit '§e" + name + "§c'.");
+                                return 0;
+                            }
                             int slots = db.countKitSlots(name);
+                            if (slots <= 0) {
+                                ChatHelper.labelled("Stash", "§cSnapshot write did not persist any kit items for '§e" + name + "§c'.");
+                                return 0;
+                            }
+                            Map<String, Integer> persisted = db.loadKitItems(name);
+                            if (!persisted.equals(expectedPersisted)) {
+                                ChatHelper.labelled("Stash", "§cSnapshot verification failed for kit '§e" + name
+                                        + "§c' (expected " + expectedPersisted.size()
+                                        + " entries, read back " + persisted.size() + ").");
+                                return 0;
+                            }
                             String msg = "§aSnapshot saved to kit '§e" + name + "§a' (" + slots + " slots).";
                             if (uniqueBefore > StashDatabase.KIT_MAX_SLOTS) {
                                 msg += " §e(Truncated from " + uniqueBefore + " unique items to " + StashDatabase.KIT_MAX_SLOTS + ".)";
@@ -751,7 +775,7 @@ public final class StashCommand {
                                 .executes(ctx -> {
                                     String name = StringArgumentType.getString(ctx, "name");
                                     String item = StringArgumentType.getString(ctx, "item");
-                                    StashDatabase db = MoarMod.getDatabase();
+                                    StashDatabase db = getOpenDatabase();
                                     if (db == null) {
                                         ChatHelper.labelled("Stash", "§cDatabase not available.");
                                         return 0;
@@ -783,7 +807,7 @@ public final class StashCommand {
         /*?}*/
                         .executes(ctx -> {
                             String name = StringArgumentType.getString(ctx, "name");
-                            StashDatabase db = MoarMod.getDatabase();
+                            StashDatabase db = getOpenDatabase();
                             if (db == null) {
                                 ChatHelper.labelled("Stash", "§cDatabase not available.");
                                 return 0;
@@ -832,7 +856,7 @@ public final class StashCommand {
         kit.then(ClientCommandManager.literal("list")
         /*?}*/
                 .executes(ctx -> {
-                    StashDatabase db = MoarMod.getDatabase();
+                    StashDatabase db = getOpenDatabase();
                     if (db == null) {
                         ChatHelper.labelled("Stash", "§cDatabase not available.");
                         return 0;
@@ -863,7 +887,7 @@ public final class StashCommand {
         /*?}*/
                         .executes(ctx -> {
                             String name = StringArgumentType.getString(ctx, "name");
-                            StashDatabase db = MoarMod.getDatabase();
+                            StashDatabase db = getOpenDatabase();
                             if (db == null) {
                                 ChatHelper.labelled("Stash", "§cDatabase not available.");
                                 return 0;
@@ -891,7 +915,7 @@ public final class StashCommand {
         /*?}*/
                         .executes(ctx -> {
                             String name = StringArgumentType.getString(ctx, "name");
-                            StashDatabase db = MoarMod.getDatabase();
+                            StashDatabase db = getOpenDatabase();
                             if (db == null) {
                                 ChatHelper.labelled("Stash", "§cDatabase not available.");
                                 return 0;
@@ -918,11 +942,18 @@ public final class StashCommand {
         return kit;
     }
 
+    private static StashDatabase getOpenDatabase() {
+        StashDatabase db = MoarMod.getDatabase();
+        if (db == null) return null;
+        if (!db.isOpen()) db.open();
+        return db.isOpen() ? db : null;
+    }
+
     private static int handleKitAdd(com.mojang.brigadier.context.CommandContext<
             net.fabricmc.fabric.api.client.command.v2.FabricClientCommandSource> ctx, int count) {
         String name = StringArgumentType.getString(ctx, "name");
         String item = StringArgumentType.getString(ctx, "item");
-        StashDatabase db = MoarMod.getDatabase();
+        StashDatabase db = getOpenDatabase();
         if (db == null) {
             ChatHelper.labelled("Stash", "§cDatabase not available.");
             return 0;

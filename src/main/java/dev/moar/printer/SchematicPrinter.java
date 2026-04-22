@@ -576,6 +576,8 @@ public class SchematicPrinter {
                 LitematicaDetector.detectPlacements();
         if (placements.isEmpty()) return false;
 
+        int sameFilePlacementCount = 0;
+
         /*? if >=26.1 {*//*
         Minecraft mc = Minecraft.getInstance();
         *//*?} else {*/
@@ -622,6 +624,11 @@ public class SchematicPrinter {
         }
 
         LitematicaDetector.DetectedPlacement placement = best;
+        for (LitematicaDetector.DetectedPlacement p : placements) {
+            if (p.schematicPath().getFileName().equals(placement.schematicPath().getFileName())) {
+                sameFilePlacementCount++;
+            }
+        }
 
         // If the schematic file doesn't exist on disk, we can't load it
         // — but we can still use the origin to set the anchor, provided
@@ -652,6 +659,18 @@ public class SchematicPrinter {
                     placement.originX() + schematic.getOriginOffsetX(),
                     placement.originY() + schematic.getOriginOffsetY(),
                     placement.originZ() + schematic.getOriginOffsetZ());
+
+            // Multiple enabled placements can point to the same .litematic.
+            // In that case, "closest to player" is often the old build site.
+            // Use SchematicWorld correlation immediately to disambiguate.
+            if (sameFilePlacementCount > 1) {
+                BlockPos correlated = LitematicaDetector.detectAnchorFromSchematicWorld(schematic);
+                if (correlated != null) {
+                    this.anchor = correlated;
+                    LOGGER.info("Disambiguated {} same-file placements via hologram correlation: {}",
+                            sameFilePlacementCount, correlated);
+                }
+            }
             this.blocksPlaced = 0;
             this.schematicFile = placement.schematicPath().getFileName().toString();
             this.autoDetected = true;
@@ -682,26 +701,25 @@ public class SchematicPrinter {
         List<LitematicaDetector.DetectedPlacement> placements =
                 LitematicaDetector.detectPlacements();
 
-        // Collect all filename-matching placements and pick the one
-        // closest to the player.  Avoids latching onto a stale
-        // placement on the other side of the world.
-        LitematicaDetector.DetectedPlacement bestMatch = null;
-        double bestDist = Double.MAX_VALUE;
+        // Collect all filename-matching placements.
+        // If there are multiple, this is ambiguous (common when users keep
+        // old and new stacks of the same schematic enabled at once), so let
+        // SchematicWorld correlation resolve it instead of guessing by distance.
+        List<LitematicaDetector.DetectedPlacement> fileMatches = new ArrayList<>();
         for (LitematicaDetector.DetectedPlacement p : placements) {
             String placementFile = p.schematicPath().getFileName().toString();
             if (!placementFile.equals(schematicFile)) continue;
-
-            double dist = Double.MAX_VALUE;
-            if (mc.player != null) {
-                double dx = p.originX() - mc.player.getX();
-                double dz = p.originZ() - mc.player.getZ();
-                dist = dx * dx + dz * dz;
-            }
-            if (dist < bestDist) {
-                bestDist = dist;
-                bestMatch = p;
-            }
+            fileMatches.add(p);
         }
+
+        if (fileMatches.isEmpty()) return false;
+        if (fileMatches.size() > 1) {
+            LOGGER.debug("Anchor sync ambiguous: {} enabled placements match file '{}'",
+                    fileMatches.size(), schematicFile);
+            return false;
+        }
+
+        LitematicaDetector.DetectedPlacement bestMatch = fileMatches.get(0);
 
         if (bestMatch == null) return false;
 
@@ -879,7 +897,29 @@ public class SchematicPrinter {
     public boolean isStatusMessages()  { return statusMessages; }
     public void setStatusMessages(boolean v){ this.statusMessages = v; }
     public boolean isAutoBuild()       { return autoBuild; }
-    public void setAutoBuild(boolean v){ this.autoBuild = v; }
+    public void setAutoBuild(boolean v){
+        if (this.autoBuild == v) return;
+        this.autoBuild = v;
+
+        // Switching modes while enabled can leave stale Baritone goals or
+        // in-flight placement phases running. Reset both sides so manual
+        // mode doesn't keep walking and auto mode re-evaluates cleanly.
+        if (enabled) {
+            PathWalker.stop();
+            PlacementEngine.reset();
+            noProgressTicks = 0;
+            walkFailCount = 0;
+            triedPlacementWalk = false;
+            lastWalkTargetZone = null;
+            walkAttemptCooldown = 0;
+            stuckCycles = 0;
+            if (this.autoBuild) {
+                autoState = clearingDone ? AutoState.BUILDING : AutoState.CLEARING_AREA;
+            } else {
+                autoState = AutoState.IDLE;
+            }
+        }
+    }
 
     // TICK (called from mod initializer)
 

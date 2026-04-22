@@ -185,6 +185,8 @@ public final class PlacementEngine {
     private static float      savedYaw;
     private static float      savedPitch;
     private static int        rotateTicks;
+    private static final int  INVENTORY_SWAP_SETTLE_TICKS = 2;
+    private static int        inventorySwapSettleTicks;
 
     // self-correction state
     /** Position of a block that was placed with wrong orientation. */
@@ -290,6 +292,7 @@ public final class PlacementEngine {
         *//*?} else {*/
         if (mc.world == null) return;
         /*?}*/
+        if (inventorySwapSettleTicks > 0) inventorySwapSettleTicks--;
         /*? if >=26.1 {*//*
         long currentTick = mc.level.getGameTime();
         *//*?} else {*/
@@ -456,6 +459,7 @@ public final class PlacementEngine {
         pendingAirPlace = false;
         singleTickInProgress = false;
         pendingItem = null;
+        inventorySwapSettleTicks = 0;
         correctionTarget = null;
         correctionDesired = null;
         breakingTicks = 0;
@@ -671,6 +675,13 @@ public final class PlacementEngine {
         *//*?} else {*/
         ClientPlayerEntity player = mc.player;
         /*?}*/
+
+        // A container SWAP can succeed client-side before the server treats the
+        // new hotbar item as held. Waiting briefly avoids place packets racing
+        // ahead of the inventory update.
+        if (inventorySwapSettleTicks > 0) {
+            return false;
+        }
 
         if (pendingItem != null) {
             /*? if >=26.1 {*//*
@@ -1543,6 +1554,7 @@ public final class PlacementEngine {
         Item requiredItem = states.get(0).getBlock().asItem();
         if (requiredItem == Items.AIR) return 0;
         if (!selectItem(player, mc, requiredItem, allowSwap)) return 0;
+        if (inventorySwapSettleTicks > 0) return 0;
 
         List<BatchEntry> entries = new ArrayList<>(BATCH_MAX);
         boolean needsSneak = false;
@@ -2301,6 +2313,7 @@ public final class PlacementEngine {
                             /*?}*/
                             player
                     );
+                    inventorySwapSettleTicks = INVENTORY_SWAP_SETTLE_TICKS;
                     return true;
                 }
             }
