@@ -4,9 +4,11 @@ import dev.moar.api.ApiServer;
 import dev.moar.api.MoarProperties;
 import dev.moar.world.SetbackMonitor;
 import dev.moar.chest.ChestManager;
+import dev.moar.command.MoarCommand;
 import dev.moar.command.PrinterCommand;
 import dev.moar.command.SpawnProofCommand;
 import dev.moar.command.StashCommand;
+import dev.moar.gui.MoarScreen;
 import dev.moar.lanes.LaneManager;
 import dev.moar.stash.StashDatabase;
 import dev.moar.stash.StashManager;
@@ -64,8 +66,10 @@ public class MoarMod implements ClientModInitializer {
 
     /*? if >=26.1 {*//*
     private static KeyMapping toggleKey;
+    private static KeyMapping guiKey;
     *//*?} else {*/
     private static KeyBinding toggleKey;
+    private static KeyBinding guiKey;
     /*?}*/
 
     @Override
@@ -94,7 +98,29 @@ public class MoarMod implements ClientModInitializer {
                 /*?}*/
         ));
 
+        /*? if >=26.1 {*//*
+        guiKey = KeyMappingHelper.registerKeyMapping(new KeyMapping(
+        *//*?} else {*/
+        guiKey = KeyBindingHelper.registerKeyBinding(new KeyBinding(
+        /*?}*/
+                "key.moar.gui",
+                /*? if >=26.1 {*//*
+                InputConstants.Type.KEYSYM,
+                *//*?} else {*/
+                InputUtil.Type.KEYSYM,
+                /*?}*/
+                GLFW.GLFW_KEY_KP_9,
+                /*? if >=26.1 {*//*
+                KeyMapping.Category.register(Identifier.fromNamespaceAndPath("moar", "category"))
+                *//*?} else if >=1.21.10 {*//*
+                KeyBinding.Category.create(Identifier.of("moar", "category"))
+                *//*?} else {*/
+                "category.moar"
+                /*?}*/
+        ));
+
         // Register client commands
+        MoarCommand.register();
         PrinterCommand.register();
         SpawnProofCommand.register();
         StashCommand.register();
@@ -120,6 +146,14 @@ public class MoarMod implements ClientModInitializer {
             while (toggleKey.wasPressed()) {
             /*?}*/
                 PRINTER.toggle();
+            }
+
+            /*? if >=26.1 {*//*
+            while (guiKey.consumeClick()) {
+            *//*?} else {*/
+            while (guiKey.wasPressed()) {
+            /*?}*/
+                client.setScreen(new MoarScreen());
             }
 
             // Tick the printer

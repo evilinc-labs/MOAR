@@ -350,7 +350,7 @@ public final class LitematicaDetector {
         /*? if >=26.1 {*//*
         Minecraft mc = Minecraft.getInstance();
         if (mc.level == null) return null;
-        return mc.level.dimension().location().toString().replace(':', '_');
+        return mc.level.dimension().identifier().toString().replace(':', '_');
         *//*?} else {*/
         MinecraftClient mc = MinecraftClient.getInstance();
         if (mc.world == null) return null;
