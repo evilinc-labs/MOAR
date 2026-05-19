@@ -4,7 +4,7 @@
 
 A client-side Fabric mod that automates schematic building, spawn-proofing, and container management. Load a `.litematic`, point it at some supply chests, and let it build, restock, recover from disconnects, and keep working across long multi-container runs.
 
-## 2.1 Highlights
+## 2.2 Highlights
 
 - **Smarter printer detection** : auto-detects active Litematica placements and can fall back to hologram block correlation when the live placement list is unavailable
 - **Resume-first building** : printer checkpoints survive disconnects and `/printer resume` restores the build state from disk
@@ -18,6 +18,7 @@ A client-side Fabric mod that automates schematic building, spawn-proofing, and 
 ### Schematic Printer
 Load a Litematica schematic and build it automatically  or toggle manual mode to place blocks yourself.
 
+- **Multi-schematic queue**: detect and queue all Litematica placements, builds sequentially with auto-advance and completion notifications
 - **AutoBuild**: walks to each zone, grabs materials from supply chests, places blocks, and moves on
 - **Manual + AutoBuild modes**: switch between assisted manual placement and full automation without stale walking/pathing state leaking across modes
 - **Litematica auto-detection**: loads the closest active placement automatically and can re-anchor from hologram blocks when placement metadata is missing
@@ -81,11 +82,19 @@ All versions require [Fabric Loader](https://fabricmc.net/use/) ≥ 0.18.4.
 
 ## Quick Start
 
+### Single Schematic
 1. Place or load a schematic in Litematica, then run `/printer detect` or `/printer load mybase.litematic`
 2. If you loaded manually, stand where the build origin should be and run `/printer here`
 3. Mark your supply chests with `/printer supply add` while looking at each container
-4. Start building with `/printer autobuild` or `/printer toggle`
+4. Use `/printer autobuild` for full automation, then `/printer toggle` to start
 5. If you disconnect mid-build, return and use `/printer resume`
+
+### Multiple Schematics (Queue)
+1. Place multiple schematic placements in Litematica
+2. Run `/printer queue detect` to auto-detect and queue all placements
+3. Mark your supply chests with `/printer supply add`
+4. Use `/printer autobuild`, then run `/printer toggle` to start building—each schematic completes automatically and advances to the next
+5. Check progress with `/printer queue status`
 
 ## Commands
 
@@ -94,7 +103,8 @@ All versions require [Fabric Loader](https://fabricmc.net/use/) ≥ 0.18.4.
 | Command | What it does |
 |---------|--------------|
 | `/printer toggle` | Start/stop the printer |
-| `/printer autobuild` | Toggle fully automated building |
+| `/printer autobuild` | Enable fully automated building |
+| `/printer autobuild on\|off\|toggle` | Explicitly control AutoBuild mode |
 | `/printer load <file>` | Load a `.litematic` schematic |
 | `/printer unload` | Unload the current schematic |
 | `/printer detect` | Auto-detect active Litematica placements, with hologram-anchor fallback |
@@ -112,6 +122,18 @@ All versions require [Fabric Loader](https://fabricmc.net/use/) ≥ 0.18.4.
 | `/printer supply list` | List all supply chests |
 | `/printer supply scan` | Show indexed supply inventory summary |
 | `/printer supply clear` | Remove all supply chests |
+| `/printer queue status` | Show current build + queued builds |
+| `/printer queue list` | Alias for `status` |
+| `/printer queue detect` | Auto-detect and queue all Litematica placements |
+| `/printer queue next` | Manually advance to next build |
+| `/printer queue skip [reason]` | Skip current build with optional reason |
+| `/printer queue clear` | Clear all queued builds (not active) |
+| `/printer queue auto <on\|off>` | Toggle auto-advance (default: on) |
+| `/printer queue move <taskId> <position>` | Move task to specific position (1-indexed) |
+| `/printer queue up <taskId>` | Move task up one position (towards front) |
+| `/printer queue down <taskId>` | Move task down one position (towards back) |
+| `/printer queue top <taskId>` | Move task to front of queue (build next) |
+| `/printer queue bottom <taskId>` | Move task to back of queue (build last) |
 | `/printer dump add [x y z]` | Mark a container as a dump chest |
 | `/printer dump remove` | Unmark the nearest dump chest |
 | `/printer dump list` | List all dump chests |
@@ -190,6 +212,81 @@ webhook.url=
 
 All endpoints accept `Authorization: Bearer <api.key>` when `api.key` is set.
 
+## Multi-Schematic Queue
+
+Build multiple Litematica placements sequentially without manual intervention while reusing the same supply chest network and printer settings.
+
+### Queue Workflow
+
+```bash
+# 1. Set up Litematica placements in-world
+# 2. Auto-detect and queue all placements
+/printer queue detect
+
+# Or queue the currently loaded schematic repeatedly
+/printer queue add
+
+# 3. Configure supply chests
+/printer supply add
+
+# 4. Enable AutoBuild, then start building (auto-advances through queue)
+/printer autobuild
+/printer toggle
+
+# 5. Check progress
+/printer queue status
+```
+
+### Queue Best Practices
+
+- **Detection**: Run `/printer queue detect` after all placements are enabled in Litematica. Detection only queues tasks; it does not start building.
+- **Duplicates**: Use `/printer queue add` to queue the currently loaded schematic at its current anchor. Re-anchor with `/printer here` or load another placement, then run it again to stack duplicates intentionally.
+- **Supplies first**: Add or verify supply chests before the first `/printer toggle` so the first build does not pause immediately for missing items.
+- **AutoBuild first**: Run `/printer autobuild` before `/printer toggle` when you expect MOAR to walk between build zones. Use `/printer autobuild off` only for stationary/manual printer mode.
+- **Start and pause**: Use `/printer toggle` to start the first queued task, pause the active task, or resume a paused one.
+- **Folia / Grim**: Keep placement pacing conservative on strict servers. MOAR now stays on single-placement world ticks, but lower `bps` values and a clean line of sight still make builds more reliable.
+- **Reordering**: Use `/printer queue status` before `move`, `up`, `down`, `top`, or `bottom`; the short task IDs shown there are the IDs those commands expect.
+- **Skip vs next**: Use `/printer queue next` when you want to come back to the current build later. Use `/printer queue skip [reason]` only when you want to mark that build as intentionally abandoned.
+- **Auto-advance**: Leave `/printer queue auto on` for hands-off batch runs. Turn it off when you want to inspect each schematic between builds.
+- **Disconnects**: The queue is not persisted across disconnects, so re-run `/printer queue detect` after reconnecting if you still want a batch run.
+
+### Queue Features
+
+- **Auto-detection**: Scans all enabled Litematica placements and calculates proper anchor points (including schematic offsets)
+- **Sequential building**: One build at a time—completes current, then auto-advances to next
+- **Manual reordering**: Move tasks up/down, to specific positions, or to front/back of queue
+- **Progress tracking**: Real-time status showing blocks placed, elapsed time, and remaining builds
+- **Completion notifications**: Alerts when each build finishes with stats, including builds that stop after exhausting available materials
+- **Auto-advance**: Enabled by default—builds continuously until queue is empty (toggle with `/printer queue auto`)
+- **Manual control**: Pause with `/printer toggle`, skip problematic builds, advance manually, or clear the queue
+- **Works with AutoBuild**: Fully compatible with existing automation features
+
+### Queue Commands
+
+| Command | Description |
+|---------|-------------|
+| `/printer queue status` | Show active build + queued builds |
+| `/printer queue add` | Queue the currently loaded schematic at its current anchor |
+| `/printer queue detect` | Auto-detect Litematica placements and add to queue |
+| `/printer queue next` | Pause the current build and move it behind the rest of the queue |
+| `/printer queue skip [reason]` | Skip current build (marks as failed) |
+| `/printer queue clear` | Clear all queued builds (not active build) |
+| `/printer queue auto on\|off` | Toggle automatic queue advancement |
+| `/printer queue move <taskId> <position>` | Move task to specific position (1-indexed) |
+| `/printer queue up <taskId>` | Move task up one position |
+| `/printer queue down <taskId>` | Move task down one position |
+| `/printer queue top <taskId>` | Move task to front (build next) |
+| `/printer queue bottom <taskId>` | Move task to back (build last) |
+
+**Note**: Task IDs are shown in the queue status output as short 8-character identifiers (e.g., `[a1b2c3d4]`).
+
+### Implementation Notes
+
+- **Sequential only**: Builds one schematic at a time (no parallelism)
+- **No persistence**: Queue is lost on disconnect (individual checkpoint per schematic still works)
+- **FIFO order**: First queued = first built (no priority system yet)
+- **Shared resources**: All builds use the same supply chests
+
 #### Grafana Setup
 
 See [docs/grafana-setup.md](docs/grafana-setup.md) for a step-by-step guide to connect Prometheus + Grafana dashboards via Docker Compose.
@@ -207,10 +304,10 @@ Requires **JDK 21+**.
 ```bash
 ./gradlew build                  # Build all versions
 ./gradlew :1.21.8:build          # Build one version
-./gradlew buildAndCollect        # Collect all JARs → build/libs/2.1.0/
+./gradlew buildAndCollect        # Collect all JARs -> build/libs/2.2.0/
 ```
 
-Output: `versions/<mc>/build/libs/moar-2.1.0+<mc>.jar`
+Output: `versions/<mc>/build/libs/moar-2.2.0+<mc>.jar`
 
 ### Build Stack
 

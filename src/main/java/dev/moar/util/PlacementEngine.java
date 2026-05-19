@@ -90,8 +90,10 @@ import net.minecraft.network.packet.c2s.play.ClientCommandC2SPacket;
 /*?}*/
 /*? if >=26.1 {*//*
 import net.minecraft.network.protocol.game.ServerboundPlayerActionPacket;
+import net.minecraft.network.protocol.game.ServerboundSetCarriedItemPacket;
 *//*?} else {*/
 import net.minecraft.network.packet.c2s.play.PlayerActionC2SPacket;
+import net.minecraft.network.packet.c2s.play.UpdateSelectedSlotC2SPacket;
 /*?}*/
 /*? if >=26.1 {*//*
 import net.minecraft.network.protocol.game.ServerboundUseItemOnPacket;
@@ -160,7 +162,6 @@ import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.Random;
 import java.util.Set;
 import java.util.concurrent.ThreadLocalRandom;
 
@@ -219,21 +220,15 @@ public final class PlacementEngine {
     public static void setSilentRotation(boolean value) { silentRotation = value; }
     public static boolean isSilentRotation() { return silentRotation; }
 
-    private static final Random JITTER_RNG = new Random();
-    private static final int   WINDOW_SIZE = 6;
-    private static final long  WINDOW_MS   = 300;
-
-    private static final int  BATCH_MAX         = 20;
-    private static final long BATCH_COOLDOWN_MS = 300L;
-    private static long       lastBatchMs       = 0L;
-
-    private static final long[] placeHistory = new long[WINDOW_SIZE];
-    private static int          historyIdx   = 0;
+    private static final double TICKS_PER_SECOND = 20.0;
+    private static final double MAX_PLACE_CREDITS = 1.0;
 
     /** Per-block cadence floor -- the minimum gap (in ns) between any two
      *  consecutive placements. Derived from the user-facing BPS setting. */
     private static int    bps               = 13;
-    private static long   lastPlacementNano = 0;
+    private static long   lastPlacementTick = Long.MIN_VALUE;
+    private static long   throttleTick      = Long.MIN_VALUE;
+    private static double placeCredits      = MAX_PLACE_CREDITS;
 
     // Server-side placement verification — detect anti-cheat rollbacks.
     private static final int VERIFY_DELAY_TICKS = 8;
@@ -391,19 +386,12 @@ public final class PlacementEngine {
         if (phase != PlacePhase.IDLE) return false;
         if (!isPlacementWindowSafe()) return false;
         if (inventorySwapSettleTicks > 0 || itemVarietyCooldownTicks > 0) return false;
-        long nowNano = System.nanoTime();
+        long currentTick = getCurrentWorldTick();
+        if (currentTick < 0) return false;
 
-        long intervalNano = 1_000_000_000L / bps;
-        long jitter = (long) (intervalNano * (JITTER_RNG.nextDouble() * 0.5 - 0.25));
-        if ((nowNano - lastPlacementNano) < (intervalNano + jitter)) return false;
-
-        long oldest = placeHistory[historyIdx];
-        if (oldest != 0) {
-            long windowNano = WINDOW_MS * 1_000_000L;
-            if ((nowNano - oldest) < windowNano) return false;
-        }
-
-        return true;
+        syncPlacementCredits(currentTick);
+        if (currentTick == lastPlacementTick) return false;
+        return placeCredits >= 1.0;
     }
 
     public static boolean isBusy() {
@@ -419,15 +407,43 @@ public final class PlacementEngine {
     }
 
     public static void recordPlacement() {
-        long now = System.nanoTime();
-        lastPlacementNano = now;
-        placeHistory[historyIdx] = now;
-        historyIdx = (historyIdx + 1) % WINDOW_SIZE;
+        long currentTick = getCurrentWorldTick();
+        if (currentTick < 0) return;
+        syncPlacementCredits(currentTick);
+        lastPlacementTick = currentTick;
+        placeCredits = Math.max(0.0, placeCredits - 1.0);
     }
 
     public static boolean canBatchPlace() {
-        if (phase != PlacePhase.IDLE) return false;
-        return System.currentTimeMillis() - lastBatchMs >= BATCH_COOLDOWN_MS;
+        return false;
+    }
+
+    private static void syncPlacementCredits(long currentTick) {
+        if (throttleTick == Long.MIN_VALUE) {
+            throttleTick = currentTick;
+            placeCredits = MAX_PLACE_CREDITS;
+            return;
+        }
+        if (currentTick <= throttleTick) {
+            return;
+        }
+
+        long elapsedTicks = currentTick - throttleTick;
+        throttleTick = currentTick;
+        placeCredits = Math.min(MAX_PLACE_CREDITS,
+                placeCredits + elapsedTicks * (bps / TICKS_PER_SECOND));
+    }
+
+    private static long getCurrentWorldTick() {
+        /*? if >=26.1 {*//*
+        Minecraft mc = Minecraft.getInstance();
+        if (mc.level == null) return -1L;
+        return mc.level.getGameTime();
+        *//*?} else {*/
+        MinecraftClient mc = MinecraftClient.getInstance();
+        if (mc.world == null) return -1L;
+        return mc.world.getTime();
+        /*?}*/
     }
 
     public static void reset() {
@@ -476,9 +492,9 @@ public final class PlacementEngine {
         correctionDesired = null;
         breakingTicks = 0;
         postBreakWait = 0;
-        java.util.Arrays.fill(placeHistory, 0L);
-        historyIdx = 0;
-        lastBatchMs = 0L;
+        lastPlacementTick = Long.MIN_VALUE;
+        throttleTick = Long.MIN_VALUE;
+        placeCredits = MAX_PLACE_CREDITS;
         resetRejectionCounters();
     }
 
@@ -1009,8 +1025,11 @@ public final class PlacementEngine {
             return false;
         }
 
-        breakingTicks++;
-        if (breakingTicks > MAX_BREAKING_TICKS) {
+        if (inventorySwapSettleTicks > 0 || itemVarietyCooldownTicks > 0) {
+            return false;
+        }
+
+        if (breakingTicks >= MAX_BREAKING_TICKS) {
             /*? if >=26.1 {*//*
             mc.gameMode.stopDestroyBlock();
             *//*?} else {*/
@@ -1072,17 +1091,27 @@ public final class PlacementEngine {
         sendLookPacket(mc.player, breakYaw, breakPitch);
 
         Direction breakFace = Direction.UP;
-        /*? if >=26.1 {*//*
-        mc.gameMode.continueDestroyBlock(
-        *//*?} else {*/
-        mc.interactionManager.updateBlockBreakingProgress(
-        /*?}*/
-                correctionTarget, breakFace);
+        if (breakingTicks == 0) {
+            /*? if >=26.1 {*//*
+            mc.gameMode.startDestroyBlock(correctionTarget, breakFace);
+            *//*?} else {*/
+            mc.interactionManager.attackBlock(correctionTarget, breakFace);
+            /*?}*/
+        } else {
+            /*? if >=26.1 {*//*
+            mc.gameMode.continueDestroyBlock(
+            *//*?} else {*/
+            mc.interactionManager.updateBlockBreakingProgress(
+            /*?}*/
+                    correctionTarget, breakFace);
+        }
         /*? if >=26.1 {*//*
         mc.player.swing(InteractionHand.MAIN_HAND);
         *//*?} else {*/
         mc.player.swingHand(Hand.MAIN_HAND);
         /*?}*/
+
+        breakingTicks++;
 
         return false;
     }
@@ -1527,287 +1556,13 @@ public final class PlacementEngine {
 
         return true;
     }
-
-
-    private record BatchEntry(BlockPos target, BlockState desired,
-                              BlockHitResult hitResult) {}
-
-
     public static int placeBatch(List<BlockPos> targets, List<BlockState> states,
                                  boolean allowSwap) {
-        /*? if >=26.1 {*//*
-        Minecraft mc = Minecraft.getInstance();
-        *//*?} else {*/
-        MinecraftClient mc = MinecraftClient.getInstance();
-        /*?}*/
-        /*? if >=26.1 {*//*
-        if (mc.player == null || mc.level == null || mc.gameMode == null)
-        *//*?} else {*/
-        if (mc.player == null || mc.world == null || mc.interactionManager == null)
-        /*?}*/
-            return 0;
-        if (phase != PlacePhase.IDLE) return 0;
-        if (targets.isEmpty()) return 0;
-
-            long now = System.currentTimeMillis();
-        if (now - lastBatchMs < BATCH_COOLDOWN_MS) return 0;
-
-        /*? if >=26.1 {*//*
-        LocalPlayer player = mc.player;
-        *//*?} else {*/
-        ClientPlayerEntity player = mc.player;
-        /*?}*/
-        /*? if >=26.1 {*//*
-        Level world = mc.level;
-        *//*?} else {*/
-        World world = mc.world;
-        /*?}*/
-        /*? if >=26.1 {*//*
-        Vec3 eyePos = player.getEyePosition();
-        *//*?} else {*/
-        Vec3d eyePos = player.getEyePos();
-        /*?}*/
-        double reachSq = 4.5 * 4.5;
-
-        Item requiredItem = states.get(0).getBlock().asItem();
-        if (requiredItem == Items.AIR) return 0;
-        if (!selectItem(player, mc, requiredItem, allowSwap)) return 0;
-        if (inventorySwapSettleTicks > 0 || itemVarietyCooldownTicks > 0) return 0;
-        if (!isPlacementWindowSafe()) return 0;
-
-        List<BatchEntry> entries = new ArrayList<>(BATCH_MAX);
-        boolean needsSneak = false;
-        /*? if >=26.1 {*//*
-        float batchYaw = player.getYRot();
-        *//*?} else {*/
-        float batchYaw = player.getYaw();
-        /*?}*/
-        /*? if >=26.1 {*//*
-        float batchPitch = player.getXRot();
-        *//*?} else {*/
-        float batchPitch = player.getPitch();
-        /*?}*/
-
-        for (int i = 0; i < targets.size() && entries.size() < BATCH_MAX; i++) {
-            BlockPos target = targets.get(i);
-            BlockState desired = states.get(i);
-
-            if (desired.getBlock().asItem() != requiredItem) continue;
-            BlockState currentState = world.getBlockState(target);
-            /*? if >=26.1 {*//*
-            if (!currentState.isAir() && !currentState.canBeReplaced()) continue;
-            *//*?} else {*/
-            if (!currentState.isAir() && !currentState.isReplaceable()) continue;
-            /*?}*/
-
-            /*? if >=26.1 {*//*
-            if (!world.isUnobstructed(desired, target,
-                    net.minecraft.world.phys.shapes.CollisionContext.empty())) continue;
-            *//*?} else {*/
-            if (!world.canPlace(desired, target,
-                    net.minecraft.block.ShapeContext.absent())) continue;
-            /*?}*/
-            {
-                /*? if >=26.1 {*//*
-                net.minecraft.world.phys.AABB placeBox =
-                *//*?} else {*/
-                net.minecraft.util.math.Box placeBox =
-                /*?}*/
-                        /*? if >=26.1 {*//*
-                        net.minecraft.world.phys.AABB.unitCubeFromLowerCorner(Vec3.atLowerCornerOf(target));
-                        *//*?} else {*/
-                        net.minecraft.util.math.Box.from(Vec3d.ofCenter(target));
-                        /*?}*/
-                boolean blocked = false;
-                /*? if >=26.1 {*//*
-                for (net.minecraft.world.entity.Entity e : world.getEntities((net.minecraft.world.entity.Entity) null, placeBox, e -> true)) {
-                *//*?} else {*/
-                for (net.minecraft.entity.Entity e : world.getOtherEntities(null, placeBox)) {
-                /*?}*/
-                    if (!e.isSpectator() && e.isAlive()) { blocked = true; break; }
-                }
-                if (blocked) continue;
-            }
-
-            Direction face = findPlacementFace(world, target);
-            BlockHitResult hitResult;
-
-            if (face != null) {
-                /*? if >=26.1 {*//*
-                BlockPos neighbor = target.relative(face);
-                *//*?} else {*/
-                BlockPos neighbor = target.offset(face);
-                /*?}*/
-                Direction clickSide = face.getOpposite();
-                /*? if >=26.1 {*//*
-                Vec3 hitPos = Vec3.atCenterOf(neighbor)
-                *//*?} else {*/
-                Vec3d hitPos = Vec3d.ofCenter(neighbor)
-                /*?}*/
-                        /*? if >=26.1 {*//*
-                        .add(clickSide.getStepX() * 0.5,
-                        *//*?} else {*/
-                        .add(clickSide.getOffsetX() * 0.5,
-                        /*?}*/
-                             /*? if >=26.1 {*//*
-                             clickSide.getStepY() * 0.5,
-                             *//*?} else {*/
-                             clickSide.getOffsetY() * 0.5,
-                             /*?}*/
-                             /*? if >=26.1 {*//*
-                             clickSide.getStepZ() * 0.5);
-                             *//*?} else {*/
-                             clickSide.getOffsetZ() * 0.5);
-                             /*?}*/
-                hitPos = adjustHitForHalf(hitPos, neighbor, clickSide, desired);
-                hitPos = adjustHitForDoorHinge(hitPos, neighbor, desired);
-                hitResult = new BlockHitResult(hitPos, clickSide, neighbor, false);
-
-                if (isInteractive(world.getBlockState(neighbor).getBlock())) {
-                    needsSneak = true;
-                }
-            } else {
-                Direction airFace = getFaceTowardPlayer(player, target);
-                /*? if >=26.1 {*//*
-                Vec3 hitPos = Vec3.atCenterOf(target);
-                *//*?} else {*/
-                Vec3d hitPos = Vec3d.ofCenter(target);
-                /*?}*/
-                hitPos = adjustHitForAirPlace(hitPos, target, desired);
-                hitResult = new BlockHitResult(hitPos, airFace, target, false);
-            }
-
-            /*? if >=26.1 {*//*
-            if (eyePos.distanceToSqr(hitResult.getLocation()) > reachSq) continue;
-            *//*?} else {*/
-            if (eyePos.squaredDistanceTo(hitResult.getPos()) > reachSq) continue;
-            /*?}*/
-
-            if (entries.isEmpty()) {
-                /*? if >=26.1 {*//*
-                Vec3 toHit = hitResult.getLocation().subtract(eyePos);
-                *//*?} else {*/
-                Vec3d toHit = hitResult.getPos().subtract(eyePos);
-                /*?}*/
-                double hDist = Math.sqrt(toHit.x * toHit.x + toHit.z * toHit.z);
-                /*? if >=26.1 {*//*
-                batchYaw = (float) (Mth.atan2(toHit.z, toHit.x)
-                *//*?} else {*/
-                batchYaw = (float) (MathHelper.atan2(toHit.z, toHit.x)
-                /*?}*/
-                        * (180.0 / Math.PI)) - 90.0f;
-                /*? if >=26.1 {*//*
-                batchPitch = (float) -(Mth.atan2(toHit.y, hDist)
-                *//*?} else {*/
-                batchPitch = (float) -(MathHelper.atan2(toHit.y, hDist)
-                /*?}*/
-                        * (180.0 / Math.PI));
-                Float facingYaw = getRequiredYaw(desired);
-                if (facingYaw != null) batchYaw = facingYaw;
-                Float facingPitch = getRequiredPitch(desired);
-                if (facingPitch != null) batchPitch = facingPitch;
-                /*? if >=26.1 {*//*
-                batchYaw = snapToMouseGCD(batchYaw, player.getYRot());
-                *//*?} else {*/
-                batchYaw = snapToMouseGCD(batchYaw, player.getYaw());
-                /*?}*/
-                /*? if >=26.1 {*//*
-                batchPitch = Mth.clamp(
-                *//*?} else {*/
-                batchPitch = MathHelper.clamp(
-                /*?}*/
-                        /*? if >=26.1 {*//*
-                        snapToMouseGCD(batchPitch, player.getXRot()),
-                        *//*?} else {*/
-                        snapToMouseGCD(batchPitch, player.getPitch()),
-                        /*?}*/
-                        -90.0f, 90.0f);
-            }
-
-            /*? if >=26.1 {*//*
-            entries.add(new BatchEntry(target.immutable(), desired, hitResult));
-            *//*?} else {*/
-            entries.add(new BatchEntry(target.toImmutable(), desired, hitResult));
-            /*?}*/
-            // No client-side prediction — server sends block update on acceptance.
-            enqueueVerification(target, desired);
-        }
-
-        if (entries.isEmpty()) return 0;
-
-        sendSilentLookPacket(player, batchYaw, batchPitch);
-        if (needsSneak) pressSneakPacket(player);
-
-        /*? if >=26.1 {*//*
-        player.connection.send(new ServerboundPlayerActionPacket(
-        *//*?} else {*/
-        player.networkHandler.sendPacket(new PlayerActionC2SPacket(
-        /*?}*/
-                /*? if >=26.1 {*//*
-                ServerboundPlayerActionPacket.Action.SWAP_ITEM_WITH_OFFHAND,
-                *//*?} else {*/
-                PlayerActionC2SPacket.Action.SWAP_ITEM_WITH_OFFHAND,
-                /*?}*/
-                /*? if >=26.1 {*//*
-                BlockPos.ZERO, Direction.DOWN));
-                *//*?} else {*/
-                BlockPos.ORIGIN, Direction.DOWN));
-                /*?}*/
-
-        /*? if >=26.1 {*//*
-        int seq = player.containerMenu.getStateId();
-        *//*?} else {*/
-        int seq = player.currentScreenHandler.getRevision();
-        /*?}*/
-        for (BatchEntry entry : entries) {
-            /*? if >=26.1 {*//*
-            player.connection.send(new ServerboundUseItemOnPacket(
-            *//*?} else {*/
-            player.networkHandler.sendPacket(new PlayerInteractBlockC2SPacket(
-            /*?}*/
-                    /*? if >=26.1 {*//*
-                    InteractionHand.OFF_HAND, entry.hitResult, ++seq));
-                    *//*?} else {*/
-                    Hand.OFF_HAND, entry.hitResult, ++seq));
-                    /*?}*/
-        }
-
-        /*? if >=26.1 {*//*
-        player.connection.send(new ServerboundPlayerActionPacket(
-        *//*?} else {*/
-        player.networkHandler.sendPacket(new PlayerActionC2SPacket(
-        /*?}*/
-                /*? if >=26.1 {*//*
-                ServerboundPlayerActionPacket.Action.SWAP_ITEM_WITH_OFFHAND,
-                *//*?} else {*/
-                PlayerActionC2SPacket.Action.SWAP_ITEM_WITH_OFFHAND,
-                /*?}*/
-                /*? if >=26.1 {*//*
-                BlockPos.ZERO, Direction.DOWN));
-                *//*?} else {*/
-                BlockPos.ORIGIN, Direction.DOWN));
-                /*?}*/
-
-        /*? if >=26.1 {*//*
-        player.swing(InteractionHand.MAIN_HAND);
-        *//*?} else {*/
-        player.swingHand(Hand.MAIN_HAND);
-        /*?}*/
-
-        if (needsSneak) {
-            if (SneakOverride.isForceAbsoluteSneak()) {
-                pressSneakPacket(player);
-            } else {
-                releaseSneakPacket();
-            }
-        }
-
-        lastBatchMs = now;
-        for (int i = 0; i < entries.size(); i++) {
-            recordPlacement();
-        }
-
-        return entries.size();
+        // Strict anti-cheat and region-threaded servers expect block use
+        // packets to stay aligned to world ticks. Bursting several placements
+        // in one client tick causes more harm than it saves, so keep batch
+        // placement disabled and fall back to the single-placement path.
+        return 0;
     }
 
     /*? if >=26.1 {*//*
@@ -1879,6 +1634,11 @@ public final class PlacementEngine {
         BlockState existing = mc.world.getBlockState(target);
         /*?}*/
         selectBestTool(player, mc, existing);
+
+        if (inventorySwapSettleTicks > 0 || itemVarietyCooldownTicks > 0) {
+            phase = PlacePhase.BREAKING;
+            return true;
+        }
 
         /*? if >=26.1 {*//*
         Vec3 eyePos = player.getEyePosition();
@@ -2306,6 +2066,7 @@ public final class PlacementEngine {
                 *//*?} else {*/
                 inv.selectedSlot = i;
                 /*?}*/
+                syncSelectedHotbarSlot(player, i);
                 recordSelectedItem(item, true);
                 return true;
             }
@@ -2361,6 +2122,16 @@ public final class PlacementEngine {
         lastPlacementItem = item;
     }
 
+    /*? if >=26.1 {*//*
+    private static void syncSelectedHotbarSlot(LocalPlayer player, int slot) {
+        player.connection.send(new ServerboundSetCarriedItemPacket(slot));
+    }
+    *//*?} else {*/
+    private static void syncSelectedHotbarSlot(ClientPlayerEntity player, int slot) {
+        player.networkHandler.sendPacket(new UpdateSelectedSlotC2SPacket(slot));
+    }
+    /*?}*/
+
     private static boolean isPlacementWindowSafe() {
         SetbackMonitor monitor = SetbackMonitor.get();
         return monitor.isCalm()
@@ -2406,9 +2177,17 @@ public final class PlacementEngine {
         if (bestSlot < 9) {
             // Tool is in the hotbar — just switch to it
             /*? if >=1.21.5 {*//*
-            inv.setSelectedSlot(bestSlot);
+            if (inv.getSelectedSlot() != bestSlot) {
+                inv.setSelectedSlot(bestSlot);
+                syncSelectedHotbarSlot(player, bestSlot);
+                itemVarietyCooldownTicks = Math.max(itemVarietyCooldownTicks, HOTBAR_SELECT_SETTLE_TICKS);
+            }
             *//*?} else {*/
-            inv.selectedSlot = bestSlot;
+            if (inv.selectedSlot != bestSlot) {
+                inv.selectedSlot = bestSlot;
+                syncSelectedHotbarSlot(player, bestSlot);
+                itemVarietyCooldownTicks = Math.max(itemVarietyCooldownTicks, HOTBAR_SELECT_SETTLE_TICKS);
+            }
             /*?}*/
         } else {
             // Tool is in main inventory — swap into the current hotbar slot
@@ -2435,6 +2214,8 @@ public final class PlacementEngine {
                     /*?}*/
                     player
             );
+            inventorySwapSettleTicks = Math.max(inventorySwapSettleTicks, INVENTORY_SWAP_SETTLE_TICKS);
+            itemVarietyCooldownTicks = Math.max(itemVarietyCooldownTicks, ITEM_VARIETY_SETTLE_TICKS);
         }
     }
 

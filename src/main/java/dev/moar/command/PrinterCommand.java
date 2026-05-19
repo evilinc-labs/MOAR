@@ -5,6 +5,8 @@ import com.mojang.brigadier.arguments.StringArgumentType;
 import dev.moar.MoarMod;
 import dev.moar.chest.ChestManager;
 import dev.moar.printer.SchematicPrinter;
+import dev.moar.printer.SchematicQueueManager;
+import dev.moar.printer.SchematicTask;
 import dev.moar.schematic.LitematicaDetector;
 import dev.moar.schematic.PrinterCheckpoint;
 import dev.moar.schematic.PrinterResourceManager;
@@ -15,7 +17,6 @@ import net.fabricmc.fabric.api.client.command.v2.ClientCommands;
 import net.fabricmc.fabric.api.client.command.v2.ClientCommandManager;
 /*?}*/
 import net.fabricmc.fabric.api.client.command.v2.ClientCommandRegistrationCallback;
-import net.fabricmc.fabric.api.client.command.v2.FabricClientCommandSource;
 /*? if >=26.1 {*//*
 import net.minecraft.world.level.block.BarrelBlock;
 *//*?} else {*/
@@ -141,7 +142,8 @@ public final class PrinterCommand {
                         List<LitematicaDetector.DetectedPlacement> placements =
                                 SchematicPrinter.detectAllPlacements();
                         LitematicaDetector.DetectedPlacement bestMatch =
-                                findClosestPlacement(placements, mc.player.getX(), mc.player.getZ(), null, false);
+                                findClosestPlacement(placements,
+                                        mc.player.getX(), mc.player.getY(), mc.player.getZ(), null, false);
                         boolean nearbyUnsupportedPlacement = bestMatch != null
                                 && bestMatch.hasUnsupportedTransform()
                                 && horizontalDistance(bestMatch, mc.player.getX(), mc.player.getZ()) < 200;
@@ -160,7 +162,8 @@ public final class PrinterCommand {
                         }
 
                         if (pos == null) {
-                            bestMatch = findClosestPlacement(placements, mc.player.getX(), mc.player.getZ(), null, true);
+                            bestMatch = findClosestPlacement(placements,
+                                    mc.player.getX(), mc.player.getY(), mc.player.getZ(), null, true);
                             if (bestMatch != null && horizontalDistance(bestMatch, mc.player.getX(), mc.player.getZ()) < 200) {
                                 pos = new BlockPos(
                                         bestMatch.originX() + printer.getSchematic().getOriginOffsetX(),
@@ -176,7 +179,7 @@ public final class PrinterCommand {
                             }
                         }
 
-                        printer.setAnchor(pos);
+                        printer.overrideAnchor(pos);
                         ChatHelper.info("Anchor set to §e" + pos.getX() + " " + pos.getY() + " " + pos.getZ());
                         return 1;
                     })
@@ -213,7 +216,7 @@ public final class PrinterCommand {
                                                 int x = IntegerArgumentType.getInteger(ctx, "x");
                                                 int y = IntegerArgumentType.getInteger(ctx, "y");
                                                 int z = IntegerArgumentType.getInteger(ctx, "z");
-                                                printer.setAnchor(new BlockPos(x, y, z));
+                                                printer.overrideAnchor(new BlockPos(x, y, z));
                                                 ChatHelper.info("Anchor set to §e" + x + " " + y + " " + z);
                                                 return 1;
                                             })
@@ -444,6 +447,26 @@ public final class PrinterCommand {
             /*?}*/
                     .executes(ctx -> {
                         SchematicPrinter printer = getPrinter();
+                        SchematicQueueManager qm = MoarMod.getQueueManager();
+
+                        if (printer.isEnabled()) {
+                            if (qm.hasActiveTask()) {
+                                qm.pauseActiveTask();
+                            } else {
+                                printer.toggle();
+                            }
+                            return 1;
+                        }
+
+                        if (qm.hasActiveTask()) {
+                            printer.toggle();
+                            return 1;
+                        }
+
+                        if (qm.hasQueuedTasks() && qm.startNextIfIdle()) {
+                            return 1;
+                        }
+
                         printer.toggle();
                         return 1;
                     })
@@ -457,11 +480,47 @@ public final class PrinterCommand {
             /*?}*/
                     .executes(ctx -> {
                         SchematicPrinter printer = getPrinter();
-                        boolean newValue = !printer.isAutoBuild();
-                        printer.setAutoBuild(newValue);
-                        ChatHelper.info("AutoBuild: " + (newValue ? "§aON" : "§cOFF"));
+                        printer.setAutoBuild(true);
+                        ChatHelper.info("AutoBuild: §aON");
                         return 1;
                     })
+                    /*? if >=26.1 {*//*
+                    .then(ClientCommands.literal("on")
+                    *//*?} else {*/
+                    .then(ClientCommandManager.literal("on")
+                    /*?}*/
+                            .executes(ctx -> {
+                                SchematicPrinter printer = getPrinter();
+                                printer.setAutoBuild(true);
+                                ChatHelper.info("AutoBuild: §aON");
+                                return 1;
+                            })
+                    )
+                    /*? if >=26.1 {*//*
+                    .then(ClientCommands.literal("off")
+                    *//*?} else {*/
+                    .then(ClientCommandManager.literal("off")
+                    /*?}*/
+                            .executes(ctx -> {
+                                SchematicPrinter printer = getPrinter();
+                                printer.setAutoBuild(false);
+                                ChatHelper.info("AutoBuild: §cOFF");
+                                return 1;
+                            })
+                    )
+                    /*? if >=26.1 {*//*
+                    .then(ClientCommands.literal("toggle")
+                    *//*?} else {*/
+                    .then(ClientCommandManager.literal("toggle")
+                    /*?}*/
+                            .executes(ctx -> {
+                                SchematicPrinter printer = getPrinter();
+                                boolean newValue = !printer.isAutoBuild();
+                                printer.setAutoBuild(newValue);
+                                ChatHelper.info("AutoBuild: " + (newValue ? "§aON" : "§cOFF"));
+                                return 1;
+                            })
+                    )
             );
 
             // /printer air — toggle air placement (place blocks without adjacent support)
@@ -874,6 +933,333 @@ public final class PrinterCommand {
 
             root.then(dump);
 
+            // ====================== QUEUE COMMANDS ======================
+
+            /*? if >=26.1 {*//*
+            var queue = ClientCommands.literal("queue");
+            *//*?} else {*/
+            var queue = ClientCommandManager.literal("queue");
+            /*?}*/
+
+            // /printer queue status
+            /*? if >=26.1 {*//*
+            queue.then(ClientCommands.literal("status")
+            *//*?} else {*/
+            queue.then(ClientCommandManager.literal("status")
+            /*?}*/
+                    .executes(ctx -> {
+                        SchematicQueueManager qm = MoarMod.getQueueManager();
+                        ChatHelper.info(qm.formatStatus());
+                        return 1;
+                    })
+            );
+
+            // /printer queue list (alias for status)
+            /*? if >=26.1 {*//*
+            queue.then(ClientCommands.literal("list")
+            *//*?} else {*/
+            queue.then(ClientCommandManager.literal("list")
+            /*?}*/
+                    .executes(ctx -> {
+                        SchematicQueueManager qm = MoarMod.getQueueManager();
+                        ChatHelper.info(qm.formatStatus());
+                        return 1;
+                    })
+            );
+
+            // /printer queue detect
+            /*? if >=26.1 {*//*
+            queue.then(ClientCommands.literal("detect")
+            *//*?} else {*/
+            queue.then(ClientCommandManager.literal("detect")
+            /*?}*/
+                    .executes(ctx -> {
+                        SchematicQueueManager qm = MoarMod.getQueueManager();
+                        int added = qm.enqueueFromDetection();
+                        if (added == 0) {
+                            ChatHelper.info("§eNo Litematica placements found to queue");
+                        } else {
+                            ChatHelper.info("§aAdded " + added + " placement" 
+                                + (added == 1 ? "" : "s") + " to queue");
+                        }
+                        return 1;
+                    })
+            );
+
+            // /printer queue add
+            /*? if >=26.1 {*//*
+            queue.then(ClientCommands.literal("add")
+            *//*?} else {*/
+            queue.then(ClientCommandManager.literal("add")
+            /*?}*/
+                    .executes(ctx -> {
+                        SchematicPrinter printer = getPrinter();
+                        if (!printer.isLoaded() || printer.getSchematic() == null || printer.getAnchor() == null) {
+                            ChatHelper.info("§cNo schematic loaded.");
+                            ChatHelper.info("§7Load a schematic first, or use §f/printer queue detect§7 for Litematica placements.");
+                            return 0;
+                        }
+
+                        Path schematicPath = printer.getSchematicPath();
+                        if (schematicPath == null) {
+                            ChatHelper.info("§cCurrent schematic path is unavailable.");
+                            return 0;
+                        }
+
+                        SchematicTask task = SchematicTask.create(
+                                schematicPath,
+                                printer.getAnchor(),
+                                printer.getSchematic().getName());
+                        MoarMod.getQueueManager().enqueue(task);
+                        ChatHelper.info("§aQueued §f" + task.getDisplayName()
+                                + " §7at §f" + task.getAnchor().getX() + " "
+                                + task.getAnchor().getY() + " " + task.getAnchor().getZ());
+                        ChatHelper.info("§7Run §f/printer here §7or reload the schematic, then queue it again to add duplicates.");
+                        return 1;
+                    })
+            );
+
+            // /printer queue next
+            /*? if >=26.1 {*//*
+            queue.then(ClientCommands.literal("next")
+            *//*?} else {*/
+            queue.then(ClientCommandManager.literal("next")
+            /*?}*/
+                    .executes(ctx -> {
+                        SchematicQueueManager qm = MoarMod.getQueueManager();
+                        if (qm.advanceQueue()) {
+                            ChatHelper.info("§aAdvanced to next build in queue");
+                        } else {
+                            ChatHelper.info("§eQueue is empty");
+                        }
+                        return 1;
+                    })
+            );
+
+            // /printer queue skip [reason]
+            /*? if >=26.1 {*//*
+            queue.then(ClientCommands.literal("skip")
+            *//*?} else {*/
+            queue.then(ClientCommandManager.literal("skip")
+            /*?}*/
+                    .executes(ctx -> {
+                        SchematicQueueManager qm = MoarMod.getQueueManager();
+                        if (qm.skipCurrent("User skipped")) {
+                            ChatHelper.info("§eSkipped current build");
+                        } else {
+                            ChatHelper.info("§eNo active build to skip");
+                        }
+                        return 1;
+                    })
+                    /*? if >=26.1 {*//*
+                    .then(ClientCommands.argument("reason", StringArgumentType.greedyString())
+                    *//*?} else {*/
+                    .then(ClientCommandManager.argument("reason", StringArgumentType.greedyString())
+                    /*?}*/
+                            .executes(ctx -> {
+                                String reason = StringArgumentType.getString(ctx, "reason");
+                                SchematicQueueManager qm = MoarMod.getQueueManager();
+                                if (qm.skipCurrent(reason)) {
+                                    ChatHelper.info("§eSkipped current build: " + reason);
+                                } else {
+                                    ChatHelper.info("§eNo active build to skip");
+                                }
+                                return 1;
+                            })
+                    )
+            );
+
+            // /printer queue clear
+            /*? if >=26.1 {*//*
+            queue.then(ClientCommands.literal("clear")
+            *//*?} else {*/
+            queue.then(ClientCommandManager.literal("clear")
+            /*?}*/
+                    .executes(ctx -> {
+                        SchematicQueueManager qm = MoarMod.getQueueManager();
+                        int count = qm.getQueueSize();
+                        qm.clear();
+                        ChatHelper.info("§aCleared " + count + " queued build" 
+                            + (count == 1 ? "" : "s"));
+                        return 1;
+                    })
+            );
+
+            // /printer queue auto <on|off>
+            /*? if >=26.1 {*//*
+            queue.then(ClientCommands.literal("auto")
+                    .then(ClientCommands.literal("on")
+            *//*?} else {*/
+            queue.then(ClientCommandManager.literal("auto")
+                    .then(ClientCommandManager.literal("on")
+            /*?}*/
+                            .executes(ctx -> {
+                                MoarMod.getQueueManager().setAutoAdvance(true);
+                                ChatHelper.info("§aAuto-advance enabled - queue will build continuously");
+                                return 1;
+                            })
+                    )
+                    /*? if >=26.1 {*//*
+                    .then(ClientCommands.literal("off")
+                    *//*?} else {*/
+                    .then(ClientCommandManager.literal("off")
+                    /*?}*/
+                            .executes(ctx -> {
+                                MoarMod.getQueueManager().setAutoAdvance(false);
+                                ChatHelper.info("§eAuto-advance disabled - queue requires manual advancement");
+                                return 1;
+                            })
+                    )
+            );
+
+            // /printer queue move <taskId> <position>
+            /*? if >=26.1 {*//*
+            queue.then(ClientCommands.literal("move")
+                    .then(ClientCommands.argument("taskId", StringArgumentType.word())
+                            .then(ClientCommands.argument("position", IntegerArgumentType.integer(1))
+            *//*?} else {*/
+            queue.then(ClientCommandManager.literal("move")
+                    .then(ClientCommandManager.argument("taskId", StringArgumentType.word())
+                            .then(ClientCommandManager.argument("position", IntegerArgumentType.integer(1))
+            /*?}*/
+                                    .executes(ctx -> {
+                                        String shortId = StringArgumentType.getString(ctx, "taskId");
+                                        int position = IntegerArgumentType.getInteger(ctx, "position");
+                                        SchematicQueueManager qm = MoarMod.getQueueManager();
+                                        
+                                        SchematicTask task = qm.findTaskByShortId(shortId);
+                                        if (task == null) {
+                                            ChatHelper.info("§cTask not found: " + shortId);
+                                            return 0;
+                                        }
+                                        
+                                        // Convert to 0-indexed
+                                        if (qm.moveTask(task.getId(), position - 1)) {
+                                            ChatHelper.info("§aMoved '" + task.getDisplayName() 
+                                                + "' to position " + position);
+                                        } else {
+                                            ChatHelper.info("§eFailed to move task");
+                                        }
+                                        return 1;
+                                    })
+                            )
+                    )
+            );
+
+            // /printer queue up <taskId>
+            /*? if >=26.1 {*//*
+            queue.then(ClientCommands.literal("up")
+                    .then(ClientCommands.argument("taskId", StringArgumentType.word())
+            *//*?} else {*/
+            queue.then(ClientCommandManager.literal("up")
+                    .then(ClientCommandManager.argument("taskId", StringArgumentType.word())
+            /*?}*/
+                            .executes(ctx -> {
+                                String shortId = StringArgumentType.getString(ctx, "taskId");
+                                SchematicQueueManager qm = MoarMod.getQueueManager();
+                                
+                                SchematicTask task = qm.findTaskByShortId(shortId);
+                                if (task == null) {
+                                    ChatHelper.info("§cTask not found: " + shortId);
+                                    return 0;
+                                }
+                                
+                                if (qm.moveTaskUp(task.getId())) {
+                                    ChatHelper.info("§aMoved '" + task.getDisplayName() + "' up");
+                                } else {
+                                    ChatHelper.info("§eTask is already at the front");
+                                }
+                                return 1;
+                            })
+                    )
+            );
+
+            // /printer queue down <taskId>
+            /*? if >=26.1 {*//*
+            queue.then(ClientCommands.literal("down")
+                    .then(ClientCommands.argument("taskId", StringArgumentType.word())
+            *//*?} else {*/
+            queue.then(ClientCommandManager.literal("down")
+                    .then(ClientCommandManager.argument("taskId", StringArgumentType.word())
+            /*?}*/
+                            .executes(ctx -> {
+                                String shortId = StringArgumentType.getString(ctx, "taskId");
+                                SchematicQueueManager qm = MoarMod.getQueueManager();
+                                
+                                SchematicTask task = qm.findTaskByShortId(shortId);
+                                if (task == null) {
+                                    ChatHelper.info("§cTask not found: " + shortId);
+                                    return 0;
+                                }
+                                
+                                if (qm.moveTaskDown(task.getId())) {
+                                    ChatHelper.info("§aMoved '" + task.getDisplayName() + "' down");
+                                } else {
+                                    ChatHelper.info("§eTask is already at the back");
+                                }
+                                return 1;
+                            })
+                    )
+            );
+
+            // /printer queue top <taskId>
+            /*? if >=26.1 {*//*
+            queue.then(ClientCommands.literal("top")
+                    .then(ClientCommands.argument("taskId", StringArgumentType.word())
+            *//*?} else {*/
+            queue.then(ClientCommandManager.literal("top")
+                    .then(ClientCommandManager.argument("taskId", StringArgumentType.word())
+            /*?}*/
+                            .executes(ctx -> {
+                                String shortId = StringArgumentType.getString(ctx, "taskId");
+                                SchematicQueueManager qm = MoarMod.getQueueManager();
+                                
+                                SchematicTask task = qm.findTaskByShortId(shortId);
+                                if (task == null) {
+                                    ChatHelper.info("§cTask not found: " + shortId);
+                                    return 0;
+                                }
+                                
+                                if (qm.moveTaskToFront(task.getId())) {
+                                    ChatHelper.info("§aMoved '" + task.getDisplayName() + "' to front");
+                                } else {
+                                    ChatHelper.info("§eFailed to move task");
+                                }
+                                return 1;
+                            })
+                    )
+            );
+
+            // /printer queue bottom <taskId>
+            /*? if >=26.1 {*//*
+            queue.then(ClientCommands.literal("bottom")
+                    .then(ClientCommands.argument("taskId", StringArgumentType.word())
+            *//*?} else {*/
+            queue.then(ClientCommandManager.literal("bottom")
+                    .then(ClientCommandManager.argument("taskId", StringArgumentType.word())
+            /*?}*/
+                            .executes(ctx -> {
+                                String shortId = StringArgumentType.getString(ctx, "taskId");
+                                SchematicQueueManager qm = MoarMod.getQueueManager();
+                                
+                                SchematicTask task = qm.findTaskByShortId(shortId);
+                                if (task == null) {
+                                    ChatHelper.info("§cTask not found: " + shortId);
+                                    return 0;
+                                }
+                                
+                                if (qm.moveTaskToBack(task.getId())) {
+                                    ChatHelper.info("§aMoved '" + task.getDisplayName() + "' to back");
+                                } else {
+                                    ChatHelper.info("§eFailed to move task");
+                                }
+                                return 1;
+                            })
+                    )
+            );
+
+            root.then(queue);
+
             dispatcher.register(root);
         });
     }
@@ -914,9 +1300,11 @@ public final class PrinterCommand {
             List<LitematicaDetector.DetectedPlacement> placements =
                     SchematicPrinter.detectAllPlacements();
             LitematicaDetector.DetectedPlacement unsupportedMatch =
-                    findClosestPlacement(placements, mc.player.getX(), mc.player.getZ(), loadedFile, false);
+                    findClosestPlacement(placements,
+                            mc.player.getX(), mc.player.getY(), mc.player.getZ(), loadedFile, false);
             LitematicaDetector.DetectedPlacement bestMatch =
-                    findClosestPlacement(placements, mc.player.getX(), mc.player.getZ(), loadedFile, true);
+                    findClosestPlacement(placements,
+                            mc.player.getX(), mc.player.getY(), mc.player.getZ(), loadedFile, true);
             if (bestMatch != null) {
                 // Warn on default-origin placements.
                 if (bestMatch.originX() == 0 && bestMatch.originY() == 0 && bestMatch.originZ() == 0) {
@@ -1002,6 +1390,7 @@ public final class PrinterCommand {
     private static LitematicaDetector.DetectedPlacement findClosestPlacement(
             List<LitematicaDetector.DetectedPlacement> placements,
             double playerX,
+            double playerY,
             double playerZ,
             String requiredFile,
             boolean supportedOnly) {
@@ -1017,7 +1406,7 @@ public final class PrinterCommand {
                 continue;
             }
 
-            double dist = horizontalDistance(placement, playerX, playerZ);
+            double dist = placementDistanceSq(placement, playerX, playerY, playerZ);
             if (dist < bestDist) {
                 bestDist = dist;
                 bestMatch = placement;
@@ -1032,6 +1421,14 @@ public final class PrinterCommand {
         double dx = placement.originX() - playerX;
         double dz = placement.originZ() - playerZ;
         return Math.sqrt(dx * dx + dz * dz);
+    }
+
+    private static double placementDistanceSq(LitematicaDetector.DetectedPlacement placement,
+                                              double playerX, double playerY, double playerZ) {
+        double dx = placement.originX() - playerX;
+        double dy = placement.originY() - playerY;
+        double dz = placement.originZ() - playerZ;
+        return dx * dx + dy * dy + dz * dz;
     }
 
     private static void warnUnsupportedPlacement(LitematicaDetector.DetectedPlacement placement) {
@@ -1109,7 +1506,7 @@ public final class PrinterCommand {
         return null;
     }
 
-    /** Whether the block is a supported container type. */
+    // Whether the block is a supported container type.
     private static boolean isContainer(Block block) {
         return block instanceof ChestBlock
                 || block instanceof BarrelBlock
