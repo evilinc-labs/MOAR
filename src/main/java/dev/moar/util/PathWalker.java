@@ -144,6 +144,7 @@ public final class PathWalker {
     private static boolean arrived;
     private static boolean stuck;
     private static int ticksWalking;
+    private static BlockPos elytraTarget;
     /** Consecutive ticks where Baritone's process is active (has a goal)
      *  but isPathing() is false (not executing any path step).
      *  When this exceeds STUCK_THRESHOLD, Baritone is stuck
@@ -635,6 +636,45 @@ public final class PathWalker {
     public static int getTicksWalking() { return ticksWalking; }
     public static boolean isPlacementEnabled() { return placementEnabled; }
 
+    /** Start Baritone elytra pathing. */
+    public static void startElytra(BlockPos dest) {
+        elytraTarget = dest;
+        if (BARITONE_AVAILABLE) BaritoneDelegate.startElytra(dest);
+    }
+
+    /** True while Baritone owns elytra flight. */
+    public static boolean isElytraActive() {
+        return BARITONE_AVAILABLE && BaritoneDelegate.isElytraActive();
+    }
+
+    /** True once elytra flight reaches the requested X/Z. */
+    public static boolean hasElytraArrived() {
+        if (elytraTarget == null) return false;
+        /*? if >=26.1 {*//*
+        Minecraft mc = Minecraft.getInstance();
+        if (mc.player == null) return false;
+        Vec3 playerPos = mc.player.position();
+        Vec3 targetCenter = Vec3.atCenterOf(elytraTarget);
+        *//*?} else if >=1.21.10 {*//*
+        MinecraftClient mc = MinecraftClient.getInstance();
+        if (mc.player == null) return false;
+        Vec3d playerPos = mc.player.getSyncedPos();
+        Vec3d targetCenter = Vec3d.ofCenter(elytraTarget);
+        *//*?} else {*/
+        MinecraftClient mc = MinecraftClient.getInstance();
+        if (mc.player == null) return false;
+        Vec3d playerPos = mc.player.getPos();
+        Vec3d targetCenter = Vec3d.ofCenter(elytraTarget);
+        /*?}*/
+        return horizontalDistSq(playerPos, targetCenter) <= 50.0 * 50.0;
+    }
+
+    /** Stop Baritone elytra pathing. */
+    public static void stopElytra() {
+        if (BARITONE_AVAILABLE) BaritoneDelegate.stopElytra();
+        elytraTarget = null;
+    }
+
     /**
      * Toggle Baritone's master allowBreak. When false, no block is mined
      * during pathing. Caller must restore to true when done.
@@ -1100,6 +1140,9 @@ public final class PathWalker {
         private static Method cancelEverything;
         private static Method isPathingMethod;
         private static Method isActiveMethod;  // IBaritoneProcess.isActive()
+        private static Method getElytraProcess;   // IBaritone.getElytraProcess()
+        private static Method elytraPathTo;       // IElytraProcess.pathTo(BlockPos)
+        private static boolean elytraReady;
         private static Constructor<?> goalBlockCtor;
         private static Constructor<?> goalGetToBlockCtor;
         private static Constructor<?> goalNearCtor;
@@ -1165,6 +1208,21 @@ public final class PathWalker {
             } catch (Exception e) {
                 LOGGER.error("PathWalker: Baritone reflection setup failed", e);
                 ready = false;
+            }
+
+            // Elytra process — optional; not available in all Baritone builds
+            elytraReady = false;
+            if (ready) {
+                try {
+                    Class<?> iBaritoneE = Class.forName("baritone.api.IBaritone");
+                    getElytraProcess = iBaritoneE.getMethod("getElytraProcess");
+                    Class<?> iElytraProcess = Class.forName("baritone.api.process.IElytraProcess");
+                    elytraPathTo = iElytraProcess.getMethod("pathTo", BlockPos.class);
+                    elytraReady = true;
+                    LOGGER.info("PathWalker: Baritone elytra process available");
+                } catch (Exception e) {
+                    LOGGER.info("PathWalker: Baritone elytra process unavailable ({})", e.getMessage());
+                }
             }
 
             // resolve settings reflection handles
@@ -1506,6 +1564,39 @@ public final class PathWalker {
         private static Object getPrimary() throws Exception {
             Object prov = getProvider.invoke(null);
             return getPrimaryBaritone.invoke(prov);
+        }
+
+        /** Start Baritone elytra pathing. */
+        static void startElytra(BlockPos dest) {
+            if (!elytraReady) return;
+            try {
+                Object process = getElytraProcess.invoke(getPrimary());
+                elytraPathTo.invoke(process, dest);
+            } catch (Exception e) {
+                LOGGER.error("PathWalker[Baritone]: failed to start elytra flight", e);
+            }
+        }
+
+        /** True if Baritone's elytra process is currently active. */
+        static boolean isElytraActive() {
+            if (!elytraReady) return false;
+            try {
+                Object process = getElytraProcess.invoke(getPrimary());
+                return (boolean) isActiveMethod.invoke(process);
+            } catch (Exception e) {
+                return false;
+            }
+        }
+
+        /** Stop Baritone elytra pathing (delegates to cancelEverything). */
+        static void stopElytra() {
+            if (!elytraReady) return;
+            try {
+                Object behavior = getPathingBehavior.invoke(getPrimary());
+                cancelEverything.invoke(behavior);
+            } catch (Exception e) {
+                LOGGER.error("PathWalker[Baritone]: failed to stop elytra flight", e);
+            }
         }
 
         static void walkTo(BlockPos pos) {
