@@ -1109,6 +1109,16 @@ public final class PathWalker {
                     vanillaFallback = true;
                     return;
                 }
+                // Baritone gave up on a distant target without arriving — this
+                // happens when a lag spike causes rubber-banding back to origin
+                // while the process believes it already completed.  Mark stuck so
+                // TravelManager can escalate (elytra / abort) rather than hanging
+                // forever with all three bridge signals (isPathing/isArrived/isStuck)
+                // simultaneously false.
+                LOGGER.warn("PathWalker[Baritone]: process stopped without arrival " +
+                        "dist²={} dy={} — marking stuck (lag/rubber-band?)",
+                        String.format("%.1f", totalDistSq), String.format("%.1f", dy));
+                stuck = true;
             }
             if (placementEnabled) {
                 BaritoneDelegate.restorePlacement();

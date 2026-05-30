@@ -16,8 +16,8 @@ import java.util.List;
 /** Plans a short side-step detour around a griefed highway section. */
 public final class DetourPlanner {
 
-    /** Perpendicular offset in blocks — one lane-width inside the tunnel wall. */
-    public static int SIDE_OFFSET = 2;
+    /** Perpendicular offset in blocks — enough to clear typical 2b2t highway guardrails (1–2 blocks from centre). */
+    public static int SIDE_OFFSET = 3;
 
     /** Extra blocks past the grief end before returning to the highway. */
     public static int CLEAR_MARGIN = 8;

@@ -94,6 +94,7 @@ public final class ElytraManager {
     private static final int SWAP_SETTLE             = 6;
     private static final int PLACE_RECENT_WINDOW     = 24;
     private static final int PLACE_STATIONARY_TICKS  = 5;
+    private static final int MAX_SHULKER_FAILURES    = 2;
     private static final int PICKUP_WAIT_TICKS       = 25;
 
     // ── State ─────────────────────────────────────────────────────
@@ -156,6 +157,9 @@ public final class ElytraManager {
     // Saved spare inventory slot for the EQUIPPING 3-phase PICKUP swap
     private int equipSpareInvSlot = -1;
 
+    // Shulker placement failure counter (reset on success, abort after MAX_SHULKER_FAILURES)
+    private int shulkerFailures = 0;
+
     // Returning flow
     private final Set<Integer> preBreakShulkerSlots = new HashSet<>();
     private int recoveredShulkerSlot = -1;
@@ -165,6 +169,11 @@ public final class ElytraManager {
     private int elytraPickupCount;
     // Quota computed at TAKING_ELYTRA entry: min(need, freeSlots). -1 = not yet computed.
     private int elytraTakeQuota = -1;
+    // True when this resupply run is fetching XP bottles for Mending (not elytras).
+    private boolean mendingMode = false;
+    // State to transition to once the full shulker breakdown cycle finishes.
+    // DONE for elytra resupply; MENDING when we placed a shulker to get XP bottles.
+    private State postShulkerState = State.DONE;
 
     // ──────────────────────────────────────────────────────────────
     // Public API
@@ -190,6 +199,18 @@ public final class ElytraManager {
         resetAll();
         state = State.CHECKING;
         LOGGER.info("[Elytra] resupply started");
+    }
+
+    /**
+     * Begin a Mending-only repair cycle for the currently worn elytra.
+     * Skips all elytra-replacement logic; only locates XP bottles and throws them.
+     * Fails fast if the worn elytra does not have the Mending enchantment.
+     */
+    public void startRepair() {
+        resetAll();
+        mendingMode = true;
+        state = State.CHECKING;
+        LOGGER.info("[Elytra] repair started");
     }
 
     /** Stop and release all held resources. */
@@ -249,10 +270,21 @@ public final class ElytraManager {
     *//*?} else {*/
     private void tickChecking(MinecraftClient mc) {
     /*?}*/
+        // In repair-only mode (mendingMode pre-set by startRepair): verify Mending is present
+        // and skip all elytra-replacement priorities.
+        if (mendingMode) {
+            ItemStack chestArmor = getChestStack(mc);
+            if (chestArmor.isEmpty() || !hasEnchantment(chestArmor, "mending")) {
+                fail(mc, "Worn elytra does not have the Mending enchantment");
+                return;
+            }
+        }
+
         // Priority 1: spare elytra already in inventory (with usable durability) → equip it
         // Skip this path if the direct-swap already timed out once (server may be rejecting
         // the armor-slot click); in that case fall through to EC/shulker resupply.
-        if (!skipDirectEquip) {
+        // Also skipped in repair-only mode — we want to mend the worn piece, not replace it.
+        if (!skipDirectEquip && !mendingMode) {
             int spareSlot = findUsableElytraInInventory(mc);
             if (spareSlot >= 0) {
                 LOGGER.info("[Elytra] spare elytra in slot {}, equipping directly", spareSlot);
@@ -266,28 +298,63 @@ public final class ElytraManager {
             skipDirectEquip = false;
         }
 
-        // Priority 2: worn elytra has Mending AND player has XP bottles
+        // Priority 2: worn elytra has Mending — locate XP bottles wherever they may be
         ItemStack chest = getChestStack(mc);
         if (!chest.isEmpty() && hasEnchantment(chest, "mending")) {
+            // 2a: XP already in direct inventory
             int xpSlot = findItemInInventory(mc, "minecraft:experience_bottle");
             if (xpSlot >= 0) {
                 LOGGER.info("[Elytra] elytra has Mending, XP bottles at slot {}", xpSlot);
+                mendingMode = true;
                 mendTicks = 0;
                 transition(State.MENDING);
+                return;
+            }
+            // 2b: shulker in inventory contains XP — place it and pull bottles out
+            int xpShulkerSlot = findShulkerWithXpInInventory(mc);
+            if (xpShulkerSlot >= 0) {
+                LOGGER.info("[Elytra] elytra has Mending, shulker with XP at inventory slot {}", xpShulkerSlot);
+                mendingMode = true;
+                shulkerSlot = xpShulkerSlot;
+                shulkerPhase = 0;
+                shulkerTicks = 0;
+                transition(State.PLACING_SHULKER);
+                return;
+            }
+            // 2c: registered EC may hold a shulker with XP
+            if (enderChestPos != null) {
+                LOGGER.info("[Elytra] elytra has Mending, checking registered EC for XP shulker");
+                mendingMode = true;
+                transition(State.WALKING_TO_EC);
+                return;
+            }
+            // 2d: EC item in inventory — place it and scan for XP shulker
+            int ecItemSlot = findItemInInventory(mc, "minecraft:ender_chest");
+            if (ecItemSlot >= 0) {
+                LOGGER.info("[Elytra] elytra has Mending, placing inventory EC (slot {}) to fetch XP", ecItemSlot);
+                mendingMode = true;
+                ecFromInventory = true;
+                ecInvSlot = ecItemSlot;
+                shulkerPhase = 0;
+                shulkerTicks = 0;
+                transition(State.PLACING_EC);
                 return;
             }
         }
 
         // Priority 3: shulker with elytra already in inventory → place it directly, skip EC trip
-        int shulkerInvSlot = findShulkerWithElytraInInventory(mc);
-        if (shulkerInvSlot >= 0) {
-            LOGGER.info("[Elytra] shulker with elytra already in inventory slot {}, placing directly",
-                    shulkerInvSlot);
-            shulkerSlot = shulkerInvSlot;
-            shulkerPhase = 0;
-            shulkerTicks = 0;
-            transition(State.PLACING_SHULKER);
-            return;
+        // Skipped in repair-only mode — an elytra shulker is irrelevant when Mending XP is needed.
+        if (!mendingMode) {
+            int shulkerInvSlot = findShulkerWithElytraInInventory(mc);
+            if (shulkerInvSlot >= 0) {
+                LOGGER.info("[Elytra] shulker with elytra already in inventory slot {}, placing directly",
+                        shulkerInvSlot);
+                shulkerSlot = shulkerInvSlot;
+                shulkerPhase = 0;
+                shulkerTicks = 0;
+                transition(State.PLACING_SHULKER);
+                return;
+            }
         }
 
         // Priority 4: walk to registered ender chest
@@ -310,8 +377,10 @@ public final class ElytraManager {
         }
 
         // Nothing viable
-        LOGGER.warn("[Elytra] no viable options — disconnecting");
-        fail(mc, "Out of elytra — no viable traveling materials");
+        LOGGER.warn("[Elytra] no viable options — {}", mendingMode ? "no XP found" : "disconnecting");
+        fail(mc, mendingMode
+                ? "No XP bottles found anywhere — cannot repair elytra"
+                : "Out of elytra — no viable traveling materials");
     }
 
     // ──────────────────────────────────────────────────────────────
@@ -419,13 +488,79 @@ public final class ElytraManager {
     /*?}*/
         mendTicks++;
 
-        // Check if elytra is now repaired
+        // ── Swap sub-phases: equip the next damaged elytra for continued mending ─────
+        // shulkerPhase 1-3 = the same 3-click armor swap used in tickSwappingElytra.
+        // shulkerSlot holds the inventory slot of the damaged elytra being swapped in.
+        // Phase completes with shulkerPhase reset to 0 and mendTicks reset to 0 so the
+        // newly equipped elytra gets its own full mending window.
+        if (shulkerPhase > 0) {
+            if (actionCooldown > 0) return;
+            int pshSlot = invSlotToPSHSlot(shulkerSlot);
+            switch (shulkerPhase) {
+                case 1 -> {
+                    LOGGER.info("[Elytra:mend-swap] phase=1 picking up damaged elytra psh={}", pshSlot);
+                    /*? if >=26.1 {*//*
+                    mc.gameMode.handleContainerInput(
+                            mc.player.containerMenu.containerId, pshSlot, 0,
+                            ContainerInput.PICKUP, mc.player);
+                    *//*?} else {*/
+                    mc.interactionManager.clickSlot(
+                            mc.player.currentScreenHandler.syncId, pshSlot, 0,
+                            SlotActionType.PICKUP, mc.player);
+                    /*?}*/
+                    shulkerPhase = 2;
+                    actionCooldown = CLICK_COOLDOWN;
+                }
+                case 2 -> {
+                    LOGGER.info("[Elytra:mend-swap] phase=2 placing into chest slot 6");
+                    /*? if >=26.1 {*//*
+                    mc.gameMode.handleContainerInput(
+                            mc.player.containerMenu.containerId, 6, 0,
+                            ContainerInput.PICKUP, mc.player);
+                    *//*?} else {*/
+                    mc.interactionManager.clickSlot(
+                            mc.player.currentScreenHandler.syncId, 6, 0,
+                            SlotActionType.PICKUP, mc.player);
+                    /*?}*/
+                    shulkerPhase = 3;
+                    actionCooldown = CLICK_COOLDOWN;
+                }
+                case 3 -> {
+                    LOGGER.info("[Elytra:mend-swap] phase=3 depositing mended elytra at psh={}", pshSlot);
+                    /*? if >=26.1 {*//*
+                    mc.gameMode.handleContainerInput(
+                            mc.player.containerMenu.containerId, pshSlot, 0,
+                            ContainerInput.PICKUP, mc.player);
+                    *//*?} else {*/
+                    mc.interactionManager.clickSlot(
+                            mc.player.currentScreenHandler.syncId, pshSlot, 0,
+                            SlotActionType.PICKUP, mc.player);
+                    /*?}*/
+                    shulkerPhase = 0;
+                    mendTicks = 0;  // fresh timeout window for the next elytra
+                    actionCooldown = CLICK_COOLDOWN;
+                }
+            }
+            return;
+        }
+
+        // Check if elytra is now fully repaired (damage == 0, not merely "no longer low")
         ItemStack chest = getChestStack(mc);
         if (chest.isEmpty() || !ItemIdentifier.getItemId(chest).equals("minecraft:elytra")
-                || !isElytraLow(chest)) {
+                || isElytraFullyRepaired(chest)) {
+            // Worn elytra is repaired — look for another low-durability Mending elytra in
+            // inventory and swap it in so everything gets mended in one sitting.
+            int nextSlot = findDamagedMendableElytraInInventory(mc);
+            if (nextSlot >= 0) {
+                LOGGER.info("[Elytra] worn elytra mended — swapping in next at inv slot {} for continued mending", nextSlot);
+                shulkerSlot = nextSlot;
+                shulkerPhase = 1;
+                actionCooldown = CLICK_COOLDOWN;
+                return;
+            }
             restoreHotbar(mc);
-            LOGGER.info("[Elytra] Mending complete after {} ticks", mendTicks);
-            ChatHelper.labelled("Travel", "§aElytra mended — resuming.");
+            LOGGER.info("[Elytra] all elytras mended after {} ticks", mendTicks);
+            ChatHelper.labelled("Travel", "§aAll elytras mended — resuming.");
             transition(State.DONE);
             return;
         }
@@ -457,6 +592,17 @@ public final class ElytraManager {
         if (xpSlot < 0) {
             restoreHotbar(mc);
             LOGGER.warn("[Elytra] out of XP bottles for mending");
+            // Check for a shulker with XP directly in inventory before resorting to EC path.
+            // This fires when raw bottles ran out but a shulker carrying more is still on hand.
+            int xpShulkerSlot = findShulkerWithXpInInventory(mc);
+            if (xpShulkerSlot >= 0) {
+                LOGGER.info("[Elytra] out of XP bottles — shulker with XP found at slot {}, placing", xpShulkerSlot);
+                shulkerSlot = xpShulkerSlot;
+                shulkerPhase = 0;
+                shulkerTicks = 0;
+                transition(State.PLACING_SHULKER);
+                return;
+            }
             if (enderChestPos != null) {
                 transition(State.WALKING_TO_EC);
             } else {
@@ -475,14 +621,26 @@ public final class ElytraManager {
             return;
         }
 
-        // Ensure bottle is in hotbar and throw it (throttled by actionCooldown)
+        // Ensure bottle is selected.  ensureInHotbar may set actionCooldown = SWAP_SETTLE
+        // when a slot-swap is needed.  Do NOT throw on the same tick as the swap —
+        // the server has not yet processed it and will throw the wrong item.
+        // On the next call (after actionCooldown drains) the bottle is in the hotbar
+        // and ensureInHotbar is a no-op, so we fall through to the throw.
         ensureInHotbar(mc, xpSlot);
+        if (actionCooldown > 0) return; // swap just fired — wait for settle
 
-        // Right-click to throw the bottle
+        // Throw looking straight down so the XP orb lands at the player's feet
+        // and is absorbed immediately (same technique as AnarchyClient AutoEXP).
         /*? if >=26.1 {*//*
+        float prevPitch = mc.player.getXRot();
+        mc.player.setXRot(90.0f);
         mc.gameMode.useItem(mc.player, InteractionHand.MAIN_HAND);
+        mc.player.setXRot(prevPitch);
         *//*?} else {*/
+        float prevPitch = mc.player.getPitch();
+        mc.player.setPitch(90.0f);
         mc.interactionManager.interactItem(mc.player, Hand.MAIN_HAND);
+        mc.player.setPitch(prevPitch);
         /*?}*/
         actionCooldown = MEND_THROW_INTERVAL;
     }
@@ -785,7 +943,7 @@ public final class ElytraManager {
         int ecSlots = chestHandler.getRows() * 9;
         /*?}*/
 
-        // Find first shulker containing elytra
+        // Find first shulker containing the needed items (elytra or XP bottles)
         for (int slot = 0; slot < ecSlots; slot++) {
             /*? if >=26.1 {*//*
             ItemStack stack = chestHandler.getSlot(slot).getItem();
@@ -793,7 +951,7 @@ public final class ElytraManager {
             ItemStack stack = chestHandler.getSlot(slot).getStack();
             /*?}*/
             if (!ChestManager.isShulkerBox(stack)) continue;
-            if (!shulkerContainsElytra(stack)) continue;
+            if (mendingMode ? !shulkerContainsXpBottles(stack) : !shulkerContainsElytra(stack)) continue;
 
             // Found — QUICK_MOVE it to player inventory
             /*? if >=26.1 {*//*
@@ -816,7 +974,7 @@ public final class ElytraManager {
         *//*?} else {*/
         mc.player.closeHandledScreen();
         /*?}*/
-        fail(mc, "No elytra shulker found in ender chest");
+        fail(mc, mendingMode ? "No XP shulker found in ender chest" : "No elytra shulker found in ender chest");
     }
 
     // ──────────────────────────────────────────────────────────────
@@ -838,14 +996,16 @@ public final class ElytraManager {
         /*?}*/
 
         // Verify shulker arrived in inventory
-        int slot = findShulkerWithElytraInInventory(mc);
+        int slot = mendingMode
+                ? findShulkerWithXpInInventory(mc)
+                : findShulkerWithElytraInInventory(mc);
         if (slot < 0) {
             LOGGER.warn("[Elytra] shulker not found in inventory after taking");
             fail(mc, "Shulker did not transfer to inventory");
             return;
         }
         shulkerSlot = slot;
-        LOGGER.info("[Elytra] shulker with elytra in slot {}", shulkerSlot);
+        LOGGER.info("[Elytra] shulker ({}) in slot {}", mendingMode ? "XP" : "elytra", shulkerSlot);
 
         shulkerPhase = 0;
         shulkerTicks = 0;
@@ -879,7 +1039,12 @@ public final class ElytraManager {
                 if (!SetbackMonitor.get().isCalm()) return;
                 if (!isPlacementWindowSafe()) return;
 
-                shulkerSlot = findShulkerWithElytraInInventory(mc);
+                if (shulkerFailures >= MAX_SHULKER_FAILURES) {
+                    fail(mc, "Shulker placement failed too many times");
+                    return;
+                }
+
+                shulkerSlot = mendingMode ? findShulkerWithXpInInventory(mc) : findShulkerWithElytraInInventory(mc);
                 if (shulkerSlot < 0) {
                     fail(mc, "Lost shulker before placement");
                     return;
@@ -951,10 +1116,10 @@ public final class ElytraManager {
             case 2 -> {
                 if (shulkerTicks < SWAP_SETTLE) return;
                 if (!isPlacementWindowSafe()) {
-                    if (shulkerTicks >= PHASE_TIMEOUT) { shulkerPhase = 0; shulkerTicks = 0; }
+                    if (shulkerTicks >= PHASE_TIMEOUT) { shulkerFailures++; shulkerPhase = 0; shulkerTicks = 0; }
                     return;
                 }
-                if (!SetbackMonitor.get().isCalm()) { shulkerPhase = 0; shulkerTicks = 0; return; }
+                if (!SetbackMonitor.get().isCalm()) { shulkerFailures++; shulkerPhase = 0; shulkerTicks = 0; return; }
 
                 /*? if >=26.1 {*//*
                 Inventory inv = player.getInventory();
@@ -966,7 +1131,7 @@ public final class ElytraManager {
                 PlayerInventory inv = player.getInventory();
                 ItemStack held = inv.getStack(inv.selectedSlot);
                 /*?}*/
-                if (!ChestManager.isShulkerBox(held)) { shulkerPhase = 0; shulkerTicks = 0; return; }
+                if (!ChestManager.isShulkerBox(held)) { shulkerFailures++; shulkerPhase = 0; shulkerTicks = 0; return; }
 
                 /*? if >=26.1 {*//*
                 Vec3 target = Vec3.atCenterOf(shulkerPos.below()).add(0, 0.5, 0);
@@ -975,7 +1140,7 @@ public final class ElytraManager {
                 Vec3d target = Vec3d.ofCenter(shulkerPos.down()).add(0, 0.5, 0);
                 if (player.getEyePos().squaredDistanceTo(target) > 4.5 * 4.5) {
                 /*?}*/
-                    shulkerPhase = 0; shulkerTicks = 0; return;
+                    shulkerFailures++; shulkerPhase = 0; shulkerTicks = 0; return;
                 }
 
                 lookAt(player, target);
@@ -1006,7 +1171,8 @@ public final class ElytraManager {
                 }
                 BlockState st = world.getBlockState(shulkerPos);
                 if (st.getBlock() instanceof ShulkerBoxBlock) {
-                    // Placed — move on to opening
+                    // Placed successfully — reset failure counter and move on
+                    shulkerFailures = 0;
                     transition(State.OPENING_SHULKER);
                     shulkerPhase = 4;
                     shulkerTicks = 0;
@@ -1014,6 +1180,7 @@ public final class ElytraManager {
                 }
                 if (shulkerTicks >= PHASE_TIMEOUT) {
                     if (shulkerSneakRestore != null) { shulkerSneakRestore.run(); shulkerSneakRestore = null; }
+                    shulkerFailures++;
                     shulkerPhase = 0;
                     shulkerTicks = 0;
                 }
@@ -1136,12 +1303,14 @@ public final class ElytraManager {
         }
         /*?}*/
 
-        int target = MoarMod.getProperties() != null
-                ? MoarMod.getProperties().getElytraResupplyCount() : 1;
+        int target = mendingMode ? 64
+                : (MoarMod.getProperties() != null ? MoarMod.getProperties().getElytraResupplyCount() : 1);
 
         // Use an inventory scan as the source of truth rather than an optimistic counter
         // (QUICK_MOVE silently fails when inventory is full, so counting attempts is wrong).
-        int alreadyHave = countUsableElytraInInventory(mc);
+        int alreadyHave = mendingMode
+                ? countItemInInventory(mc, "minecraft:experience_bottle")
+                : countUsableElytraInInventory(mc);
 
         // Compute quota once on the first valid tick:
         //   quota = min(how many we still need, how many empty slots we have)
@@ -1154,14 +1323,16 @@ public final class ElytraManager {
             LOGGER.info("[Elytra] resupply quota: have={} target={} need={} freeSlots={} → quota={}",
                     alreadyHave, target, need, freeSlots, elytraTakeQuota);
             if (elytraTakeQuota == 0 && alreadyHave == 0) {
-                // Inventory is completely full and we have nothing to equip.
-                // Fail immediately instead of letting EQUIPPING time out.
+                // Inventory is completely full and we have nothing to equip/mend with.
+                // Fail immediately instead of letting the next state time out.
                 /*? if >=26.1 {*//*
                 mc.player.clientSideCloseContainer();
                 *//*?} else {*/
                 mc.player.closeHandledScreen();
                 /*?}*/
-                fail(mc, "Inventory full — clear a slot before elytra resupply");
+                fail(mc, mendingMode
+                        ? "Inventory full — no room for XP bottles"
+                        : "Inventory full — clear a slot before elytra resupply");
                 return;
             }
         }
@@ -1176,7 +1347,16 @@ public final class ElytraManager {
             mc.player.closeHandledScreen();
             /*?}*/
             shulkerPhase = 0;
-            transition(State.EQUIPPING);
+            if (mendingMode) {
+                mendTicks = 0;
+                postShulkerState = State.MENDING;
+                snapshotShulkerSlots(mc);
+                shulkerPhase = 6;
+                shulkerTicks = 0;
+                transition(State.BREAKING_SHULKER);
+            } else {
+                transition(State.EQUIPPING);
+            }
             return;
         }
 
@@ -1187,7 +1367,9 @@ public final class ElytraManager {
                 *//*?} else {*/
                 mc.player.closeHandledScreen();
                 /*?}*/
-                fail(mc, "Timed out while taking elytra from shulker");
+                fail(mc, mendingMode
+                        ? "Timed out taking XP from shulker"
+                        : "Timed out while taking elytra from shulker");
             } else {
                 LOGGER.warn("[Elytra] TAKING_ELYTRA timeout — proceeding with {}/{}", alreadyHave, target);
                 /*? if >=26.1 {*//*
@@ -1196,13 +1378,24 @@ public final class ElytraManager {
                 mc.player.closeHandledScreen();
                 /*?}*/
                 shulkerPhase = 0;
-                transition(State.EQUIPPING);
+                if (mendingMode) {
+                    mendTicks = 0;
+                    postShulkerState = State.MENDING;
+                    snapshotShulkerSlots(mc);
+                    shulkerPhase = 6;
+                    shulkerTicks = 0;
+                    transition(State.BREAKING_SHULKER);
+                } else {
+                    transition(State.EQUIPPING);
+                }
             }
             return;
         }
 
-        // Find the next USABLE elytra in the shulker (skip low-durability — they would
-        // never increment alreadyHave and would cause the loop to run until inventory fills).
+        // Find the next item to take from the shulker.
+        // In normal mode: usable elytra (skip low-durability to avoid infinite loops).
+        // In mendingMode: XP bottle.
+        String wantedItemId = mendingMode ? "minecraft:experience_bottle" : "minecraft:elytra";
         int elytraShulkerSlot = -1;
         for (int slot = 0; slot < 27; slot++) {
             /*? if >=26.1 {*//*
@@ -1210,7 +1403,8 @@ public final class ElytraManager {
             *//*?} else {*/
             ItemStack stack = shulkerHandler.getSlot(slot).getStack();
             /*?}*/
-            if (ItemIdentifier.getItemId(stack).equals("minecraft:elytra") && !isElytraLow(stack)) {
+            if (ItemIdentifier.getItemId(stack).equals(wantedItemId)
+                    && (mendingMode || !isElytraLow(stack))) {
                 elytraShulkerSlot = slot;
                 break;
             }
@@ -1224,10 +1418,10 @@ public final class ElytraManager {
                 *//*?} else {*/
                 mc.player.closeHandledScreen();
                 /*?}*/
-                fail(mc, "No usable elytra found in shulker");
+                fail(mc, mendingMode ? "No XP bottles found in shulker" : "No usable elytra found in shulker");
                 return;
             }
-            LOGGER.info("[Elytra] shulker exhausted — proceeding with {}/{} elytras", alreadyHave, target);
+            LOGGER.info("[Elytra] shulker exhausted — proceeding with {}/{}", alreadyHave, target);
             /*? if >=26.1 {*//*
             mc.player.clientSideCloseContainer();
             *//*?} else {*/
@@ -1235,12 +1429,22 @@ public final class ElytraManager {
             /*?}*/
             actionCooldown = CLICK_COOLDOWN;
             shulkerPhase = 0;
-            transition(State.EQUIPPING);
+            if (mendingMode) {
+                mendTicks = 0;
+                postShulkerState = State.MENDING;
+                snapshotShulkerSlots(mc);
+                shulkerPhase = 6;
+                shulkerTicks = 0;
+                transition(State.BREAKING_SHULKER);
+            } else {
+                transition(State.EQUIPPING);
+            }
             return;
         }
 
-        // QUICK_MOVE one usable elytra to player inventory.
-        LOGGER.info("[Elytra] taking elytra from shulker slot {} ({}/{})",
+        // QUICK_MOVE one item to player inventory.
+        LOGGER.info("[Elytra] taking {} from shulker slot {} ({}/{})",
+                mendingMode ? "XP bottle" : "elytra",
                 elytraShulkerSlot, elytraPickupCount + 1, elytraTakeQuota);
         /*? if >=26.1 {*//*
         mc.gameMode.handleContainerInput(
@@ -1272,6 +1476,7 @@ public final class ElytraManager {
             ChatHelper.labelled("Travel", "§aNew elytra equipped — resuming.");
             // Record shulker slots before breaking so we can track the drop
             snapshotShulkerSlots(mc);
+            postShulkerState = State.DONE;
             shulkerPhase = 6;
             shulkerTicks = 0;
             transition(State.BREAKING_SHULKER);
@@ -1469,7 +1674,7 @@ public final class ElytraManager {
                 transition(State.RETURNING_SHULKER);
             } else {
                 LOGGER.warn("[Elytra] shulker drop not picked up — skipping return");
-                transition(State.DONE);
+                transition(postShulkerState);
             }
         }
     }
@@ -1494,7 +1699,7 @@ public final class ElytraManager {
                     // Shulker came from inventory (no EC registered) — leave it in inventory.
                     // Next CHECKING cycle will detect it via Priority 3 and reuse it.
                     LOGGER.info("[Elytra] no EC registered — leaving recovered shulker in inventory");
-                    transition(State.DONE);
+                    transition(postShulkerState);
                     return;
                 }
                 if (!PathWalker.isActive()) PathWalker.walkToAdjacent(enderChestPos);
@@ -1509,7 +1714,7 @@ public final class ElytraManager {
                 if (PathWalker.isStuck()) {
                     PathWalker.stop();
                     LOGGER.warn("[Elytra] stuck walking back to EC for shulker return");
-                    transition(State.DONE); // best-effort; elytra is already equipped
+                    transition(postShulkerState); // best-effort; elytra is already equipped
                     return;
                 }
                 PathWalker.tick();
@@ -1566,7 +1771,7 @@ public final class ElytraManager {
                 }
                 if (openWaitTicks > OPEN_TIMEOUT_TICKS) {
                     LOGGER.warn("[Elytra] timeout re-opening EC for shulker return — giving up");
-                    transition(State.DONE);
+                    transition(postShulkerState);
                 }
             }
 
@@ -1631,7 +1836,7 @@ public final class ElytraManager {
                     shulkerTicks = 0;
                     transition(State.RECOVERING_EC);
                 } else {
-                    transition(State.DONE);
+                    transition(postShulkerState);
                 }
             }
         }
@@ -1668,7 +1873,7 @@ public final class ElytraManager {
                 if (stSlot < 0) {
                     LOGGER.info("[Elytra] no Silk Touch pickaxe; placed EC remains at {}",
                             enderChestPos == null ? "null" : enderChestPos.toShortString());
-                    transition(State.DONE);
+                    transition(postShulkerState);
                     return;
                 }
 
@@ -1756,7 +1961,7 @@ public final class ElytraManager {
                     mc.interactionManager.cancelBlockBreaking();
                     /*?}*/
                     LOGGER.warn("[Elytra] timed out breaking placed EC; it remains in the world");
-                    transition(State.DONE);
+                    transition(postShulkerState);
                     return;
                 }
                 /*? if >=26.1 {*//*
@@ -1781,7 +1986,7 @@ public final class ElytraManager {
                     }
                     enderChestPos = null;
                     ecFromInventory = false;
-                    transition(State.DONE);
+                    transition(postShulkerState);
                 }
             }
         }
@@ -1811,6 +2016,14 @@ public final class ElytraManager {
         return stack.getDamageValue() >= stack.getMaxDamage() - LOW_DURABILITY_THRESHOLD;
         *//*?} else {*/
         return stack.getDamage() >= stack.getMaxDamage() - LOW_DURABILITY_THRESHOLD;
+        /*?}*/
+    }
+
+    private static boolean isElytraFullyRepaired(ItemStack stack) {
+        /*? if >=26.1 {*//*
+        return stack.getDamageValue() == 0;
+        *//*?} else {*/
+        return stack.getDamage() == 0;
         /*?}*/
     }
 
@@ -1847,6 +2060,11 @@ public final class ElytraManager {
     private static boolean shulkerContainsElytra(ItemStack shulker) {
         Map<String, Integer> contents = ChestManager.readShulkerContents(shulker);
         return contents.containsKey("minecraft:elytra");
+    }
+
+    private static boolean shulkerContainsXpBottles(ItemStack shulker) {
+        Map<String, Integer> contents = ChestManager.readShulkerContents(shulker);
+        return contents.containsKey("minecraft:experience_bottle");
     }
 
     // ──────────────────────────────────────────────────────────────
@@ -1929,6 +2147,28 @@ public final class ElytraManager {
         return free;
     }
 
+    /** Find the first inventory slot (0-35) containing a low-durability elytra with Mending. */
+    /*? if >=26.1 {*//*
+    private static int findDamagedMendableElytraInInventory(Minecraft mc) {
+    *//*?} else {*/
+    private static int findDamagedMendableElytraInInventory(MinecraftClient mc) {
+    /*?}*/
+        if (mc.player == null) return -1;
+        for (int i = 0; i < 36; i++) {
+            /*? if >=26.1 {*//*
+            ItemStack stack = mc.player.getInventory().getItem(i);
+            *//*?} else {*/
+            ItemStack stack = mc.player.getInventory().getStack(i);
+            /*?}*/
+            if (stack.isEmpty()) continue;
+            if (!ItemIdentifier.getItemId(stack).equals("minecraft:elytra")) continue;
+            if (!isElytraLow(stack)) continue;
+            if (!hasEnchantment(stack, "mending")) continue;
+            return i;
+        }
+        return -1;
+    }
+
     /** Find the first inventory slot (0-35) containing an item matching the given ID. */
     /*? if >=26.1 {*//*
     private static int findItemInInventory(Minecraft mc, String itemId) {
@@ -1963,6 +2203,44 @@ public final class ElytraManager {
             if (ChestManager.isShulkerBox(stack) && shulkerContainsElytra(stack)) return i;
         }
         return -1;
+    }
+
+    /** Find the first inventory slot containing a shulker with XP bottles inside. */
+    /*? if >=26.1 {*//*
+    private static int findShulkerWithXpInInventory(Minecraft mc) {
+    *//*?} else {*/
+    private static int findShulkerWithXpInInventory(MinecraftClient mc) {
+    /*?}*/
+        if (mc.player == null) return -1;
+        for (int i = 0; i < 36; i++) {
+            /*? if >=26.1 {*//*
+            ItemStack stack = mc.player.getInventory().getItem(i);
+            *//*?} else {*/
+            ItemStack stack = mc.player.getInventory().getStack(i);
+            /*?}*/
+            if (ChestManager.isShulkerBox(stack) && shulkerContainsXpBottles(stack)) return i;
+        }
+        return -1;
+    }
+
+    /** Count total stacked items matching itemId across the player's 36 main inventory slots. */
+    /*? if >=26.1 {*//*
+    private static int countItemInInventory(Minecraft mc, String itemId) {
+    *//*?} else {*/
+    private static int countItemInInventory(MinecraftClient mc, String itemId) {
+    /*?}*/
+        if (mc.player == null) return 0;
+        int count = 0;
+        for (int i = 0; i < 36; i++) {
+            /*? if >=26.1 {*//*
+            ItemStack stack = mc.player.getInventory().getItem(i);
+            *//*?} else {*/
+            ItemStack stack = mc.player.getInventory().getStack(i);
+            /*?}*/
+            if (!stack.isEmpty() && ItemIdentifier.getItemId(stack).equals(itemId))
+                count += stack.getCount();
+        }
+        return count;
     }
 
     /** Find the first shulker box in inventory regardless of contents. */
@@ -2267,5 +2545,7 @@ public final class ElytraManager {
         returnTicks = 0;
         elytraPickupCount = 0;
         elytraTakeQuota = -1;
+        mendingMode = false;
+        postShulkerState = State.DONE;
     }
 }

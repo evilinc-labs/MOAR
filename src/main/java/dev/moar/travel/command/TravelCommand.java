@@ -79,7 +79,9 @@ public final class TravelCommand {
                             .then(ClientCommands.literal("resupply-count")
                                     .then(ClientCommands.argument("count", IntegerArgumentType.integer(1, 27))
                                             .executes(ctx -> doElytraResupplyCount(
-                                                    IntegerArgumentType.getInteger(ctx, "count")))))));
+                                                    IntegerArgumentType.getInteger(ctx, "count")))))
+                            .then(ClientCommands.literal("repair")
+                                    .executes(ctx -> doRepairElytras()))));
             *//*?} else {*/
             var root = ClientCommandManager.literal("moar").then(ClientCommandManager.literal("travel")
                     .then(ClientCommandManager.literal("goto")
@@ -116,7 +118,9 @@ public final class TravelCommand {
                             .then(ClientCommandManager.literal("resupply-count")
                                     .then(ClientCommandManager.argument("count", IntegerArgumentType.integer(1, 27))
                                             .executes(ctx -> doElytraResupplyCount(
-                                                    IntegerArgumentType.getInteger(ctx, "count")))))));
+                                                    IntegerArgumentType.getInteger(ctx, "count")))))
+                            .then(ClientCommandManager.literal("repair")
+                                    .executes(ctx -> doRepairElytras()))));
             /*?}*/
             dispatcher.register(root);
             LOGGER.info("TravelCommand: /moar travel registered");
@@ -128,6 +132,16 @@ public final class TravelCommand {
         chat("\u00a7a[Travel] elytra resupply count set to \u00a7f" + count
                 + "\u00a7a. Will grab \u00a7f" + count + "\u00a7a elytra(s) per shulker trip.");
         return 1;
+    }
+
+    private static int doRepairElytras() {
+        boolean started = TravelManager.get().startStandaloneRepair();
+        if (started) {
+            chat("\u00a7a[Travel] elytra repair started — locating XP bottles to Mend the worn elytra.");
+        } else {
+            chat("\u00a7c[Travel] repair rejected — a travel mission is already in progress.");
+        }
+        return started ? 1 : 0;
     }
 
     private static int doGoto(int x, int z) {

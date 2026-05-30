@@ -13,7 +13,7 @@ public final class HighwayVerifier {
 
     private static final int SAMPLE_INTERVAL   = 10;  // ticks
     private static final int LOOK_AHEAD_BLOCKS = 64;  // cells along axis
-    private static final float GRIEF_THRESHOLD = 0.25f; // 25 % bad → GRIEFED
+    private static final float GRIEF_THRESHOLD = 0.30f; // 30 % bad → GRIEFED (was 0.25; raised to reduce false positives at road crossings)
     private static final float UNLOADED_MAJORITY = 0.5f; // 50 % unloaded → UNLOADED
 
     private static final HighwayVerifier INSTANCE = new HighwayVerifier();
@@ -100,8 +100,9 @@ public final class HighwayVerifier {
                     if (griefStart < 0) griefStart = step;
                     griefEnd = step;
                 }
-                case UNLOADED -> unloaded++;
-                case OK -> { /* intact */ }
+                case UNLOADED  -> unloaded++;
+                case CAVE_PASS -> { /* natural cave intersection — not grief */ }
+                case OK        -> { /* intact */ }
             }
         }
 

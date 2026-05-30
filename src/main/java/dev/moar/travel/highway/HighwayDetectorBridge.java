@@ -32,13 +32,37 @@ public final class HighwayDetectorBridge {
                               float blockConfidence) {}
 
     // ── CellStatus ───────────────────────────────────────────────
-    public enum CellStatus { OK, GRIEFED, UNLOADED }
+    /**
+     * OK        — floor block present and intact.
+     * GRIEFED   — floor block missing, solid terrain below → targeted removal.
+     * UNLOADED  — chunk not in memory; result undefined.
+     * CAVE_PASS — floor block missing but suppressed by one of two heuristics:
+     *              (a) natural cave: ≥4 consecutive void blocks directly below, OR
+     *              (b) portal area:  NETHER_PORTAL block found within the scan
+     *                  box above the cell (highway mined out for portal construction).
+     *             In both cases the cell counts toward total but not toward griefed.
+     */
+    public enum CellStatus { OK, GRIEFED, UNLOADED, CAVE_PASS }
+
+    // How many consecutive air-like blocks below the missing floor constitute a cave.
+    private static final int CAVE_SCAN_DEPTH = 4;
+    // Horizontal radius (blocks) searched for a lit Nether portal above a missing cell.
+    private static final int PORTAL_H_RADIUS = 2;
+    // Height range searched for portal blocks: from floorY up to floorY + this value.
+    private static final int PORTAL_V_HEIGHT = 5;
 
     // ── Public API ───────────────────────────────────────────────
     /**
      * Floor-presence check used by the integrity verifier.
      * Deliberately does NOT check clearance above — nether rack can generate
      * at Y+1 above a clean highway floor and must not trigger false griefs.
+     *
+     * Before returning GRIEFED, two suppressors are tried:
+     *  1. Cave suppressor — if the column below is open void for ≥ CAVE_SCAN_DEPTH
+     *     blocks, the highway spans a natural cave opening (not targeted removal).
+     *  2. Portal suppressor — if a lit Nether portal block exists within
+     *     PORTAL_H_RADIUS blocks horizontally and PORTAL_V_HEIGHT blocks above,
+     *     the highway was mined out for portal construction, not griefed.
      */
     public CellStatus checkFloorOnly(int bx, int floorY, int bz) {
         BlockPos pos = new BlockPos(bx, floorY, bz);
@@ -47,6 +71,12 @@ public final class HighwayDetectorBridge {
         // Highway floor may step ±1 block in height at section joints; treat as intact.
         if (isHighwayBlock(bx, floorY + 1, bz)) return CellStatus.OK;
         if (isHighwayBlock(bx, floorY - 1, bz)) return CellStatus.OK;
+        // Cave suppressor: a deep void below indicates the highway spans a natural
+        // Nether cave opening rather than a targeted block removal.
+        if (looksLikeCave(bx, floorY, bz)) return CellStatus.CAVE_PASS;
+        // Portal suppressor: highway obsidian was legitimately mined out to build
+        // a Nether portal next to the highway. Only applies to lit portals.
+        if (looksLikePortal(bx, floorY, bz)) return CellStatus.CAVE_PASS;
         return CellStatus.GRIEFED;
     }
 
@@ -70,6 +100,94 @@ public final class HighwayDetectorBridge {
         if (!isAirLike(above(floorPos, 1))) return CellStatus.GRIEFED;
         if (!isAirLike(above(floorPos, 2))) return CellStatus.GRIEFED;
         return CellStatus.OK;
+    }
+
+    // ── Cave detection ────────────────────────────────────────────
+    /**
+     * Returns true when the column below a missing floor cell looks like a
+     * natural Nether cave rather than targeted grief.
+     *
+     * Strategy: scan straight down from (bx, floorY-1). Grief typically leaves
+     * solid netherrack immediately below the removed obsidian.  A cave leaves
+     * consecutive air / lava / fire — natural Nether void material.  We require
+     * at least CAVE_SCAN_DEPTH consecutive void blocks before concluding cave.
+     * Stops early on solid blocks or if we reach the bedrock band (Y < 5).
+     * Returns false if any scanned chunk is not loaded (caller falls back to GRIEFED).
+     */
+    private static boolean looksLikeCave(int bx, int floorY, int bz) {
+        int voidRun = 0;
+        for (int dy = 1; dy <= CAVE_SCAN_DEPTH * 2; dy++) {
+            int y = floorY - dy;
+            if (y < 5) break; // near bedrock — stop rather than false-positive
+            BlockPos pos = new BlockPos(bx, y, bz);
+            if (!isChunkLoaded(pos)) return false; // unknown data → conservative
+            if (isNaturalVoid(bx, y, bz)) {
+                voidRun++;
+                if (voidRun >= CAVE_SCAN_DEPTH) return true;
+            } else {
+                break; // solid block hit; void pocket is too shallow
+            }
+        }
+        return false;
+    }
+
+    /**
+     * Returns true when a lit Nether portal is present near the missing floor cell.
+     * Scans a box from (bx ± PORTAL_H_RADIUS, floorY, bz ± PORTAL_H_RADIUS) up
+     * PORTAL_V_HEIGHT blocks for NETHER_PORTAL blocks.  Only lit portals produce
+     * the portal block, so unlit frames (where there is no visual portal) are not
+     * suppressed — they are indistinguishable from ordinary missing floor sections.
+     * The scan is intentionally small (5×5×6 = 150 queries) because it is only
+     * reached after the cave check has already returned false.
+     */
+    private static boolean looksLikePortal(int bx, int floorY, int bz) {
+        /*? if >=26.1 {*//*
+        Minecraft mc = Minecraft.getInstance();
+        if (mc.level == null) return false;
+        *//*?} else {*/
+        MinecraftClient mc = MinecraftClient.getInstance();
+        if (mc.world == null) return false;
+        /*?}*/
+        for (int dy = 0; dy <= PORTAL_V_HEIGHT; dy++) {
+            int y = floorY + dy;
+            for (int dx = -PORTAL_H_RADIUS; dx <= PORTAL_H_RADIUS; dx++) {
+                for (int dz = -PORTAL_H_RADIUS; dz <= PORTAL_H_RADIUS; dz++) {
+                    BlockPos p = new BlockPos(bx + dx, y, bz + dz);
+                    if (!isChunkLoaded(p)) continue; // skip unloaded cells
+                    /*? if >=26.1 {*//*
+                    if (mc.level.getBlockState(p).getBlock() == Blocks.NETHER_PORTAL) return true;
+                    *//*?} else {*/
+                    if (mc.world.getBlockState(p).getBlock() == Blocks.NETHER_PORTAL) return true;
+                    /*?}*/
+                }
+            }
+        }
+        return false;
+    }
+
+    /**
+     * True for blocks that represent natural Nether air void — the kind left
+     * when a highway spans a cave opening.
+     *
+     * Lava, fire, and soul_fire are intentionally excluded.  On 2b2t the
+     * highway floor (Y≈11) is frequently built directly over a lava lake; if
+     * a griefer removes only the obsidian floor the exposed lava immediately
+     * below would otherwise satisfy the CAVE_SCAN_DEPTH run and produce a
+     * false CAVE_PASS classification (false negative).  Only true air is a
+     * reliable indicator of a bridged-over cave gap, not an exposed lava
+     * surface.
+     */
+    private static boolean isNaturalVoid(int x, int y, int z) {
+        /*? if >=26.1 {*//*
+        Minecraft mc = Minecraft.getInstance();
+        if (mc.level == null) return false;
+        Block b = mc.level.getBlockState(new BlockPos(x, y, z)).getBlock();
+        *//*?} else {*/
+        MinecraftClient mc = MinecraftClient.getInstance();
+        if (mc.world == null) return false;
+        Block b = mc.world.getBlockState(new BlockPos(x, y, z)).getBlock();
+        /*?}*/
+        return b == Blocks.AIR || b == Blocks.CAVE_AIR || b == Blocks.VOID_AIR;
     }
 
     // ── Internal scan ────────────────────────────────────────────

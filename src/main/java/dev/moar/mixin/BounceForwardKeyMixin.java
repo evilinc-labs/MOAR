@@ -12,9 +12,9 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
  * Forces key.forward → isPressed/isDown = true while BounceController is active.
  *
  * Without this, KeyboardInput.tick() reads the real key state (not held) and
- * passes a zero forward-axis movement input to travel(). On the server, Grim's
+ * passes a zero forward-axis movement input to travel(). On the server, the
  * ground-phase predictor sees no forward input → predicts near-zero velocity →
- * the sprint-jump position the client sends diverges → Grim setback.
+ * the sprint-jump position the client sends diverges → anti-cheat setback.
  *
  * Field rename history (Yarn):
  *   <=1.21.8 Yarn  : KeyBinding.translationKey  /  getTranslationKey()

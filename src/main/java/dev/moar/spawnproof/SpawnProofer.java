@@ -187,7 +187,7 @@ public class SpawnProofer {
 
     /** Cooldown ticks after arriving at a position before the first placement.
      *  Gives the server time to acknowledge our position and reduces
-     *  packet bursts that trigger Grim velocity setbacks. */
+     *  packet bursts that trigger anti-cheat velocity setbacks. */
     private int placementSettleTicks;
     private static final int PLACEMENT_SETTLE_DELAY = 3;
 
@@ -693,7 +693,7 @@ public class SpawnProofer {
             return;
         }
 
-        // Wait for settle cooldown after walking to reduce Grim velocity setbacks
+        // Wait for settle cooldown after walking to reduce anti-cheat velocity setbacks
         if (placementSettleTicks > 0) {
             placementSettleTicks--;
             return;

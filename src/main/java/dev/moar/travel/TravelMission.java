@@ -23,6 +23,14 @@ public final class TravelMission {
     public final boolean allowDetour;
 
     /**
+     * If true, travel automatically re-plans and resumes from the current position
+     * after a non-user abort (e.g., bounce stuck, detour stuck, grief at crossings).
+     * Up to {@code TravelManager.MAX_AUTO_RESUME_ATTEMPTS} retries are attempted.
+     * Set to false if you want manual control after every abort.
+     */
+    public final boolean autoResume;
+
+    /**
      * Distance (in blocks, XZ) from the off-ramp at which a destination is
      * considered "far enough" to justify launching into free-nether flight
      * rather than walking.
@@ -39,6 +47,7 @@ public final class TravelMission {
         this.destination = b.destination;
         this.useElytra = b.useElytra;
         this.allowDetour = b.allowDetour;
+        this.autoResume = b.autoResume;
         this.freeNetherFlightThreshold = b.freeNetherFlightThreshold;
         this.expectedHighwayFloorY = b.expectedHighwayFloorY;
         this.id = ID_GEN.getAndIncrement();
@@ -52,6 +61,7 @@ public final class TravelMission {
     public String toString() {
         return "TravelMission#" + id + "{dest=" + destination.toShortString()
                 + ", elytra=" + useElytra + ", detour=" + allowDetour
+                + ", autoResume=" + autoResume
                 + ", flightThreshold=" + freeNetherFlightThreshold + "}";
     }
 
@@ -59,6 +69,7 @@ public final class TravelMission {
         private final BlockPos destination;
         private boolean useElytra = true;
         private boolean allowDetour = true;
+        private boolean autoResume = true;
         private int freeNetherFlightThreshold = 1500;
         private int expectedHighwayFloorY = Integer.MIN_VALUE;
 
@@ -68,6 +79,7 @@ public final class TravelMission {
 
         public Builder useElytra(boolean v)              { this.useElytra = v; return this; }
         public Builder allowDetour(boolean v)            { this.allowDetour = v; return this; }
+        public Builder autoResume(boolean v)             { this.autoResume = v; return this; }
         public Builder freeNetherFlightThreshold(int v)  { this.freeNetherFlightThreshold = v; return this; }
         public Builder expectedHighwayFloorY(int v)      { this.expectedHighwayFloorY = v; return this; }
 

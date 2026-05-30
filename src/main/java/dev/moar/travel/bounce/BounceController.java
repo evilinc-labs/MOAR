@@ -46,6 +46,10 @@ public final class BounceController {
      *  or when the player bumps a wall (horizontalCollision). Cleared each
      *  tick; TravelManager checks this flag to trigger a wall bypass. */
     private boolean wallAhead;
+    /** True when stuck was set because the player fell below the highway floor
+     *  (as opposed to a no-progress timeout).  TravelManager uses this to
+     *  attempt elytra recovery rather than a hard mission abort. */
+    private boolean stuckFromFall;
     private int     ticksActive;
 
     // Stuck detection — track XZ progress in periodic windows
@@ -69,6 +73,7 @@ public final class BounceController {
         arrived        = false;
         stuck          = false;
         wallAhead      = false;
+        stuckFromFall  = false;
         ticksActive    = 0;
         noProgressTicks = 0;
         progressSeeded  = false;
@@ -86,7 +91,9 @@ public final class BounceController {
     public boolean isStuck()     { return stuck; }
     /** True if a wall or solid obstacle was detected ahead this tick.
      *  TravelManager uses this to trigger a bypass without aborting. */
-    public boolean isWallAhead() { return wallAhead; }
+    public boolean isWallAhead()     { return wallAhead; }
+    /** True when stuck was caused by the player falling below the highway floor. */
+    public boolean isStuckFromFall() { return stuckFromFall; }
     public int     ticksActive() { return ticksActive; }
 
     // ──────────────────────────────────────────────────────────────
@@ -121,6 +128,7 @@ public final class BounceController {
         if (highway != null && highway.floorY > Integer.MIN_VALUE
                 && pos.getY() < highway.floorY - BounceTuning.FALL_Y_THRESHOLD) {
             LOGGER.warn("[Bounce] fell off highway y={} floorY={}", pos.getY(), highway.floorY);
+            stuckFromFall = true;
             stuck = true;
             releaseKeys();
             return;
@@ -223,6 +231,28 @@ public final class BounceController {
             /*?}*/
         }
 
+        // ── Emergency fall detection ──────────────────────────────
+        // Player has dropped below the highway floor — there is a gap underfoot.
+        // Set pitch to LEVEL (0°) so that the elytra activation in sendStartFlying()
+        // carries the player horizontally rather than diving straight into lava.
+        // Also arm stuckFromFall+stuck immediately so TravelManager can transition
+        // to elytra recovery on the same tick without waiting for tick() to run.
+        if (highway != null && highway.floorY > Integer.MIN_VALUE
+                && mc.player.getY() < highway.floorY - 0.5) {
+            /*? if >=26.1 {*//*
+            mc.player.setXRot(0.0f);
+            *//*?} else {*/
+            mc.player.setPitch(0.0f);
+            /*?}*/
+            sendStartFlying();
+            if (!stuckFromFall) {
+                stuckFromFall = true;
+                stuck         = true;
+                releaseKeys();
+            }
+            return;
+        }
+
         // ── Sprint, jump, pitch, START_FALL_FLYING ────────────────
         mc.player.setSprinting(true);
         /*? if >=26.1 {*//*
@@ -252,6 +282,8 @@ public final class BounceController {
     }
 
     // True if a solid block is 2–6 ahead at body height, or horizontalCollision fired.
+    // NETHER_PORTAL blocks are excluded — they have no collision shape and portals are
+    // commonly built on highways; the player can glide through the opening.
     // Uses locked travel yaw so mouse movement doesn't cause false positives.
     private boolean detectWallOrCollision(
             /*? if >=26.1 {*//* Minecraft mc *//*?} else {*/ MinecraftClient mc /*?}*/) {
@@ -278,14 +310,31 @@ public final class BounceController {
             BlockPos feet = new BlockPos(bx, hwY,     bz);
             BlockPos head = new BlockPos(bx, hwY + 1, bz);
             /*? if >=26.1 {*//*
-            if (!mc.level.getBlockState(feet).isAir()) return true;
-            if (!mc.level.getBlockState(head).isAir()) return true;
+            if (isImpassable(mc.level.getBlockState(feet).getBlock())) return true;
+            if (isImpassable(mc.level.getBlockState(head).getBlock())) return true;
             *//*?} else {*/
-            if (!mc.world.getBlockState(feet).isAir()) return true;
-            if (!mc.world.getBlockState(head).isAir()) return true;
+            if (isImpassable(mc.world.getBlockState(feet).getBlock())) return true;
+            if (isImpassable(mc.world.getBlockState(head).getBlock())) return true;
             /*?}*/
         }
         return false;
+    }
+
+    /**
+     * Returns true if a block in the flight corridor should be treated as a solid
+     * obstacle that halts travel.  Most non-air blocks are impassable; exceptions:
+     *   NETHER_PORTAL — the portal fluid has no collision shape (players pass through
+     *                   it freely).  Portals are frequently built on 2b2t highways and
+     *                   the player can glide through the opening without collision.
+     */
+    /*? if >=26.1 {*//*
+    private static boolean isImpassable(net.minecraft.world.level.block.Block b) {
+    *//*?} else {*/
+    private static boolean isImpassable(net.minecraft.block.Block b) {
+    /*?}*/
+        if (b == Blocks.AIR || b == Blocks.CAVE_AIR || b == Blocks.VOID_AIR) return false;
+        if (b == Blocks.NETHER_PORTAL) return false;
+        return true;
     }
 
     /** Sends START_FALL_FLYING; server ignores it unless player is airborne with elytra. */
