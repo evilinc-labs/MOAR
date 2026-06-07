@@ -1,16 +1,16 @@
 package dev.moar.travel.highway;
 
-/** Immutable snapshot of a highway integrity sample. */
+// Immutable highway integrity sample.
 public record IntegrityReport(
         Status status,
-        /** 0–1: how reliable is this report (decreases when many cells are unloaded). */
+        // 0..1 confidence.
         float confidence,
         int sampledCells,
         int griefedCells,
         int unloadedCells,
-        /** Along-axis step offset where grief begins, or −1 if no grief. */
+        // Along-axis start offset, or -1.
         int griefStartOffset,
-        /** Along-axis step offset where grief ends, or −1 if no grief. */
+        // Along-axis end offset, or -1.
         int griefEndOffset
 ) {
     public enum Status { OK, GRIEFED, UNLOADED, INSUFFICIENT_DATA }

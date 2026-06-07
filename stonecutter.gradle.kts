@@ -3,7 +3,7 @@ plugins {
     id("fabric-loom") version "1.16.1" apply false
 }
 
-stonecutter active "1.21.1" /* [SC] DO NOT EDIT */
+stonecutter active "1.21.4" /* [SC] DO NOT EDIT */
 
 stonecutter parameters {
     // Swap tokens — available in source as string constants

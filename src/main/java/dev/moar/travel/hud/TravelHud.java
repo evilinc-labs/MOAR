@@ -21,7 +21,7 @@ import net.minecraft.client.gui.DrawContext;
 import net.minecraft.client.render.RenderTickCounter;
 /*?}*/
 
-/** Draws a compact travel-status overlay when a mission is active. */
+// Draw a compact travel-status overlay.
 public final class TravelHud {
 
     private TravelHud() {}

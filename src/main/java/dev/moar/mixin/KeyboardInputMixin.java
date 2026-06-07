@@ -13,9 +13,9 @@ import net.minecraft.client.input.KeyboardInput;
 /*?}*/
 /*? if >=26.1 {*//*
 import net.minecraft.world.entity.player.Input;
-*//*?} else if >=1.21.4 {*//*
+*//*?} else {*/
 import net.minecraft.util.PlayerInput;
-*//*?}*/
+/*?}*/
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
@@ -39,7 +39,7 @@ public abstract class KeyboardInputMixin extends Input {
                     old.jump(), true, old.sprint());
         }
     }
-    *//*?} else if >=1.21.4 {*//*
+    *//*?} else {*/
     @Inject(method = "tick()V", at = @At("TAIL"))
     private void moar$overrideSneak(CallbackInfo ci) {
         if (SneakOverride.shouldSneak()) {
@@ -47,13 +47,6 @@ public abstract class KeyboardInputMixin extends Input {
             this.playerInput = new PlayerInput(
                     old.forward(), old.backward(), old.left(), old.right(),
                     old.jump(), true, old.sprint());
-        }
-    }
-    *//*?} else {*/
-    @Inject(method = "tick(ZF)V", at = @At("TAIL"))
-    private void moar$overrideSneak(boolean slowDown, float movementMultiplier, CallbackInfo ci) {
-        if (SneakOverride.shouldSneak()) {
-            this.sneaking = true;
         }
     }
     /*?}*/

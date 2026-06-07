@@ -1817,14 +1817,10 @@ public final class PlacementEngine {
         player.connection.send(
                 new ServerboundMovePlayerPacket.Rot(yaw, pitch,
                         player.onGround(), player.horizontalCollision));
-        *//*?} else if >=1.21.4 {*//*
-        player.networkHandler.sendPacket(
-                new PlayerMoveC2SPacket.LookAndOnGround(yaw, pitch,
-                        player.isOnGround(), player.horizontalCollision));
         *//*?} else {*/
         player.networkHandler.sendPacket(
                 new PlayerMoveC2SPacket.LookAndOnGround(yaw, pitch,
-                        player.isOnGround()));
+                        player.isOnGround(), player.horizontalCollision));
         /*?}*/
     }
 
@@ -1853,14 +1849,10 @@ public final class PlacementEngine {
         player.connection.send(
                 new ServerboundMovePlayerPacket.Rot(yaw, pitch,
                         player.onGround(), player.horizontalCollision));
-        *//*?} else if >=1.21.4 {*//*
-        player.networkHandler.sendPacket(
-                new PlayerMoveC2SPacket.LookAndOnGround(yaw, pitch,
-                        player.isOnGround(), player.horizontalCollision));
         *//*?} else {*/
         player.networkHandler.sendPacket(
                 new PlayerMoveC2SPacket.LookAndOnGround(yaw, pitch,
-                        player.isOnGround()));
+                        player.isOnGround(), player.horizontalCollision));
         /*?}*/
     }
 

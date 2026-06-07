@@ -7,7 +7,7 @@ import java.util.ArrayList;
 import java.util.Deque;
 import java.util.List;
 
-/** Bounded ring buffer of recent travel events. */
+// Bounded buffer of recent travel events.
 public final class TravelLog {
 
     private static final int CAPACITY = 64;

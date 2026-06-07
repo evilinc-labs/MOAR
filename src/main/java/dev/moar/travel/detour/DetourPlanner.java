@@ -13,21 +13,21 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 
-/** Plans a short side-step detour around a griefed highway section. */
+// Plan a short detour around grief.
 public final class DetourPlanner {
 
-    /** Perpendicular offset in blocks — enough to clear typical 2b2t highway guardrails (1–2 blocks from centre). */
+    // Step far enough sideways to clear common guardrails.
     public static int SIDE_OFFSET = 3;
 
-    /** Extra blocks past the grief end before returning to the highway. */
+    // Push past the grief before merging back.
     public static int CLEAR_MARGIN = 8;
 
-    /** Minimum report confidence to trust grief offsets; returns empty list below threshold. */
+    // Ignore low-confidence grief reports.
     public static float MIN_CONFIDENCE = 0.4f;
 
     private DetourPlanner() {}
 
-    /** Compute side, bypass, and return waypoints. */
+    // Build side, bypass, and return waypoints.
     public static List<BlockPos> plan(HighwayCandidate highway,
                                       IntegrityReport report,
                                       BlockPos playerPos,

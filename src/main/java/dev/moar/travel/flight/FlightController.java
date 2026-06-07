@@ -23,7 +23,7 @@ import net.minecraft.network.packet.c2s.play.UpdateSelectedSlotC2SPacket;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-/** Drives manual elytra launch and rocket flight when Baritone elytra is unavailable. */
+// Drive manual elytra launch and rocket flight.
 public final class FlightController {
 
     private static final Logger LOGGER = LoggerFactory.getLogger("MOAR/Flight");
@@ -85,6 +85,8 @@ public final class FlightController {
     public boolean isActive()  { return active; }
     public boolean isArrived() { return arrived; }
     public boolean isStuck()   { return stuck; }
+    public boolean isLaunching() { return active && launching; }
+    public boolean isCruising()  { return active && !launching; }
 
     // ──────────────────────────────────────────────────────────────
     // Tick
@@ -151,12 +153,9 @@ public final class FlightController {
         /*? if >=26.1 {*//*
         boolean onGround = player.onGround();
         boolean flying   = player.isFallFlying();
-        *//*?} else if >=1.21.4 {*//*
-        boolean onGround = player.isOnGround();
-        boolean flying   = player.isGliding();
         *//*?} else {*/
         boolean onGround = player.isOnGround();
-        boolean flying   = player.isFallFlying();
+        boolean flying   = player.isGliding();
         /*?}*/
 
         // Phase 2a: still on the ground — sprint-jump to get airborne

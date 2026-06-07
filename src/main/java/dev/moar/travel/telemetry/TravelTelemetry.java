@@ -11,7 +11,7 @@ import net.minecraft.core.BlockPos;
 import net.minecraft.util.math.BlockPos;
 /*?}*/
 
-/** Immutable snapshot of the travel system's state. */
+// Immutable travel snapshot.
 public record TravelTelemetry(
         long missionId,
         TravelPhase phase,

@@ -2,37 +2,37 @@ package dev.moar.travel;
 
 import dev.moar.travel.plan.HighwayRoute;
 
-/** Mutable runtime state for the active travel mission. */
+// Mutable state for the active mission.
 public final class TravelState {
 
-    /** Current phase. IDLE means no active mission. */
+    // Current phase.
     public TravelPhase phase = TravelPhase.IDLE;
 
-    /** Who currently owns movement. */
+    // Current movement owner.
     public MovementOwner owner = MovementOwner.NONE;
 
-    /** Active mission, or null when IDLE. */
+    // Active mission, or null when idle.
     public TravelMission mission;
 
-    /** Computed route, or null if planning hasn't completed. */
+    // Planned route, or null before planning finishes.
     public HighwayRoute route;
 
-    /** Client ticks since the last phase transition. */
+    // Ticks since the last phase change.
     public int ticksInPhase;
 
-    /** Total client ticks since the mission started. */
+    // Ticks since the mission started.
     public int missionTicks;
 
-    /** Last transition reason — for telemetry & logs. */
+    // Last transition reason.
     public String lastTransitionReason = "";
 
-    /** When PAUSED, the phase to resume to. */
+    // Phase to restore when unpausing.
     public TravelPhase pausedFromPhase = TravelPhase.IDLE;
 
-    /** Last abort reason, set before ABORTED. */
+    // Last abort reason.
     public String abortReason = "";
 
-    /** Reset everything to a fresh IDLE state. */
+    // Reset to a clean idle state.
     public void reset() {
         phase = TravelPhase.IDLE;
         owner = MovementOwner.NONE;

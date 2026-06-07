@@ -59,10 +59,7 @@ import net.minecraft.util.math.Vec3d;
 
 import org.joml.Matrix4f;
 
-/**
- * Draws wireframe block outlines around the detected highway:
- * green for floor blocks, blue for rail positions.
- */
+// Draw wireframe blocks for the detected highway.
 public final class HighwayOverlayRenderer {
 
     private static final float ALPHA      = 1.0f;

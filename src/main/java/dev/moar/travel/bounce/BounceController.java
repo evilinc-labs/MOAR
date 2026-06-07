@@ -24,7 +24,7 @@ import net.minecraft.block.Blocks;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-/** Drives highway sprint-jump travel while BOUNCE owns movement. */
+// Drive highway sprint-jump travel while BOUNCE owns movement.
 public final class BounceController {
 
     private static final Logger LOGGER = LoggerFactory.getLogger("MOAR/Bounce");
@@ -42,13 +42,9 @@ public final class BounceController {
     private boolean active;
     private boolean arrived;
     private boolean stuck;
-    /** True when a solid block is detected 2-6 blocks ahead at highway Y,
-     *  or when the player bumps a wall (horizontalCollision). Cleared each
-     *  tick; TravelManager checks this flag to trigger a wall bypass. */
+    // Flag a wall ahead so TravelManager can bypass without aborting.
     private boolean wallAhead;
-    /** True when stuck was set because the player fell below the highway floor
-     *  (as opposed to a no-progress timeout).  TravelManager uses this to
-     *  attempt elytra recovery rather than a hard mission abort. */
+    // Distinguish falls from generic no-progress stalls.
     private boolean stuckFromFall;
     private int     ticksActive;
 
@@ -89,10 +85,9 @@ public final class BounceController {
     public boolean isActive()    { return active; }
     public boolean isArrived()   { return arrived; }
     public boolean isStuck()     { return stuck; }
-    /** True if a wall or solid obstacle was detected ahead this tick.
-     *  TravelManager uses this to trigger a bypass without aborting. */
+    // Check whether a wall was seen this tick.
     public boolean isWallAhead()     { return wallAhead; }
-    /** True when stuck was caused by the player falling below the highway floor. */
+    // Check whether the stuck state came from a fall.
     public boolean isStuckFromFall() { return stuckFromFall; }
     public int     ticksActive() { return ticksActive; }
 
@@ -177,7 +172,7 @@ public final class BounceController {
     // Pre-tick — runs before tickMovement(); applies movement inputs
     // ──────────────────────────────────────────────────────────────
 
-    /** Apply sprint/jump/pitch/elytra inputs before vanilla physics this tick. */
+    // Apply bounce inputs before vanilla movement runs.
     public void preTick() {
         if (!active) return;
 
@@ -320,13 +315,7 @@ public final class BounceController {
         return false;
     }
 
-    /**
-     * Returns true if a block in the flight corridor should be treated as a solid
-     * obstacle that halts travel.  Most non-air blocks are impassable; exceptions:
-     *   NETHER_PORTAL — the portal fluid has no collision shape (players pass through
-     *                   it freely).  Portals are frequently built on 2b2t highways and
-     *                   the player can glide through the opening without collision.
-     */
+    // Treat air and portals as passable; everything else blocks the corridor.
     /*? if >=26.1 {*//*
     private static boolean isImpassable(net.minecraft.world.level.block.Block b) {
     *//*?} else {*/
@@ -337,7 +326,7 @@ public final class BounceController {
         return true;
     }
 
-    /** Sends START_FALL_FLYING; server ignores it unless player is airborne with elytra. */
+    // Ask the server to start elytra flight.
     private void sendStartFlying() {
         /*? if >=26.1 {*//*
         Minecraft mc = Minecraft.getInstance();

@@ -8,7 +8,7 @@ import net.minecraft.core.BlockPos;
 import net.minecraft.util.math.BlockPos;
 /*?}*/
 
-/** Samples highway integrity ahead of the player on a fixed interval. */
+// Sample highway integrity ahead of the player.
 public final class HighwayVerifier {
 
     private static final int SAMPLE_INTERVAL   = 10;  // ticks
@@ -27,7 +27,7 @@ public final class HighwayVerifier {
     private int travelDz;
 
     // ── Public API ───────────────────────────────────────────────
-    /** Bind the current highway and forward travel direction. */
+    // Bind the active highway and travel direction.
     public void setHighway(HighwayCandidate hw, int dx, int dz) {
         this.highway = hw;
         this.travelDx = dx;
@@ -36,12 +36,12 @@ public final class HighwayVerifier {
         this.ticksSinceLastSample = SAMPLE_INTERVAL; // force sample next tick
     }
 
-    /** Clear stale last report without re-arming the scan timer. */
+    // Drop the last report without forcing a new sample.
     public void resetLastReport() {
         this.lastReport = IntegrityReport.insufficient();
     }
 
-    /** Clear the current highway and reset state. */
+    // Clear the active highway state.
     public void clear() {
         highway = null;
         lastReport = IntegrityReport.insufficient();
@@ -50,10 +50,10 @@ public final class HighwayVerifier {
         travelDz = 0;
     }
 
-    /** Most recent integrity report. Never null. */
+    // Return the last integrity report.
     public IntegrityReport lastReport() { return lastReport; }
 
-    /** Drive one tick; samples only every SAMPLE_INTERVAL ticks. */
+    // Sample on the configured interval.
     public void tick(BlockPos playerPos) {
         if (highway == null || playerPos == null) return;
         ticksSinceLastSample++;

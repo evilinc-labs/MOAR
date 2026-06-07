@@ -8,39 +8,30 @@ import net.minecraft.util.math.BlockPos;
 
 import java.util.concurrent.atomic.AtomicLong;
 
-/** Immutable description of a travel job. */
+// Immutable travel request.
 public final class TravelMission {
 
     private static final AtomicLong ID_GEN = new AtomicLong(1);
 
-    /** Final destination. */
+    // Final destination.
     public final BlockPos destination;
 
-    /** If true, the free-nether flight phase is allowed. */
+    // Allow free-nether flight.
     public final boolean useElytra;
 
-    /** If true, detour planning is allowed when grief is detected on the highway. */
+    // Allow detours around griefed highway sections.
     public final boolean allowDetour;
 
-    /**
-     * If true, travel automatically re-plans and resumes from the current position
-     * after a non-user abort (e.g., bounce stuck, detour stuck, grief at crossings).
-     * Up to {@code TravelManager.MAX_AUTO_RESUME_ATTEMPTS} retries are attempted.
-     * Set to false if you want manual control after every abort.
-     */
+    // Retry automatically after non-user aborts.
     public final boolean autoResume;
 
-    /**
-     * Distance (in blocks, XZ) from the off-ramp at which a destination is
-     * considered "far enough" to justify launching into free-nether flight
-     * rather than walking.
-     */
+    // Prefer flight when the off-ramp is at least this far from the goal.
     public final int freeNetherFlightThreshold;
 
-    /** Server-supplied highway floor Y. Integer.MIN_VALUE means no hint. */
+    // Server-supplied highway floor Y, or Integer.MIN_VALUE when unknown.
     public final int expectedHighwayFloorY;
 
-    /** Unique identifier for telemetry correlation. */
+    // Stable ID for logs and telemetry.
     public final long id;
 
     private TravelMission(Builder b) {

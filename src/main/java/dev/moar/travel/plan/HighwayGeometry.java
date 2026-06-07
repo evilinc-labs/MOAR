@@ -4,29 +4,29 @@ import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
 
-/** Pure coordinate geometry for nether highway planning. */
+// Coordinate helpers for nether highway planning.
 public final class HighwayGeometry {
 
     private HighwayGeometry() {}
 
     // ── Distance tables ───────────────────────────────────────────────────
-    /** Ring-road axis-aligned square distances from origin. */
+    // Known ring-road distances from spawn.
     public static final double[] RING_DISTANCES = {
             500, 1000, 1500, 2000, 2500, 7500.5,
             55000, 62500, 100000, 125000, 250000, 500000,
             750000, 1_000_000, 1_250_000, 1_875_000, 2_500_000, 3_750_000
     };
 
-    /** Diamond-road manhattan-distance (|x|+|z|) distances from origin. */
+    // Known diamond-road Manhattan distances.
     public static final double[] DIAMOND_DISTANCES = {
             2500, 5000, 25000, 50000, 125_000, 250_000, 500_000, 3_750_000
     };
 
-    /** Match tolerance in blocks for ring/diamond coordinate snap. */
+    // Coordinate tolerance for ring and diamond matches.
     public static final double RING_DIAMOND_TOLERANCE = 5.0;
 
     // ── GeometryCandidate ────────────────────────────────────────────────
-    /** Coordinate-only highway candidate. */
+    // Coordinate-only highway candidate.
     public static final class GeometryCandidate {
         public final HighwayCandidate.Axis axis;
         public final HighwayCandidate.Category category;
@@ -66,7 +66,7 @@ public final class HighwayGeometry {
     }
 
     // ── Coordinate ranking (Signal 1) ────────────────────────────────────
-    /** Rank highway candidates by coordinate fit. */
+    // Rank highway candidates by coordinate fit.
     public static List<GeometryCandidate> rankCandidates(int x, int z,
                                                           boolean detectRings,
                                                           boolean detectDiamonds) {
@@ -184,7 +184,7 @@ public final class HighwayGeometry {
     }
 
     // ── Highway-axis projection ───────────────────────────────────────────
-    /** Project an X/Z point onto the selected highway line. */
+    // Project an X/Z point onto a highway line.
     public static int[] projectOnto(GeometryCandidate c, int x, int z) {
         return switch (c.axis) {
             case PLUS_X, MINUS_X -> {
@@ -230,7 +230,7 @@ public final class HighwayGeometry {
     }
 
     // ── Yaw confidence (Signal 3) ─────────────────────────────────────────
-    /** Score how well the player's yaw matches this axis. */
+    // Score how well the player's yaw matches an axis.
     public static float yawConfidence(float playerYaw, HighwayCandidate.Axis axis) {
         float expected = axis.expectedYaw();
         float diff = wrapDegrees(playerYaw - expected);

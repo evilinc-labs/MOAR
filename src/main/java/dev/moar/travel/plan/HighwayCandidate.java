@@ -6,22 +6,20 @@ import net.minecraft.core.BlockPos;
 import net.minecraft.util.math.BlockPos;
 /*?}*/
 
-/** Candidate highway selected by the planner. */
+// Planner-selected highway candidate.
 public final class HighwayCandidate {
 
     // ── Classification ────────────────────────────────────────────
     public enum Category { CARDINAL, DIAGONAL, RING, DIAMOND }
 
-    /** Which side of a ring-road square the player is on. */
+    // Side of a ring-road square.
     public enum RingSide { NORTH, SOUTH, EAST, WEST }
 
-    /** Which side of a diamond-road square. */
+    // Side of a diamond-road diamond.
     public enum DiamondSegment { NE, NW, SW, SE }
 
     // ── Axis ──────────────────────────────────────────────────────
-    /**
-     * Carries its own perpendicular-direction and yaw math.
-     */
+    // Axis metadata used for direction, strafe, and yaw math.
     public enum Axis {
         PLUS_X(false, +1,  0),
         MINUS_X(false, -1,  0),
@@ -42,7 +40,7 @@ public final class HighwayCandidate {
             this.stepDz = stepDz;
         }
 
-        /** Perpendicular direction (right-hand rule from step direction). */
+        // Get the perpendicular X step.
         public int perpDx() {
             return diagonal ? stepDz : (stepDz == 0 ? 0 : -stepDz);
         }
@@ -51,10 +49,7 @@ public final class HighwayCandidate {
             return diagonal ? -stepDx : (stepDx == 0 ? 0 : stepDx);
         }
 
-        /**
-         * Expected yaw (degrees, MC convention: 0=South +Z, 90=West -X,
-         * 180=North -Z, 270=East +X).
-         */
+        // Get the matching Minecraft yaw.
         public float expectedYaw() {
             return switch (this) {
                 case PLUS_X     -> 270f;
@@ -72,19 +67,19 @@ public final class HighwayCandidate {
     // ── Fields ────────────────────────────────────────────────────
     public final Axis axis;
     public final Category category;
-    /** Floor Y detected at plan time, or Integer.MIN_VALUE if unknown. */
+    // Planned floor Y, or Integer.MIN_VALUE when unknown.
     public final int floorY;
-    /** Projected entry point on the highway. */
+    // Projected highway entry.
     public final BlockPos entry;
-    /** Projected exit point on the highway (closest column to destination). */
+    // Projected highway exit.
     public final BlockPos exit;
-    /** 0..1 coordinate + scan confidence. */
+    // Combined coordinate and scan confidence.
     public final float confidence;
-    /** Ring/diamond radius (0 for cardinal/diagonal). */
+    // Ring or diamond distance, or 0 for straight highways.
     public final double ringOrDiamondDist;
     public final RingSide ringSide;               // null for non-ring
     public final DiamondSegment diamondSegment;    // null for non-diamond
-    /** Physical width in blocks (0 = not scanned). */
+    // Observed width, or 0 when unscanned.
     public final int width;
     public final boolean hasLeftRail;
     public final boolean hasRightRail;
@@ -109,7 +104,7 @@ public final class HighwayCandidate {
         this.hasRightRail = hasRightRail;
     }
 
-    /** Convenience constructor — no ring/diamond metadata, no scan data. */
+    // Create a candidate without ring, diamond, or scan metadata.
     public HighwayCandidate(Axis axis, Category category, int floorY,
                             BlockPos entry, BlockPos exit, float confidence) {
         this(axis, category, floorY, entry, exit, confidence, 0, null, null, 0, false, false);

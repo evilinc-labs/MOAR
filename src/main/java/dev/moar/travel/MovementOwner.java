@@ -1,6 +1,6 @@
 package dev.moar.travel;
 
-/** Identifies which subsystem currently owns player movement. */
+// Subsystem that currently owns movement.
 public enum MovementOwner {
     NONE,
     BARITONE,

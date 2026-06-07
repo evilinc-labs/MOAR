@@ -18,7 +18,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
 
-/** Runtime world-block scanner for highway detection and verification. */
+// World scanner for highway detection and verification.
 public final class HighwayDetectorBridge {
 
     private static final HighwayDetectorBridge INSTANCE = new HighwayDetectorBridge();
@@ -32,15 +32,11 @@ public final class HighwayDetectorBridge {
                               float blockConfidence) {}
 
     // ── CellStatus ───────────────────────────────────────────────
-    /**
-     * OK        — floor block present and intact.
-     * GRIEFED   — floor block missing, solid terrain below → targeted removal.
-     * UNLOADED  — chunk not in memory; result undefined.
-     * CAVE_PASS — floor block missing but suppressed by one of two heuristics:
-     *              (a) natural cave: ≥4 consecutive void blocks directly below, OR
-     *              (b) portal area:  NETHER_PORTAL block found within the scan
-     *                  box above the cell (highway mined out for portal construction).
-     *             In both cases the cell counts toward total but not toward griefed.
+    /*
+     * OK: floor is intact.
+     * GRIEFED: floor is missing with solid terrain below.
+     * UNLOADED: data is missing.
+     * CAVE_PASS: missing floor looks like a cave opening or portal carve-out.
      */
     public enum CellStatus { OK, GRIEFED, UNLOADED, CAVE_PASS }
 
@@ -52,17 +48,9 @@ public final class HighwayDetectorBridge {
     private static final int PORTAL_V_HEIGHT = 5;
 
     // ── Public API ───────────────────────────────────────────────
-    /**
-     * Floor-presence check used by the integrity verifier.
-     * Deliberately does NOT check clearance above — nether rack can generate
-     * at Y+1 above a clean highway floor and must not trigger false griefs.
-     *
-     * Before returning GRIEFED, two suppressors are tried:
-     *  1. Cave suppressor — if the column below is open void for ≥ CAVE_SCAN_DEPTH
-     *     blocks, the highway spans a natural cave opening (not targeted removal).
-     *  2. Portal suppressor — if a lit Nether portal block exists within
-     *     PORTAL_H_RADIUS blocks horizontally and PORTAL_V_HEIGHT blocks above,
-     *     the highway was mined out for portal construction, not griefed.
+    /*
+     * Check only the floor cell. Skip headroom so natural nether blocks above the
+     * road do not look griefed. Suppress cave gaps and portal carve-outs.
      */
     public CellStatus checkFloorOnly(int bx, int floorY, int bz) {
         BlockPos pos = new BlockPos(bx, floorY, bz);
@@ -80,7 +68,7 @@ public final class HighwayDetectorBridge {
         return CellStatus.GRIEFED;
     }
 
-    /** Try to confirm a highway near the player's current Y. */
+    // Try to confirm a highway near the player's current Y.
     public Optional<ScanResult> scanAt(BlockPos playerPos, HighwayCandidate.Axis axis) {
         for (int yOff = -1; yOff <= 1; yOff++) {
             ScanResult r = scanAlongAxis(
@@ -90,10 +78,7 @@ public final class HighwayDetectorBridge {
         return Optional.empty();
     }
 
-    /**
-     * Classify one floor cell: is it an intact highway floor with
-     * passable walk-space above, clearly griefed, or simply unloaded?
-     */
+    // Classify one floor cell with headroom checks.
     public CellStatus checkCell(BlockPos floorPos) {
         if (!isChunkLoaded(floorPos)) return CellStatus.UNLOADED;
         if (!isHighwayBlock(floorPos)) return CellStatus.GRIEFED;
@@ -103,17 +88,7 @@ public final class HighwayDetectorBridge {
     }
 
     // ── Cave detection ────────────────────────────────────────────
-    /**
-     * Returns true when the column below a missing floor cell looks like a
-     * natural Nether cave rather than targeted grief.
-     *
-     * Strategy: scan straight down from (bx, floorY-1). Grief typically leaves
-     * solid netherrack immediately below the removed obsidian.  A cave leaves
-     * consecutive air / lava / fire — natural Nether void material.  We require
-     * at least CAVE_SCAN_DEPTH consecutive void blocks before concluding cave.
-     * Stops early on solid blocks or if we reach the bedrock band (Y < 5).
-     * Returns false if any scanned chunk is not loaded (caller falls back to GRIEFED).
-     */
+    // Treat a deep void below the floor as a natural cave gap.
     private static boolean looksLikeCave(int bx, int floorY, int bz) {
         int voidRun = 0;
         for (int dy = 1; dy <= CAVE_SCAN_DEPTH * 2; dy++) {
@@ -131,15 +106,7 @@ public final class HighwayDetectorBridge {
         return false;
     }
 
-    /**
-     * Returns true when a lit Nether portal is present near the missing floor cell.
-     * Scans a box from (bx ± PORTAL_H_RADIUS, floorY, bz ± PORTAL_H_RADIUS) up
-     * PORTAL_V_HEIGHT blocks for NETHER_PORTAL blocks.  Only lit portals produce
-     * the portal block, so unlit frames (where there is no visual portal) are not
-     * suppressed — they are indistinguishable from ordinary missing floor sections.
-     * The scan is intentionally small (5×5×6 = 150 queries) because it is only
-     * reached after the cave check has already returned false.
-     */
+    // Treat nearby lit portals as intentional carve-outs, not grief.
     private static boolean looksLikePortal(int bx, int floorY, int bz) {
         /*? if >=26.1 {*//*
         Minecraft mc = Minecraft.getInstance();
@@ -165,18 +132,7 @@ public final class HighwayDetectorBridge {
         return false;
     }
 
-    /**
-     * True for blocks that represent natural Nether air void — the kind left
-     * when a highway spans a cave opening.
-     *
-     * Lava, fire, and soul_fire are intentionally excluded.  On 2b2t the
-     * highway floor (Y≈11) is frequently built directly over a lava lake; if
-     * a griefer removes only the obsidian floor the exposed lava immediately
-     * below would otherwise satisfy the CAVE_SCAN_DEPTH run and produce a
-     * false CAVE_PASS classification (false negative).  Only true air is a
-     * reliable indicator of a bridged-over cave gap, not an exposed lava
-     * surface.
-     */
+    // Count only true air as cave void. Exposed lava is still suspicious.
     private static boolean isNaturalVoid(int x, int y, int z) {
         /*? if >=26.1 {*//*
         Minecraft mc = Minecraft.getInstance();

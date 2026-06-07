@@ -8,26 +8,31 @@ import net.minecraft.util.math.BlockPos;
 
 import java.util.List;
 
-/** Ordered plan consumed one leg at a time by TravelManager. */
+// Ordered route consumed one leg at a time.
 public final class HighwayRoute {
 
-    /** Route legs are immutable and ordered. */
-    public sealed interface Leg permits ApproachLeg, BounceLeg, OffRampLeg, MineLeg, FlightLeg {}
+    public static final int SAFE_RING_RADIUS = 5_000;
 
-    /** Walk/mine to the chosen on-ramp. */
+    // Immutable route legs.
+    public sealed interface Leg permits ApproachLeg, BounceLeg, TurnLeg, OffRampLeg, MineLeg, FlightLeg {}
+
+    // Reach the chosen on-ramp.
     public record ApproachLeg(BlockPos onRamp) implements Leg {}
 
-    /** Bounce along the highway in the explicit travel direction. */
+    // Bounce along the highway.
     public record BounceLeg(HighwayCandidate highway, BlockPos exitColumn,
                             int travelDx, int travelDz) implements Leg {}
 
-    /** Release bounce ownership at the exit column. */
+    // Walk into the new branch before resuming bounce.
+    public record TurnLeg(BlockPos branchTarget) implements Leg {}
+
+    // Release bounce at the exit column.
     public record OffRampLeg(BlockPos handoffPoint) implements Leg {}
 
-    /** Baritone walk/mine off the highway toward the takeoff point. */
+    // Walk or mine toward the takeoff point.
     public record MineLeg(BlockPos freeNetherTarget) implements Leg {}
 
-    /** Free-nether elytra flight to the final destination. */
+    // Fly to the final destination.
     public record FlightLeg(BlockPos destination) implements Leg {}
 
     public final HighwayCandidate primary;

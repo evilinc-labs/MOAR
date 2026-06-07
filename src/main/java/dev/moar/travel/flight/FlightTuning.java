@@ -1,43 +1,37 @@
 package dev.moar.travel.flight;
 
-/** Tunable constants for manual elytra fallback flight. */
+// Tuning for manual elytra fallback flight.
 public final class FlightTuning {
 
     private FlightTuning() {}
 
-    /** Ticks to hold forward so the player walks off the mining-exit ledge. */
+    // Hold forward long enough to step off the ledge.
     public static final int LAUNCH_WALK_TICKS          = 12;
 
-    /** Abort if elytra activation takes too long. */
+    // Abort slow launches.
     public static final int LAUNCH_TIMEOUT_TICKS       = 140;
 
-    /** Ticks between consecutive rocket fires during cruise. */
+    // Space out rocket boosts.
     public static final int ROCKET_COOLDOWN_TICKS      = 25;
 
-    /**
-     * Arrival XZ squared-distance threshold.
-     * 25 blocks → 625 (generous, to compensate for nether-ceiling descent).
-     */
+    // Arrival threshold in XZ distance squared.
     public static final double ARRIVAL_RADIUS_SQ       = 625.0;
 
-    /**
-     * Pitch during cruise (degrees, negative = nose slightly down).
-     * A slight nose-down keeps speed up without diving too fast.
-     */
+    // Cruise pitch. Slightly nose-down keeps speed up.
     public static final float FALLBACK_PITCH           = -12f;
 
-    /** Max yaw correction per tick (degrees). */
+    // Cap yaw correction per tick.
     public static final float MAX_YAW_STEP_DEG         = 15f;
 
-    /** Yaw tolerance before correction kicks in (degrees). */
+    // Ignore small yaw error.
     public static final float ALIGN_TOLERANCE_DEG      = 5f;
 
-    /** Ticks of no meaningful XZ progress before declaring stuck. */
+    // Declare stuck after this many flat ticks.
     public static final int STUCK_TICKS                = 200;
 
-    /** XZ progress evaluation window (ticks). */
+    // Check progress on this interval.
     public static final int PROGRESS_CHECK_INTERVAL    = 40;
 
-    /** Min XZ distance² per window to count as non-stuck progress. */
+    // Minimum XZ progress per interval.
     public static final double MIN_PROGRESS_PER_INTERVAL_SQ = 25.0;
 }

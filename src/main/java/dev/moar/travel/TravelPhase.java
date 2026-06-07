@@ -1,48 +1,47 @@
 package dev.moar.travel;
 
-/** Phases of one travel mission. */
+// Travel mission phases.
 public enum TravelPhase {
-    /** No mission active. */
+    // No mission is active.
     IDLE,
-    /** HighwayPlanner is computing a route. */
+    // Compute the route.
     PLANNING,
-    /** Baritone is walking the player to the chosen highway entry point. */
+    // Walk to the highway entry.
     APPROACH_ONRAMP,
-    /** Reserved for milestone 3. Highway bounce-flight. */
+    // Bounce along the highway.
     BOUNCING,
-    /** Reserved for milestone 4. Detour planner is running after grief detection. */
+    // Plan a detour around grief.
     VERIFYING_DETOUR,
-    /** Reserved for milestone 4. Baritone bridges around a griefed section. */
+    // Walk the detour segment.
     DETOURING,
-    /** 10-tick grace period after a detour/bypass arrival. Yaw is held;
-     *  bounce mechanics are dormant to avoid immediately re-slamming the obstacle. */
+    // Let movement settle before re-entering bounce.
     SETTLE,
-    /** Transitional. Releases bounce ownership and hands off to Baritone. */
+    // Hand movement back to Baritone at the off-ramp.
     OFFRAMP_HANDOFF,
-    /** Baritone walks/mines from the off-ramp to a free-nether takeoff point. */
+    // Mine or walk toward open nether.
     MINING_TO_FREENETHER,
-    /** ElytraManager is running the resupply playbook (equip spare, mend, or EC). */
+    // Run the elytra resupply playbook.
     ELYTRA_RESUPPLY,
-    /** Reserved for milestone 5a. Equip, jump, START_FALL_FLYING, initial boost. */
+    // Launch the elytra.
     LAUNCH,
-    /** Reserved for milestone 5a. Baritone elytra owns movement. */
+    // Let Baritone own elytra flight.
     ELYTRA_CRUISE,
-    /** Manual heading and rocket flight. */
+    // Fly manually with rockets.
     ELYTRA_FALLBACK,
-    /** Mission finished successfully. */
+    // Mission finished.
     ARRIVED,
-    /** Mission aborted (user stop, planner failure, stuck, etc.). */
+    // Mission aborted.
     ABORTED,
-    /** User-requested pause. */
+    // Mission paused by the user.
     PAUSED;
 
-    /** True for phases that are reserved for later milestones. */
+    // Keep milestone-gated phases grouped in one check.
     public boolean isReserved() {
         return this == BOUNCING || this == VERIFYING_DETOUR || this == DETOURING
                 || this == LAUNCH || this == ELYTRA_CRUISE || this == ELYTRA_FALLBACK;
     }
 
-    /** True for terminal phases that automatically transition back to IDLE. */
+    // Terminal phases fall back to IDLE automatically.
     public boolean isTerminal() {
         return this == ARRIVED || this == ABORTED;
     }

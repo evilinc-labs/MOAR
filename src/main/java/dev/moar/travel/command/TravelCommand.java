@@ -34,7 +34,7 @@ import net.minecraft.text.Text;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-/** Registers the /moar travel client commands. */
+// Register /moar travel commands.
 public final class TravelCommand {
 
     private static final Logger LOGGER = LoggerFactory.getLogger("MOAR/Travel");
@@ -148,7 +148,7 @@ public final class TravelCommand {
         return doGoto(x, z, false);
     }
 
-    /** Snaps yaw to nearest 45° axis, sets dest 500k ahead, then plans and bounces. */
+    // Build a long bounce target from the current yaw.
     private static int doBounce() {
         BlockPos origin = playerPos();
         if (origin == null) { chat("§c[Travel] no player"); return 0; }

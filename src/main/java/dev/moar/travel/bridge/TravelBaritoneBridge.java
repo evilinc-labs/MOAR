@@ -10,7 +10,7 @@ import net.minecraft.util.math.BlockPos;
 
 import java.util.List;
 
-/** Narrow adapter over PathWalker and optional Baritone features. */
+// Small adapter over PathWalker and optional Baritone features.
 public final class TravelBaritoneBridge {
 
     private static final TravelBaritoneBridge INSTANCE = new TravelBaritoneBridge();
@@ -19,27 +19,37 @@ public final class TravelBaritoneBridge {
 
     private TravelBaritoneBridge() {}
 
-    /** True if Baritone is on the classpath. */
+    // Check whether Baritone is available.
     public boolean isAvailable() {
         return PathWalker.isBaritoneAvailable();
     }
 
-    /** Walk near a target. */
+    // Walk near a target.
     public void walkNear(BlockPos pos, int radius) {
         PathWalker.walkToNearby(pos, radius);
     }
 
-    /** Walk directly to a target. */
+    // Walk directly to a target.
     public void walkTo(BlockPos pos) {
         PathWalker.walkTo(pos);
     }
 
-    /** Walk through ordered detour waypoints. */
+    // Walk through ordered waypoints.
     public void walkToWaypoints(List<BlockPos> waypoints, int radius) {
         PathWalker.walkToViaWaypoints(waypoints, radius);
     }
 
-    /** Stop ground and elytra pathing. */
+    // Move toward a Y level with placement enabled.
+    public void walkToYLevelWithPlacement(int y) {
+        PathWalker.walkToYLevelWithPlacement(y, null);
+    }
+
+    // Mine downward until the target Y or a safe stop.
+    public void startMiningDescent(int targetY) {
+        PathWalker.startMiningDescent(targetY);
+    }
+
+    // Stop all Baritone movement.
     public void cancelAll() {
         PathWalker.stop();
         PathWalker.stopElytra();
@@ -51,32 +61,32 @@ public final class TravelBaritoneBridge {
     public BlockPos currentTarget() { return PathWalker.getTarget(); }
     public int ticksWalking()    { return PathWalker.getTicksWalking(); }
 
-    /** Start Baritone's elytra process if available. */
+    // Start Baritone elytra flight.
     public void startElytraFlight(BlockPos dest) {
         PathWalker.startElytra(dest);
     }
 
-    /** True while Baritone's elytra process owns movement. */
+    // Check whether Baritone owns elytra movement.
     public boolean isElytraOwning() {
         return PathWalker.isElytraActive();
     }
 
-    /** True when the elytra process is close enough to the destination. */
+    // Check whether Baritone considers elytra flight arrived.
     public boolean isElytraArrived() {
         return PathWalker.hasElytraArrived();
     }
 
-    /** Keep elytra stuck detection separate from ground walking. */
+    // Elytra stuck handling is tracked separately for now.
     public boolean isElytraStuck() {
         return false;
     }
 
-    /** Stop Baritone elytra pathing. */
+    // Stop Baritone elytra flight.
     public void stopElytra() {
         PathWalker.stopElytra();
     }
 
-    /** Tick ground PathWalker while Baritone owns movement. */
+    // Tick PathWalker while Baritone owns movement.
     public void tick() {
         PathWalker.tick();
     }
