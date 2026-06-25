@@ -1,6 +1,7 @@
 package dev.moar.mixin;
 
 import dev.moar.util.PacketTelemetry;
+import io.netty.channel.ChannelHandlerContext;
 /*? if >=26.1 {*//*
 import net.minecraft.network.Connection;
 import net.minecraft.network.protocol.Packet;
@@ -13,7 +14,7 @@ import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 
-// Records outgoing packets while /moar packetlog is enabled.
+// Records placement-relevant packets while /moar packetlog is enabled.
 /*? if >=26.1 {*//*
 @Mixin(Connection.class)
 *//*?} else {*/
@@ -26,10 +27,20 @@ public abstract class PacketTelemetryMixin {
     private void moar$recordOutgoingPacket(Packet<?> packet, CallbackInfo ci) {
         PacketTelemetry.recordOutgoing(packet);
     }
+
+    @Inject(method = "channelRead0(Lio/netty/channel/ChannelHandlerContext;Lnet/minecraft/network/protocol/Packet;)V", at = @At("HEAD"), require = 0)
+    private void moar$recordIncomingPacket(ChannelHandlerContext ctx, Packet<?> packet, CallbackInfo ci) {
+        PacketTelemetry.recordIncoming(packet);
+    }
     *//*?} else {*/
     @Inject(method = "send(Lnet/minecraft/network/packet/Packet;)V", at = @At("HEAD"), require = 0)
     private void moar$recordOutgoingPacket(Packet<?> packet, CallbackInfo ci) {
         PacketTelemetry.recordOutgoing(packet);
+    }
+
+    @Inject(method = "channelRead0(Lio/netty/channel/ChannelHandlerContext;Lnet/minecraft/network/packet/Packet;)V", at = @At("HEAD"), require = 0)
+    private void moar$recordIncomingPacket(ChannelHandlerContext ctx, Packet<?> packet, CallbackInfo ci) {
+        PacketTelemetry.recordIncoming(packet);
     }
     /*?}*/
 }

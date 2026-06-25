@@ -86,6 +86,7 @@ import java.util.Map;
 public final class PathWalker {
 
     private static final Logger LOGGER = LoggerFactory.getLogger("MOAR/PathWalker");
+    private static final String NETWORK_OWNER = "PathWalker";
 
     private PathWalker() {}
 
@@ -167,7 +168,6 @@ public final class PathWalker {
     /** True when vanilla fallback should use the calmer printer-style
      *  movement policy instead of sprinting and proactive hop logic. */
     private static boolean conservativeVanillaMovement;
-
     /** GoalNear radius for the current walk — used for the arrival
      *  check so we accept arrival within the same range that Baritone
      *  targets.  Zero means use the tight ARRIVAL_DIST_SQ. */
@@ -248,6 +248,33 @@ public final class PathWalker {
             BaritoneDelegate.walkTo(pos);
         } else {
             startVanillaWalk(pos, 0);
+        }
+    }
+
+    public static void walkToExact(BlockPos pos, double arrivalDist) {
+        conservativeVanillaMovement = false;
+        if (BARITONE_AVAILABLE) {
+            /*? if >=26.1 {*//*
+            target = pos.immutable();
+            *//*?} else {*/
+            target = pos.toImmutable();
+            /*?}*/
+            active = true;
+            arrived = false;
+            stuck = false;
+            ticksWalking = 0;
+            goalRadius = 0;
+            arrivalDistSqOverride = arrivalDist * arrivalDist;
+            yLevelTarget = Integer.MIN_VALUE;
+            lastProgressPos = null;
+            lastProgressTick = 0;
+            stuckCycles = 0;
+            recordInitialDistance(pos);
+            LOGGER.debug("PathWalker: walking exactly to ({}, {}, {}) r={}",
+                    pos.getX(), pos.getY(), pos.getZ(), arrivalDist);
+            BaritoneDelegate.walkTo(pos);
+        } else {
+            startVanillaWalk(pos, 0, arrivalDist * arrivalDist);
         }
     }
 
@@ -412,10 +439,12 @@ public final class PathWalker {
             }
             placementEnabled = true;
             walkToNearby(pos, radius);
+            conservativeVanillaMovement = true;
             LOGGER.debug("PathWalker: walking with placement to ({}, {}, {}) r={}",
                     pos.getX(), pos.getY(), pos.getZ(), radius);
         } else {
             walkTo(pos);
+            conservativeVanillaMovement = true;
         }
     }
 
@@ -447,7 +476,7 @@ public final class PathWalker {
     public static void walkToYLevelWithPlacement(int y,
                                                   /*? if >=26.1 {*//*
                                                   LocalPlayer player) {
-                                                  *//*?} else {*/
+        *//*?} else {*/
                                                   ClientPlayerEntity player) {
                                                   /*?}*/
         conservativeVanillaMovement = true;
@@ -458,6 +487,7 @@ public final class PathWalker {
             }
             placementEnabled = true;
             walkToYLevel(y);
+            conservativeVanillaMovement = true;
             LOGGER.debug("PathWalker: walking to Y level {} with placement", y);
         }
     }
@@ -544,6 +574,7 @@ public final class PathWalker {
                                                     List<Integer> radii) {
         if (waypoints == null || waypoints.isEmpty()) return;
 
+        conservativeVanillaMovement = false;
         waypointQueue.clear();
         waypointRadiusQueue.clear();
         for (int i = 0; i < waypoints.size(); i++) {
@@ -749,6 +780,11 @@ public final class PathWalker {
             releaseKeys();
             return;
         }
+        if (!PrinterNetworkCoordinator.tryAcquire(
+                PrinterNetworkCoordinator.Lane.MOVEMENT, NETWORK_OWNER, 0, 0)) {
+            releaseKeys();
+            return;
+        }
 
         ticksWalking++;
 
@@ -940,6 +976,11 @@ public final class PathWalker {
             active = false;
             miningDescent = false;
             currentMiningPos = null;
+            return;
+        }
+
+        if (!PrinterNetworkCoordinator.tryAcquire(
+                PrinterNetworkCoordinator.Lane.MINING, NETWORK_OWNER, 1, 1)) {
             return;
         }
 

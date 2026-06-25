@@ -1,5 +1,7 @@
 package dev.moar.travel.flight;
 
+import dev.moar.util.MoarNetworkManager;
+
 /*? if >=26.1 {*//*
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.Options;
@@ -335,6 +337,14 @@ public final class FlightController {
             if (inv.getStack(i).getItem() == Items.FIREWORK_ROCKET) { slot = i; break; }
         }
         if (slot < 0) { LOGGER.debug("[Flight] no FIREWORK_ROCKET in hotbar"); return false; }
+        if (!MoarNetworkManager.tryAcquire(
+                MoarNetworkManager.Lane.INVENTORY,
+                MoarNetworkManager.OWNER_FLIGHT, 1, 2)
+                || !MoarNetworkManager.tryAcquire(
+                MoarNetworkManager.Lane.INTERACTION,
+                MoarNetworkManager.OWNER_FLIGHT, 1, 2)) {
+            return false;
+        }
         /*? if >=1.21.5 {*//*
         inv.setSelectedSlot(slot);
         *//*?} else {*/

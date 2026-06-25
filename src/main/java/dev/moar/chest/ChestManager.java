@@ -3,6 +3,7 @@ package dev.moar.chest;
 import dev.moar.MoarMod;
 import dev.moar.stash.StashDatabase;
 import dev.moar.util.ChatHelper;
+import dev.moar.util.MoarNetworkManager;
 import dev.moar.util.PathWalker;
 /*? if >=26.1 {*//*
 import net.minecraft.world.level.block.*;
@@ -818,6 +819,12 @@ public final class ChestManager {
             if (chestState.getBlock() instanceof ChestBlock
                     || chestState.getBlock() instanceof BarrelBlock
                     || chestState.getBlock() instanceof ShulkerBoxBlock) {
+                if (!MoarNetworkManager.tryAcquire(
+                        MoarNetworkManager.Lane.INTERACTION,
+                        MoarNetworkManager.OWNER_CHEST_MANAGER, 2, 2)) {
+                    openWaitTicks = 0;
+                    return;
+                }
                 /*? if >=26.1 {*//*
                 mc.gameMode.useItemOn(
                 *//*?} else {*/
@@ -952,6 +959,12 @@ public final class ChestManager {
             containerSlotIndex = chestSlotCount + 27 + playerSlot;
         } else {
             containerSlotIndex = chestSlotCount + playerSlot - 9;
+        }
+
+        if (!MoarNetworkManager.tryAcquire(
+                MoarNetworkManager.Lane.INVENTORY,
+                MoarNetworkManager.OWNER_CHEST_MANAGER, 1, 2)) {
+            return;
         }
 
         /*? if >=26.1 {*//*

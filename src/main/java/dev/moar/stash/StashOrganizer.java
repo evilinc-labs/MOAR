@@ -5,6 +5,7 @@ import dev.moar.stash.StashManager.ContainerEntry;
 import dev.moar.stash.StashManager.ShulkerDetail;
 import dev.moar.util.ChatHelper;
 import dev.moar.util.ItemIdentifier;
+import dev.moar.util.MoarNetworkManager;
 import dev.moar.util.PathWalker;
 import dev.moar.util.PlacementEngine;
 /*? if >=26.1 {*//*
@@ -259,12 +260,16 @@ public final class StashOrganizer {
     private int shulkersToCraft;
     /** Tick counter for crafting phases. */
     private int craftTicks;
+    /** Serialized crafting-grid clicks for the active recipe. */
+    private final Deque<CraftClick> craftClickPlan = new ArrayDeque<>();
     /** Queue of containers to visit for crafting material collection. */
     private final Deque<BlockPos> materialSources = new ArrayDeque<>();
     /** Shells still needed from region containers. */
     private int shellsNeeded;
     /** Chests still needed from region containers. */
     private int chestsNeeded;
+
+    private record CraftClick(int slot, int button) {}
 
     // Consolidation state
 
@@ -292,6 +297,24 @@ public final class StashOrganizer {
     public int getTotalTasks() { return totalTasks; }
     public int getCompletedTasks() { return completedTasks; }
 
+    private boolean tryOrganizerInventory(int cooldownTicks) {
+        return MoarNetworkManager.tryAcquire(
+                MoarNetworkManager.Lane.INVENTORY,
+                MoarNetworkManager.OWNER_STASH_ORGANIZER, 1, cooldownTicks);
+    }
+
+    private boolean tryOrganizerInteraction(int cooldownTicks) {
+        return MoarNetworkManager.tryAcquire(
+                MoarNetworkManager.Lane.INTERACTION,
+                MoarNetworkManager.OWNER_STASH_ORGANIZER, 2, cooldownTicks);
+    }
+
+    private boolean tryOrganizerMining(int cooldownTicks) {
+        return MoarNetworkManager.tryAcquire(
+                MoarNetworkManager.Lane.MINING,
+                MoarNetworkManager.OWNER_STASH_ORGANIZER, 2, cooldownTicks);
+    }
+
     // Lifecycle
 
     public boolean start() {
@@ -312,6 +335,7 @@ public final class StashOrganizer {
         PathWalker.stop();
         taskQueue.clear();
         consolidationQueue.clear();
+        craftClickPlan.clear();
         overflowItems.clear();
         currentTask = null;
         walkTarget = null;
@@ -339,6 +363,7 @@ public final class StashOrganizer {
         state = State.IDLE;
         taskQueue.clear();
         consolidationQueue.clear();
+        craftClickPlan.clear();
         consolidationMode = false;
         currentTask = null;
         overflowItems.clear();
@@ -785,6 +810,10 @@ public final class StashOrganizer {
         }
 
         if (openWaitTicks == 3) {
+            if (!tryOrganizerInteraction(2)) {
+                openWaitTicks = 2;
+                return;
+            }
             Runnable restoreSneak = PlacementEngine.releaseForInteraction(player);
 
             /*? if >=26.1 {*//*
@@ -876,6 +905,9 @@ public final class StashOrganizer {
                         break;
                     }
 
+                    if (!tryOrganizerInventory(CLICK_COOLDOWN_TICKS)) {
+                        return;
+                    }
                     /*? if >=26.1 {*//*
                     mc.gameMode.handleContainerInput(
                     *//*?} else {*/
@@ -987,6 +1019,9 @@ public final class StashOrganizer {
                         containerSlotIndex = chestSlotCount + actionSlotIndex - 9;
                     }
 
+                    if (!tryOrganizerInventory(CLICK_COOLDOWN_TICKS)) {
+                        return;
+                    }
                     /*? if >=26.1 {*//*
                     mc.gameMode.handleContainerInput(
                     *//*?} else {*/
@@ -1118,6 +1153,9 @@ public final class StashOrganizer {
         }
 
         // Select this specific empty shulker slot (avoid matching non-empty ones)
+        if (!tryOrganizerInventory(CLICK_COOLDOWN_TICKS)) {
+            return;
+        }
         if (slot < 9) {
             // Already in hotbar — just select it
             /*? if >=1.21.5 {*//*
@@ -1216,6 +1254,9 @@ public final class StashOrganizer {
         lookAt(player, Vec3d.ofCenter(shulkerPlacePos.down()).add(0, 0.5, 0));
         /*?}*/
         if (shulkerTicks < PLACE_DELAY_TICKS) return;
+        if (!tryOrganizerInteraction(2)) {
+            return;
+        }
 
         // Sneak to place rather than interact with container below
         Runnable restoreSneak = PlacementEngine.forceForPlacement(player);
@@ -1317,6 +1358,10 @@ public final class StashOrganizer {
         }
 
         if (shulkerTicks == 3) {
+            if (!tryOrganizerInteraction(2)) {
+                shulkerTicks = 2;
+                return;
+            }
             Runnable restoreSneak = PlacementEngine.releaseForInteraction(player);
             Direction hitFace = Direction.UP;
             BlockHitResult hit = new BlockHitResult(
@@ -1400,6 +1445,9 @@ public final class StashOrganizer {
                         handlerSlot = 27 + actionSlotIndex - 9; // main inventory
                     }
 
+                    if (!tryOrganizerInventory(CLICK_COOLDOWN_TICKS)) {
+                        return;
+                    }
                     /*? if >=26.1 {*//*
                     mc.gameMode.handleContainerInput(
                     *//*?} else {*/
@@ -1525,6 +1573,9 @@ public final class StashOrganizer {
         *//*?} else {*/
         lookAt(player, Vec3d.ofCenter(shulkerPlacePos));
         /*?}*/
+        if (!tryOrganizerMining(1)) {
+            return;
+        }
         /*? if >=26.1 {*//*
         mc.gameMode.continueDestroyBlock(shulkerPlacePos, Direction.UP);
         *//*?} else {*/
@@ -1654,6 +1705,10 @@ public final class StashOrganizer {
         }
 
         if (openWaitTicks == 3) {
+            if (!tryOrganizerInteraction(2)) {
+                openWaitTicks = 2;
+                return;
+            }
             Runnable restoreSneak = PlacementEngine.releaseForInteraction(player);
 
             /*? if >=26.1 {*//*
@@ -1746,6 +1801,9 @@ public final class StashOrganizer {
                     containerSlotIndex = chestSlotCount + actionSlotIndex - 9;
                 }
 
+                if (!tryOrganizerInventory(CLICK_COOLDOWN_TICKS)) {
+                    return;
+                }
                 /*? if >=26.1 {*//*
                 mc.gameMode.handleContainerInput(
                 *//*?} else {*/
@@ -1837,6 +1895,10 @@ public final class StashOrganizer {
         }
 
         if (openWaitTicks == 3) {
+            if (!tryOrganizerInteraction(2)) {
+                openWaitTicks = 2;
+                return;
+            }
             Runnable restoreSneak = PlacementEngine.releaseForInteraction(player);
             /*? if >=26.1 {*//*
             Vec3 center = Vec3.atCenterOf(walkTarget);
@@ -1933,6 +1995,9 @@ public final class StashOrganizer {
                 if (cc == null || !cc.iterateNonEmpty().iterator().hasNext()) {
                 /*?}*/
                     // Found an empty shulker — take it
+                    if (!tryOrganizerInventory(CLICK_COOLDOWN_TICKS)) {
+                        return;
+                    }
                     /*? if >=26.1 {*//*
                     mc.gameMode.handleContainerInput(
                     *//*?} else {*/
@@ -1978,6 +2043,7 @@ public final class StashOrganizer {
     // --- CRAFTING — walk to crafting table → open → place materials → take
 
     private void startCrafting() {
+        craftClickPlan.clear();
         /*? if >=26.1 {*//*
         Minecraft mc = Minecraft.getInstance();
         *//*?} else {*/
@@ -2100,6 +2166,10 @@ public final class StashOrganizer {
         }
 
         if (openWaitTicks == 3) {
+            if (!tryOrganizerInteraction(2)) {
+                openWaitTicks = 2;
+                return;
+            }
             Runnable restoreSneak = PlacementEngine.releaseForInteraction(player);
             /*? if >=26.1 {*//*
             Vec3 center = Vec3.atCenterOf(walkTarget);
@@ -2184,6 +2254,9 @@ public final class StashOrganizer {
 
                 if (take) {
                     if (!hasInventoryRoom(mc.player)) break;
+                    if (!tryOrganizerInventory(CLICK_COOLDOWN_TICKS)) {
+                        return;
+                    }
                     /*? if >=26.1 {*//*
                     mc.gameMode.handleContainerInput(
                     *//*?} else {*/
@@ -2281,6 +2354,10 @@ public final class StashOrganizer {
         }
 
         if (openWaitTicks == 3) {
+            if (!tryOrganizerInteraction(2)) {
+                openWaitTicks = 2;
+                return;
+            }
             Runnable restoreSneak = PlacementEngine.releaseForInteraction(mc.player);
 
             /*? if >=26.1 {*//*
@@ -2344,6 +2421,15 @@ public final class StashOrganizer {
             startOverflow();
             return;
         }
+        /*? if >=26.1 {*//*
+        int syncId = craftHandler.containerId;
+        *//*?} else {*/
+        int syncId = craftHandler.syncId;
+        /*?}*/
+        if (!craftClickPlan.isEmpty()) {
+            tickCraftClickPlan(mc, syncId);
+            return;
+        }
 
         // Crafting grid slots (1-9): shulker_shell in slot 2 (top-center),
         // chest in slot 5 (middle-center), shulker_shell in slot 8 (bottom-center)
@@ -2366,12 +2452,6 @@ public final class StashOrganizer {
         if (chestSlot < 0) { mc.player.closeHandledScreen(); startOverflow(); return; }
         /*?}*/
 
-        // In handler: result=0, grid=1-9, inv=10-36, hotbar=37-45
-        /*? if >=26.1 {*//*
-        int syncId = craftHandler.containerId;
-        *//*?} else {*/
-        int syncId = craftHandler.syncId;
-        /*?}*/
         int hShell = playerSlotToHandlerSlot(shellSlot, 10);
         int hChest = playerSlotToHandlerSlot(chestSlot, 10);
 
@@ -2384,27 +2464,10 @@ public final class StashOrganizer {
         ItemStack shellStack = mc.player.getInventory().getStack(shellSlot);
         /*?}*/
         if (shellStack.getCount() >= 2) {
-            // Single stack has ≥2 shells — pick up, right-click place 1 each
-            /*? if >=26.1 {*//*
-            mc.gameMode.handleContainerInput(syncId, hShell, 0, ContainerInput.PICKUP, mc.player);
-            *//*?} else {*/
-            mc.interactionManager.clickSlot(syncId, hShell, 0, SlotActionType.PICKUP, mc.player);
-            /*?}*/
-            /*? if >=26.1 {*//*
-            mc.gameMode.handleContainerInput(syncId, 2, 1, ContainerInput.PICKUP, mc.player);
-            *//*?} else {*/
-            mc.interactionManager.clickSlot(syncId, 2, 1, SlotActionType.PICKUP, mc.player);
-            /*?}*/
-            /*? if >=26.1 {*//*
-            mc.gameMode.handleContainerInput(syncId, 8, 1, ContainerInput.PICKUP, mc.player);
-            *//*?} else {*/
-            mc.interactionManager.clickSlot(syncId, 8, 1, SlotActionType.PICKUP, mc.player);
-            /*?}*/
-            /*? if >=26.1 {*//*
-            mc.gameMode.handleContainerInput(syncId, hShell, 0, ContainerInput.PICKUP, mc.player);
-            *//*?} else {*/
-            mc.interactionManager.clickSlot(syncId, hShell, 0, SlotActionType.PICKUP, mc.player);
-            /*?}*/
+            craftClickPlan.addLast(new CraftClick(hShell, 0));
+            craftClickPlan.addLast(new CraftClick(2, 1));
+            craftClickPlan.addLast(new CraftClick(8, 1));
+            craftClickPlan.addLast(new CraftClick(hShell, 0));
         } else {
             // Shells split across slots — place one from each stack
             int shellSlot2 = findItemSlotInInventory(mc.player, Items.SHULKER_SHELL, shellSlot);
@@ -2414,57 +2477,48 @@ public final class StashOrganizer {
             if (shellSlot2 < 0) { mc.player.closeHandledScreen(); startOverflow(); return; }
             /*?}*/
             int hShell2 = playerSlotToHandlerSlot(shellSlot2, 10);
-            /*? if >=26.1 {*//*
-            mc.gameMode.handleContainerInput(syncId, hShell, 0, ContainerInput.PICKUP, mc.player);
-            *//*?} else {*/
-            mc.interactionManager.clickSlot(syncId, hShell, 0, SlotActionType.PICKUP, mc.player);
-            /*?}*/
-            /*? if >=26.1 {*//*
-            mc.gameMode.handleContainerInput(syncId, 2, 1, ContainerInput.PICKUP, mc.player);
-            *//*?} else {*/
-            mc.interactionManager.clickSlot(syncId, 2, 1, SlotActionType.PICKUP, mc.player);
-            /*?}*/
-            /*? if >=26.1 {*//*
-            mc.gameMode.handleContainerInput(syncId, hShell, 0, ContainerInput.PICKUP, mc.player);
-            *//*?} else {*/
-            mc.interactionManager.clickSlot(syncId, hShell, 0, SlotActionType.PICKUP, mc.player);
-            /*?}*/
-            /*? if >=26.1 {*//*
-            mc.gameMode.handleContainerInput(syncId, hShell2, 0, ContainerInput.PICKUP, mc.player);
-            *//*?} else {*/
-            mc.interactionManager.clickSlot(syncId, hShell2, 0, SlotActionType.PICKUP, mc.player);
-            /*?}*/
-            /*? if >=26.1 {*//*
-            mc.gameMode.handleContainerInput(syncId, 8, 1, ContainerInput.PICKUP, mc.player);
-            *//*?} else {*/
-            mc.interactionManager.clickSlot(syncId, 8, 1, SlotActionType.PICKUP, mc.player);
-            /*?}*/
-            /*? if >=26.1 {*//*
-            mc.gameMode.handleContainerInput(syncId, hShell2, 0, ContainerInput.PICKUP, mc.player);
-            *//*?} else {*/
-            mc.interactionManager.clickSlot(syncId, hShell2, 0, SlotActionType.PICKUP, mc.player);
-            /*?}*/
+            craftClickPlan.addLast(new CraftClick(hShell, 0));
+            craftClickPlan.addLast(new CraftClick(2, 1));
+            craftClickPlan.addLast(new CraftClick(hShell, 0));
+            craftClickPlan.addLast(new CraftClick(hShell2, 0));
+            craftClickPlan.addLast(new CraftClick(8, 1));
+            craftClickPlan.addLast(new CraftClick(hShell2, 0));
         }
 
         // Chest — pick up, right-click place 1 in grid slot 5, return rest
-        /*? if >=26.1 {*//*
-        mc.gameMode.handleContainerInput(syncId, hChest, 0, ContainerInput.PICKUP, mc.player);
-        *//*?} else {*/
-        mc.interactionManager.clickSlot(syncId, hChest, 0, SlotActionType.PICKUP, mc.player);
-        /*?}*/
-        /*? if >=26.1 {*//*
-        mc.gameMode.handleContainerInput(syncId, 5, 1, ContainerInput.PICKUP, mc.player);
-        *//*?} else {*/
-        mc.interactionManager.clickSlot(syncId, 5, 1, SlotActionType.PICKUP, mc.player);
-        /*?}*/
-        /*? if >=26.1 {*//*
-        mc.gameMode.handleContainerInput(syncId, hChest, 0, ContainerInput.PICKUP, mc.player);
-        *//*?} else {*/
-        mc.interactionManager.clickSlot(syncId, hChest, 0, SlotActionType.PICKUP, mc.player);
-        /*?}*/
+        craftClickPlan.addLast(new CraftClick(hChest, 0));
+        craftClickPlan.addLast(new CraftClick(5, 1));
+        craftClickPlan.addLast(new CraftClick(hChest, 0));
+        tickCraftClickPlan(mc, syncId);
+    }
 
-        state = State.CRAFT_TAKING;
-        craftTicks = 0;
+    /*? if >=26.1 {*//*
+    private void tickCraftClickPlan(Minecraft mc, int syncId) {
+    *//*?} else {*/
+    private void tickCraftClickPlan(MinecraftClient mc, int syncId) {
+    /*?}*/
+        if (craftClickPlan.isEmpty()) {
+            state = State.CRAFT_TAKING;
+            craftTicks = 0;
+            return;
+        }
+        if (!MoarNetworkManager.tryAcquire(
+                MoarNetworkManager.Lane.INVENTORY,
+                MoarNetworkManager.OWNER_STASH_ORGANIZER, 1, CLICK_COOLDOWN_TICKS)) {
+            return;
+        }
+        CraftClick click = craftClickPlan.removeFirst();
+        /*? if >=26.1 {*//*
+        mc.gameMode.handleContainerInput(
+                syncId, click.slot(), click.button(), ContainerInput.PICKUP, mc.player);
+        *//*?} else {*/
+        mc.interactionManager.clickSlot(
+                syncId, click.slot(), click.button(), SlotActionType.PICKUP, mc.player);
+        /*?}*/
+        if (craftClickPlan.isEmpty()) {
+            state = State.CRAFT_TAKING;
+            craftTicks = 0;
+        }
         actionCooldown = CLICK_COOLDOWN_TICKS;
     }
 
@@ -2513,6 +2567,11 @@ public final class StashOrganizer {
             return;
         }
 
+        if (!MoarNetworkManager.tryAcquire(
+                MoarNetworkManager.Lane.INVENTORY,
+                MoarNetworkManager.OWNER_STASH_ORGANIZER, 1, CLICK_COOLDOWN_TICKS)) {
+            return;
+        }
         /*? if >=26.1 {*//*
         mc.gameMode.handleContainerInput(craftHandler.containerId, 0, 0,
         *//*?} else {*/
@@ -2625,6 +2684,10 @@ public final class StashOrganizer {
         }
 
         if (openWaitTicks == 3) {
+            if (!tryOrganizerInteraction(2)) {
+                openWaitTicks = 2;
+                return;
+            }
             Runnable restoreSneak = PlacementEngine.releaseForInteraction(player);
 
             /*? if >=26.1 {*//*
@@ -2717,6 +2780,9 @@ public final class StashOrganizer {
                     containerSlotIndex = chestSlotCount + actionSlotIndex - 9;
                 }
 
+                if (!tryOrganizerInventory(CLICK_COOLDOWN_TICKS)) {
+                    return;
+                }
                 /*? if >=26.1 {*//*
                 mc.gameMode.handleContainerInput(
                 *//*?} else {*/

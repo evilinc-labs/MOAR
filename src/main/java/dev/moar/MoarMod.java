@@ -22,6 +22,7 @@ import dev.moar.travel.hud.HighwayOverlayRenderer;
 import dev.moar.travel.hud.TravelHud;
 import dev.moar.util.PathWalker;
 import dev.moar.util.PrinterDatabase;
+import dev.moar.util.MoarNetworkManager;
 import net.fabricmc.api.ClientModInitializer;
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
 import net.fabricmc.fabric.api.client.networking.v1.ClientPlayConnectionEvents;
@@ -142,6 +143,8 @@ public class MoarMod implements ClientModInitializer {
 
         // Register tick handler
         ClientTickEvents.END_CLIENT_TICK.register(client -> {
+            MoarNetworkManager.beginClientTick();
+
             // Setback monitor must tick first so other subsystems see
             // up-to-date isCalm() / ticksSinceSetback() this tick.
             SetbackMonitor.get().tick(client);

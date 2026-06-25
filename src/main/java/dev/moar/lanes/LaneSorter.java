@@ -3,6 +3,7 @@ package dev.moar.lanes;
 import dev.moar.MoarMod;
 import dev.moar.util.ChatHelper;
 import dev.moar.util.ItemIdentifier;
+import dev.moar.util.MoarNetworkManager;
 import dev.moar.util.PathWalker;
 import dev.moar.util.PlacementEngine;
 import dev.moar.world.SetbackMonitor;
@@ -352,6 +353,12 @@ public final class LaneSorter {
 
         if (openWaitTicks == 3) {
             if (!SetbackMonitor.get().isCalm()) return;
+            if (!MoarNetworkManager.tryAcquire(
+                    MoarNetworkManager.Lane.INTERACTION,
+                    MoarNetworkManager.OWNER_LANE_SORTER, 2, 2)) {
+                openWaitTicks = 2;
+                return;
+            }
 
             Runnable restoreSneak = PlacementEngine.releaseForInteraction(player);
 
@@ -434,6 +441,12 @@ public final class LaneSorter {
                 int containerSlotIndex = (actionSlotIndex < HOTBAR_SIZE)
                         ? chestSlots + 27 + actionSlotIndex
                         : chestSlots + actionSlotIndex - HOTBAR_SIZE;
+
+                if (!MoarNetworkManager.tryAcquire(
+                        MoarNetworkManager.Lane.INVENTORY,
+                        MoarNetworkManager.OWNER_LANE_SORTER, 1, CLICK_COOLDOWN_TICKS)) {
+                    return;
+                }
 
                 /*? if >=26.1 {*//*
                 mc.gameMode.handleContainerInput(

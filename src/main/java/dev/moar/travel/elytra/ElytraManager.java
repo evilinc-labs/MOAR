@@ -58,6 +58,7 @@ import dev.moar.MoarMod;
 import dev.moar.chest.ChestManager;
 import dev.moar.util.ChatHelper;
 import dev.moar.util.ItemIdentifier;
+import dev.moar.util.MoarNetworkManager;
 import dev.moar.util.PathWalker;
 import dev.moar.util.PlacementEngine;
 import dev.moar.world.SetbackMonitor;
@@ -194,6 +195,24 @@ public final class ElytraManager {
     public boolean isDone()   { return state == State.DONE; }
     public boolean isFailed() { return state == State.FAILED; }
     public boolean isActive() { return state != State.IDLE && state != State.DONE && state != State.FAILED; }
+
+    private boolean tryElytraInventory(int cooldownTicks) {
+        return MoarNetworkManager.tryAcquire(
+                MoarNetworkManager.Lane.INVENTORY,
+                MoarNetworkManager.OWNER_ELYTRA, 1, cooldownTicks);
+    }
+
+    private boolean tryElytraInteraction(int cooldownTicks) {
+        return MoarNetworkManager.tryAcquire(
+                MoarNetworkManager.Lane.INTERACTION,
+                MoarNetworkManager.OWNER_ELYTRA, 2, cooldownTicks);
+    }
+
+    private boolean tryElytraMining(int cooldownTicks) {
+        return MoarNetworkManager.tryAcquire(
+                MoarNetworkManager.Lane.MINING,
+                MoarNetworkManager.OWNER_ELYTRA, 2, cooldownTicks);
+    }
 
     public void setEnderChestPos(BlockPos pos) {
         /*? if >=26.1 {*//*
@@ -513,6 +532,7 @@ public final class ElytraManager {
         switch (shulkerPhase) {
             case 0 -> {
                 LOGGER.info("[Elytra:swap] tick={} phase=0 — picking up spare psh={}", stateTicks, pshSlot);
+                if (!tryElytraInventory(CLICK_COOLDOWN)) return;
                 /*? if >=26.1 {*//*
                 mc.gameMode.handleContainerInput(
                         mc.player.containerMenu.containerId, pshSlot, 0,
@@ -527,6 +547,7 @@ public final class ElytraManager {
             }
             case 1 -> {
                 LOGGER.info("[Elytra:swap] tick={} phase=1 — placing spare into chest slot 6", stateTicks);
+                if (!tryElytraInventory(CLICK_COOLDOWN)) return;
                 /*? if >=26.1 {*//*
                 mc.gameMode.handleContainerInput(
                         mc.player.containerMenu.containerId, 6, 0,
@@ -541,6 +562,7 @@ public final class ElytraManager {
             }
             case 2 -> {
                 LOGGER.info("[Elytra:swap] tick={} phase=2 — depositing old elytra at psh={}", stateTicks, pshSlot);
+                if (!tryElytraInventory(CLICK_COOLDOWN)) return;
                 /*? if >=26.1 {*//*
                 mc.gameMode.handleContainerInput(
                         mc.player.containerMenu.containerId, pshSlot, 0,
@@ -580,6 +602,7 @@ public final class ElytraManager {
             switch (shulkerPhase) {
                 case 1 -> {
                     LOGGER.info("[Elytra:mend-swap] phase=1 picking up damaged elytra psh={}", pshSlot);
+                    if (!tryElytraInventory(CLICK_COOLDOWN)) return;
                     /*? if >=26.1 {*//*
                     mc.gameMode.handleContainerInput(
                             mc.player.containerMenu.containerId, pshSlot, 0,
@@ -594,6 +617,7 @@ public final class ElytraManager {
                 }
                 case 2 -> {
                     LOGGER.info("[Elytra:mend-swap] phase=2 placing into chest slot 6");
+                    if (!tryElytraInventory(CLICK_COOLDOWN)) return;
                     /*? if >=26.1 {*//*
                     mc.gameMode.handleContainerInput(
                             mc.player.containerMenu.containerId, 6, 0,
@@ -608,6 +632,7 @@ public final class ElytraManager {
                 }
                 case 3 -> {
                     LOGGER.info("[Elytra:mend-swap] phase=3 depositing mended elytra at psh={}", pshSlot);
+                    if (!tryElytraInventory(CLICK_COOLDOWN)) return;
                     /*? if >=26.1 {*//*
                     mc.gameMode.handleContainerInput(
                             mc.player.containerMenu.containerId, pshSlot, 0,
@@ -720,11 +745,12 @@ public final class ElytraManager {
         // the server has not yet processed it and will throw the wrong item.
         // On the next call (after actionCooldown drains) the bottle is in the hotbar
         // and ensureInHotbar is a no-op, so we fall through to the throw.
-        ensureInHotbar(mc, xpSlot);
+        if (!ensureInHotbar(mc, xpSlot)) return;
         if (actionCooldown > 0) return; // swap just fired — wait for settle
 
         // Throw looking straight down so the XP orb lands at the player's feet
         // and is absorbed immediately (same technique as AnarchyClient AutoEXP).
+        if (!tryElytraInteraction(MEND_THROW_INTERVAL)) return;
         /*? if >=26.1 {*//*
         float prevPitch = mc.player.getXRot();
         mc.player.setXRot(90.0f);
@@ -811,6 +837,7 @@ public final class ElytraManager {
                 /*?}*/
 
                 if (ecInvSlot >= 9) {
+                    if (!tryElytraInventory(SWAP_SETTLE)) return;
                     /*? if >=26.1 {*//*
                     mc.gameMode.handleContainerInput(
                             player.containerMenu.containerId, ecInvSlot, hotbar,
@@ -821,6 +848,7 @@ public final class ElytraManager {
                             SlotActionType.SWAP, player);
                     /*?}*/
                 } else {
+                    if (!tryElytraInventory(SWAP_SETTLE)) return;
                     /*? if >=1.21.5 {*//*
                     inv.setSelectedSlot(ecInvSlot);
                     *//*?} else if >=26.1 {*//*
@@ -867,6 +895,7 @@ public final class ElytraManager {
                 }
 
                 lookAt(player, target);
+                if (!tryElytraInteraction(2)) return;
                 Runnable restoreSneak = PlacementEngine.ensureSneakForPlacement(player);
                 BlockHitResult hit = new BlockHitResult(
                         target, Direction.UP,
@@ -1045,6 +1074,7 @@ public final class ElytraManager {
             if (!shulkerMatchesCurrentMode(stack)) continue;
 
             // Found — QUICK_MOVE it to player inventory
+            if (!tryElytraInventory(CLICK_COOLDOWN)) return;
             /*? if >=26.1 {*//*
             mc.gameMode.handleContainerInput(
                     chestHandler.containerId, slot, 0,
@@ -1179,6 +1209,7 @@ public final class ElytraManager {
                 /*?}*/
 
                 if (shulkerSlot >= 9) {
+                    if (!tryElytraInventory(SWAP_SETTLE)) return;
                     /*? if >=26.1 {*//*
                     mc.gameMode.handleContainerInput(
                             player.containerMenu.containerId, shulkerSlot, hotbar,
@@ -1189,6 +1220,7 @@ public final class ElytraManager {
                             SlotActionType.SWAP, player);
                     /*?}*/
                 } else {
+                    if (!tryElytraInventory(SWAP_SETTLE)) return;
                     /*? if >=1.21.5 {*//*
                     inv.setSelectedSlot(shulkerSlot);
                     *//*?} else if >=26.1 {*//*
@@ -1233,6 +1265,7 @@ public final class ElytraManager {
                 }
 
                 lookAt(player, target);
+                if (!tryElytraInteraction(2)) return;
                 Runnable restoreSneak = PlacementEngine.ensureSneakForPlacement(player);
                 BlockHitResult hit = new BlockHitResult(
                         target, Direction.UP,
@@ -1333,6 +1366,7 @@ public final class ElytraManager {
         lookAt(player, center);
 
         if (shulkerTicks == 1 || shulkerTicks % OPEN_RETRY_INTERVAL == 0) {
+            if (!tryElytraInteraction(2)) return;
             Runnable restoreSneak = PlacementEngine.releaseForInteraction(player);
             /*? if >=26.1 {*//*
             Vec3 toShulker = center.subtract(player.getEyePosition());
@@ -1518,6 +1552,7 @@ public final class ElytraManager {
         LOGGER.info("[Elytra] taking {} from shulker slot {} ({}/{})",
                 currentPickupLabel(),
                 elytraShulkerSlot, elytraPickupCount + 1, elytraTakeQuota);
+        if (!tryElytraInventory(CLICK_COOLDOWN)) return;
         /*? if >=26.1 {*//*
         mc.gameMode.handleContainerInput(
                 shulkerHandler.containerId, elytraShulkerSlot, 0,
@@ -1573,6 +1608,7 @@ public final class ElytraManager {
                 equipSpareInvSlot = spareSlot;
                 int pshSlot = invSlotToPSHSlot(spareSlot);
                 LOGGER.info("[Elytra:equip] tick={} phase=0 — picking up spare psh={}", stateTicks, pshSlot);
+                if (!tryElytraInventory(CLICK_COOLDOWN)) return;
                 /*? if >=26.1 {*//*
                 mc.gameMode.handleContainerInput(
                         mc.player.containerMenu.containerId, pshSlot, 0,
@@ -1587,6 +1623,7 @@ public final class ElytraManager {
             }
             case 1 -> {
                 LOGGER.info("[Elytra:equip] tick={} phase=1 — placing spare into chest slot 6", stateTicks);
+                if (!tryElytraInventory(CLICK_COOLDOWN)) return;
                 /*? if >=26.1 {*//*
                 mc.gameMode.handleContainerInput(
                         mc.player.containerMenu.containerId, 6, 0,
@@ -1602,6 +1639,7 @@ public final class ElytraManager {
             case 2 -> {
                 int pshSlot = invSlotToPSHSlot(equipSpareInvSlot);
                 LOGGER.info("[Elytra:equip] tick={} phase=2 — depositing old elytra at psh={}", stateTicks, pshSlot);
+                if (!tryElytraInventory(CLICK_COOLDOWN)) return;
                 /*? if >=26.1 {*//*
                 mc.gameMode.handleContainerInput(
                         mc.player.containerMenu.containerId, pshSlot, 0,
@@ -1652,6 +1690,7 @@ public final class ElytraManager {
                     shulkerPhase = 8; shulkerTicks = 0; return;
                 }
                 PlacementEngine.selectBestTool(player, mc, st);
+                if (!tryElytraMining(1)) return;
                 /*? if >=26.1 {*//*
                 lookAt(player, Vec3.atCenterOf(shulkerPos));
                 mc.gameMode.startDestroyBlock(shulkerPos, Direction.UP);
@@ -1691,6 +1730,7 @@ public final class ElytraManager {
                     fail(mc, "Could not break placed shulker");
                     return;
                 }
+                if (!tryElytraMining(1)) return;
                 /*? if >=26.1 {*//*
                 lookAt(player, Vec3.atCenterOf(shulkerPos));
                 mc.gameMode.continueDestroyBlock(shulkerPos, Direction.UP);
@@ -1862,6 +1902,7 @@ public final class ElytraManager {
                 /*?}*/
                 int handlerSlot = invSlotToECHandlerSlot(shulkerInv, ecSlots);
 
+                if (!tryElytraInventory(CLICK_COOLDOWN)) return;
                 /*? if >=26.1 {*//*
                 mc.gameMode.handleContainerInput(
                         chestHandler.containerId, handlerSlot, 0,
@@ -1937,6 +1978,7 @@ public final class ElytraManager {
                 /*?}*/
 
                 if (stSlot >= 9) {
+                    if (!tryElytraInventory(SWAP_SETTLE)) return;
                     /*? if >=26.1 {*//*
                     mc.gameMode.handleContainerInput(
                             player.containerMenu.containerId, stSlot, hotbar,
@@ -1947,6 +1989,7 @@ public final class ElytraManager {
                             SlotActionType.SWAP, player);
                     /*?}*/
                 } else {
+                    if (!tryElytraInventory(SWAP_SETTLE)) return;
                     /*? if >=1.21.5 {*//*
                     inv.setSelectedSlot(stSlot);
                     *//*?} else if >=26.1 {*//*
@@ -1974,6 +2017,7 @@ public final class ElytraManager {
                 BlockState st = world.getBlockState(enderChestPos);
                 if (st.isAir()) { shulkerPhase = 3; shulkerTicks = 0; return; }
 
+                if (!tryElytraMining(1)) return;
                 /*? if >=26.1 {*//*
                 lookAt(player, Vec3.atCenterOf(enderChestPos));
                 mc.gameMode.startDestroyBlock(enderChestPos, Direction.UP);
@@ -2016,6 +2060,7 @@ public final class ElytraManager {
                     transition(postShulkerState);
                     return;
                 }
+                if (!tryElytraMining(1)) return;
                 /*? if >=26.1 {*//*
                 lookAt(player, Vec3.atCenterOf(enderChestPos));
                 mc.gameMode.continueDestroyBlock(enderChestPos, Direction.UP);
@@ -2400,6 +2445,7 @@ public final class ElytraManager {
         int invSlot = findDisposableInventorySlot(mc, wantedItemId);
         if (invSlot < 0) return -1;
         int handlerSlot = invSlotToECHandlerSlot(invSlot, 27);
+        if (!tryElytraInventory(CLICK_COOLDOWN)) return -1;
         /*? if >=26.1 {*//*
         mc.gameMode.handleContainerInput(
                 mc.player.containerMenu.containerId, handlerSlot, 1,
@@ -2544,61 +2590,113 @@ public final class ElytraManager {
     // ──────────────────────────────────────────────────────────────
 
     /*? if >=26.1 {*//*
-    private void ensureInHotbar(Minecraft mc, int invSlot) {
+    private boolean ensureInHotbar(Minecraft mc, int invSlot) {
         Inventory inv = mc.player.getInventory();
         int hotbar = inv.getSelectedSlot();
         if (invSlot < 9) {
+            if (hotbar == invSlot) return true;
+            if (!MoarNetworkManager.tryAcquire(
+                    MoarNetworkManager.Lane.INVENTORY,
+                    MoarNetworkManager.OWNER_ELYTRA, 1, 2)) {
+                return false;
+            }
             if (savedHotbarSlot < 0) savedHotbarSlot = hotbar;
             inv.setSelectedSlot(invSlot);
             mc.player.connection.send(new ServerboundSetCarriedItemPacket(invSlot));
+            actionCooldown = Math.max(actionCooldown, 2);
+            return false;
         } else {
+            if (!MoarNetworkManager.tryAcquire(
+                    MoarNetworkManager.Lane.INVENTORY,
+                    MoarNetworkManager.OWNER_ELYTRA, 1, SWAP_SETTLE)) {
+                return false;
+            }
             if (savedHotbarSlot < 0) savedHotbarSlot = hotbar;
             mc.gameMode.handleContainerInput(
                     mc.player.containerMenu.containerId, invSlot, hotbar,
                     ContainerInput.SWAP, mc.player);
             actionCooldown = SWAP_SETTLE;
+            return false;
         }
     }
     private void restoreHotbar(Minecraft mc) {
         if (savedHotbarSlot < 0 || mc.player == null) return;
+        if (!MoarNetworkManager.tryAcquire(
+                MoarNetworkManager.Lane.INVENTORY,
+                MoarNetworkManager.OWNER_ELYTRA, 1, 2)) {
+            return;
+        }
         mc.player.getInventory().setSelectedSlot(savedHotbarSlot);
         mc.player.connection.send(new ServerboundSetCarriedItemPacket(savedHotbarSlot));
         savedHotbarSlot = -1;
     }
     *//*?} else {*/
-    private void ensureInHotbar(MinecraftClient mc, int invSlot) {
+    private boolean ensureInHotbar(MinecraftClient mc, int invSlot) {
         /*? if >=1.21.5 {*//*
         PlayerInventory inv = mc.player.getInventory();
         int hotbar = inv.getSelectedSlot();
         if (invSlot < 9) {
+            if (hotbar == invSlot) return true;
+            if (!MoarNetworkManager.tryAcquire(
+                    MoarNetworkManager.Lane.INVENTORY,
+                    MoarNetworkManager.OWNER_ELYTRA, 1, 2)) {
+                return false;
+            }
             if (savedHotbarSlot < 0) savedHotbarSlot = hotbar;
             inv.setSelectedSlot(invSlot);
             mc.player.networkHandler.sendPacket(new UpdateSelectedSlotC2SPacket(invSlot));
+            actionCooldown = Math.max(actionCooldown, 2);
+            return false;
         } else {
+            if (!MoarNetworkManager.tryAcquire(
+                    MoarNetworkManager.Lane.INVENTORY,
+                    MoarNetworkManager.OWNER_ELYTRA, 1, SWAP_SETTLE)) {
+                return false;
+            }
             if (savedHotbarSlot < 0) savedHotbarSlot = hotbar;
             mc.interactionManager.clickSlot(
                     mc.player.currentScreenHandler.syncId, invSlot, hotbar,
                     SlotActionType.SWAP, mc.player);
             actionCooldown = SWAP_SETTLE;
+            return false;
         }
         *//*?} else {*/
         PlayerInventory inv = mc.player.getInventory();
         int hotbar = inv.selectedSlot;
         if (invSlot < 9) {
+            if (hotbar == invSlot) return true;
+            if (!MoarNetworkManager.tryAcquire(
+                    MoarNetworkManager.Lane.INVENTORY,
+                    MoarNetworkManager.OWNER_ELYTRA, 1, 2)) {
+                return false;
+            }
             if (savedHotbarSlot < 0) savedHotbarSlot = hotbar;
             inv.selectedSlot = invSlot;
             mc.player.networkHandler.sendPacket(new UpdateSelectedSlotC2SPacket(invSlot));
+            actionCooldown = Math.max(actionCooldown, 2);
+            return false;
         } else {
+            if (!MoarNetworkManager.tryAcquire(
+                    MoarNetworkManager.Lane.INVENTORY,
+                    MoarNetworkManager.OWNER_ELYTRA, 1, SWAP_SETTLE)) {
+                return false;
+            }
             if (savedHotbarSlot < 0) savedHotbarSlot = hotbar;
             mc.interactionManager.clickSlot(
                     mc.player.currentScreenHandler.syncId, invSlot, hotbar,
                     SlotActionType.SWAP, mc.player);
             actionCooldown = SWAP_SETTLE;
+            return false;
         }
         /*?}*/
     }
     private void restoreHotbar(MinecraftClient mc) {
         if (savedHotbarSlot < 0 || mc.player == null) return;
+        if (!MoarNetworkManager.tryAcquire(
+                MoarNetworkManager.Lane.INVENTORY,
+                MoarNetworkManager.OWNER_ELYTRA, 1, 2)) {
+            return;
+        }
         /*? if >=1.21.5 {*//*
         mc.player.getInventory().setSelectedSlot(savedHotbarSlot);
         *//*?} else {*/
@@ -2867,6 +2965,7 @@ public final class ElytraManager {
     /*? if >=26.1 {*//*
     private void interactWithEnderChest(Minecraft mc, LocalPlayer player) {
         if (enderChestPos == null) return;
+        if (!tryElytraInteraction(2)) return;
         Runnable restoreSneak = PlacementEngine.releaseForInteraction(player);
         try {
             Vec3 center = Vec3.atCenterOf(enderChestPos);
@@ -2884,6 +2983,7 @@ public final class ElytraManager {
     *//*?} else {*/
     private void interactWithEnderChest(MinecraftClient mc, ClientPlayerEntity player) {
         if (enderChestPos == null) return;
+        if (!tryElytraInteraction(2)) return;
         Runnable restoreSneak = PlacementEngine.releaseForInteraction(player);
         try {
             Vec3d center = Vec3d.ofCenter(enderChestPos);

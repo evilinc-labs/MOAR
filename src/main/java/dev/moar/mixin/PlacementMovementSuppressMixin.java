@@ -18,8 +18,7 @@ import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 
-// Skip the vanilla movement packet on ticks where PlacementEngine already sent
-// an explicit placement-facing rotation packet.
+// Legacy guard; normal flying packets should stay alive for Grim.
 /*? if >=26.1 {*//*
 @Mixin(LocalPlayer.class)
 public abstract class PlacementMovementSuppressMixin extends AbstractClientPlayer {

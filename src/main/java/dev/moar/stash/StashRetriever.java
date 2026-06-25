@@ -3,9 +3,11 @@ package dev.moar.stash;
 import dev.moar.MoarMod;
 import dev.moar.world.SetbackMonitor;
 import dev.moar.chest.ChestManager;
+import dev.moar.stash.StashDatabase.RegionBounds;
 import dev.moar.stash.StashDatabase.SearchResult;
 import dev.moar.util.ChatHelper;
 import dev.moar.util.ItemIdentifier;
+import dev.moar.util.MoarNetworkManager;
 import dev.moar.util.PathWalker;
 import dev.moar.util.PlacementEngine;/*? if >=26.1 {*//*
 import net.minecraft.client.Minecraft;
@@ -199,6 +201,21 @@ public final class StashRetriever {
         return out;
     }
 
+    /**
+     * Region currently in scope for retrieval queries. Built from the user-defined
+     * stash corners ({@code /stash pos1} / {@code pos2}). Returns {@code null} when
+     * no region is set, in which case retrieval falls back to a global DB search.
+     *
+     * <p>Scoping matters because the same {@code stash.db} may be reused across
+     * multiple builds / sessions — without this filter, retrieval can path to
+     * containers from a different stash entirely.
+     */
+    private static RegionBounds getActiveRegionBounds() {
+        var mgr = MoarMod.getStashManager();
+        if (mgr == null) return null;
+        return RegionBounds.of(mgr.getCorner1(), mgr.getCorner2());
+    }
+
     // Public API
 
     public State getState() { return state; }
@@ -215,7 +232,11 @@ public final class StashRetriever {
             return false;
         }
 
-        List<SearchResult> results = db.searchItem(itemIdFragment);
+        // Scope to the active stash region when one is set so we don't path to
+        // containers belonging to a different stash that just happens to share
+        // the same shared stash.db (Prism / shared gameDir setups).
+        RegionBounds activeBounds = getActiveRegionBounds();
+        List<SearchResult> results = db.searchItem(itemIdFragment, activeBounds);
         if (results.isEmpty()) {
             ChatHelper.labelled("Stash", "§cNo containers found with '§f" + itemIdFragment + "§c'.");
             return false;
@@ -322,8 +343,10 @@ public final class StashRetriever {
         BlockPos playerPos = mc.player.getBlockPos();
         /*?}*/
 
-        // Find containers holding kit items (incl. shulker contents).
-        Map<BlockPos, Map<String, Integer>> containerMap = db.findContainersForExactItems(kitItems.keySet());
+        // Find containers holding kit items (incl. shulker contents). Region-scoped
+        // when a stash region is active — see start() for rationale.
+        Map<BlockPos, Map<String, Integer>> containerMap =
+                db.findContainersForExactItems(kitItems.keySet(), getActiveRegionBounds());
         Set<BlockPos> blacklist = getBlacklistedContainerPositions();
         Set<BlockPos> containers = new LinkedHashSet<>();
         int skipped = 0;
@@ -434,6 +457,17 @@ public final class StashRetriever {
     /*?}*/
         if (walkTarget == null) { finish(); return; }
 
+        // If the server just teleported the player back (anti-cheat correction
+        // or chunk-load setback), pause the walker. Otherwise we'd advance
+        // PathWalker state based on a stale position; the next walker tick
+        // would then think we're in a different cell than the server believes
+        // we are, leading to either a wasted re-route or an arrived/stuck
+        // misdetection. Mirrors SchematicPrinter.handleBuildSetback().
+        if (!SetbackMonitor.get().isCalm()) {
+            if (PathWalker.isActive()) PathWalker.stop();
+            return;
+        }
+
         /*? if >=26.1 {*//*
         double distSq = mc.player.position().distanceToSqr(
         *//*?} else {*/
@@ -516,6 +550,12 @@ public final class StashRetriever {
         if (openWaitTicks >= 3
             && (openWaitTicks == 3 || openWaitTicks % OPEN_RETRY_INTERVAL_TICKS == 0)
             && SetbackMonitor.get().isCalm()) {
+            if (!MoarNetworkManager.tryAcquire(
+                    MoarNetworkManager.Lane.INTERACTION,
+                    MoarNetworkManager.OWNER_STASH_RETRIEVER, 2, 2)) {
+                openWaitTicks = 2;
+                return;
+            }
             Runnable restoreSneak = PlacementEngine.releaseForInteraction(player);
 
             /*? if >=26.1 {*//*
@@ -643,6 +683,11 @@ public final class StashRetriever {
                     if (isWanted(innerItem)) { stillNeeded = true; break; }
                 }
                 if (stillNeeded) continue;
+                if (!MoarNetworkManager.tryAcquire(
+                        MoarNetworkManager.Lane.INVENTORY,
+                        MoarNetworkManager.OWNER_STASH_RETRIEVER, 1, 2)) {
+                    return;
+                }
                 /*? if >=26.1 {*//*
                 mc.gameMode.handleContainerInput(
                 *//*?} else {*/
@@ -779,10 +824,15 @@ public final class StashRetriever {
 
     private void advanceToNextContainer() {
         Set<BlockPos> blacklist = getBlacklistedContainerPositions();
+        RegionBounds bounds = getActiveRegionBounds();
         BlockPos next;
         while ((next = containerQueue.poll()) != null) {
             if (failedContainers.contains(next)) continue;
             if (blacklist.contains(next)) continue;
+            // Defensive backstop: even if the original DB query was unbounded
+            // (legacy callers) or the user moved the region after queueing,
+            // never path to a container outside the currently-active region.
+            if (bounds != null && !bounds.contains(next)) continue;
             walkTarget = next;
             state = State.WALKING;
             return;
@@ -898,6 +948,11 @@ public final class StashRetriever {
 
         // Step 1: pick up the source stack to cursor.
         if (!splitCursorReady) {
+            if (!MoarNetworkManager.tryAcquire(
+                    MoarNetworkManager.Lane.INVENTORY,
+                    MoarNetworkManager.OWNER_STASH_RETRIEVER, 1, 2)) {
+                return false;
+            }
             /*? if >=26.1 {*//*
             mc.gameMode.handleContainerInput(syncId, splitSrcSlot, 0,
                     ContainerInput.PICKUP, mc.player);
@@ -911,6 +966,11 @@ public final class StashRetriever {
 
         // Step 2: right-click source to drop excess back, one item per tick.
         if (splitPutbacksLeft > 0) {
+            if (!MoarNetworkManager.tryAcquire(
+                    MoarNetworkManager.Lane.INVENTORY,
+                    MoarNetworkManager.OWNER_STASH_RETRIEVER, 1, 2)) {
+                return false;
+            }
             /*? if >=26.1 {*//*
             mc.gameMode.handleContainerInput(syncId, splitSrcSlot, 1,
                     ContainerInput.PICKUP, mc.player);
@@ -934,6 +994,11 @@ public final class StashRetriever {
         }
         if (dropSlot == -1) {
             // No room. Put cursor back at source as a fallback and bail.
+            if (!MoarNetworkManager.tryAcquire(
+                    MoarNetworkManager.Lane.INVENTORY,
+                    MoarNetworkManager.OWNER_STASH_RETRIEVER, 1, 2)) {
+                return false;
+            }
             /*? if >=26.1 {*//*
             mc.gameMode.handleContainerInput(syncId, splitSrcSlot, 0,
                     ContainerInput.PICKUP, mc.player);
@@ -943,6 +1008,11 @@ public final class StashRetriever {
             /*?}*/
             resetSplit();
             return true;
+        }
+        if (!MoarNetworkManager.tryAcquire(
+                MoarNetworkManager.Lane.INVENTORY,
+                MoarNetworkManager.OWNER_STASH_RETRIEVER, 1, 2)) {
+            return false;
         }
         /*? if >=26.1 {*//*
         mc.gameMode.handleContainerInput(syncId, dropSlot, 0,
@@ -1206,6 +1276,12 @@ public final class StashRetriever {
                         shulkerPos.down(),
                         /*?}*/
                         false);
+                if (!MoarNetworkManager.tryAcquire(
+                        MoarNetworkManager.Lane.INTERACTION,
+                        MoarNetworkManager.OWNER_STASH_RETRIEVER, 2, 2)) {
+                    restoreSneak.run();
+                    return;
+                }
                 /*? if >=26.1 {*//*
                 mc.gameMode.useItemOn(player, InteractionHand.MAIN_HAND, hit);
                 *//*?} else {*/
@@ -1245,6 +1321,14 @@ public final class StashRetriever {
             // send look + useItemOn in the SAME tick so the server's reach/face
             // checks accept the interaction).
             case 4 -> {
+                if (!MoarNetworkManager.tryAcquire(
+                        MoarNetworkManager.Lane.LOOK,
+                        MoarNetworkManager.OWNER_STASH_RETRIEVER, 1, 1)
+                        || !MoarNetworkManager.tryAcquire(
+                        MoarNetworkManager.Lane.INTERACTION,
+                        MoarNetworkManager.OWNER_STASH_RETRIEVER, 1, 2)) {
+                    return;
+                }
                 /*? if >=26.1 {*//*
                 Vec3 center = Vec3.atCenterOf(shulkerPos);
                 *//*?} else {*/

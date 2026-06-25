@@ -291,6 +291,15 @@ public final class LitematicaSchematic {
         private final long[] blockStates;
         private final int bitsPerEntry;
         private final long mask;
+        /**
+         * Set when {@link #getBlockState} encounters a paletteIndex outside the
+         * palette range. We log exactly once per region (with a sample
+         * coordinate) and then silently fall back to AIR on subsequent hits to
+         * avoid log floods. A non-zero value here on a previously-good
+         * schematic indicates corruption, mismatched bitsPerEntry, or a bug
+         * in {@link #readPackedValue}.
+         */
+        private boolean decodeErrorLogged;
 
         private Region(String regionName,
                        int originX, int originY, int originZ,
@@ -364,6 +373,16 @@ public final class LitematicaSchematic {
             int index = ly * absX * absZ + lz * absX + lx;
             int paletteIndex = readPackedValue(index);
             if (paletteIndex < 0 || paletteIndex >= palette.length) {
+                if (!decodeErrorLogged) {
+                    decodeErrorLogged = true;
+                    LOGGER.warn(
+                        "Schematic region '{}' produced out-of-range palette"
+                        + " index {} (palette size {}, bitsPerEntry {}) at"
+                        + " local ({},{},{}) — falling back to AIR. Further"
+                        + " errors in this region will be silenced.",
+                        regionName, paletteIndex, palette.length,
+                        bitsPerEntry, lx, ly, lz);
+                }
                 /*? if >=26.1 {*//*
                 return Blocks.AIR.defaultBlockState();
                 *//*?} else {*/

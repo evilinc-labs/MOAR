@@ -27,7 +27,7 @@ import java.util.Set;
 public final class PacketTelemetry {
 
     private static final Logger LOGGER = LoggerFactory.getLogger("MOAR/Packets");
-    private static final String TRACE_BUILD = "packet-trace-v2-sequence-aliases";
+    private static final String TRACE_BUILD = "fix22-placement-queue";
     private static final int MAX_EVENTS = 768;
     private static final int MAX_FIELDS = 14;
     private static final int MAX_VALUE_LENGTH = 220;
@@ -82,14 +82,14 @@ public final class PacketTelemetry {
         if (!enabled && size == 0) {
             return;
         }
-        append("MARK " + safe(label));
+        append("MARK " + safe(label), true);
     }
 
     public static void markSetback(int totalSetbacks, int ticksSinceSetback) {
         if (!enabled) {
             return;
         }
-        append("SETBACK total=" + totalSetbacks + " calmTicks=" + ticksSinceSetback);
+        append("SETBACK total=" + totalSetbacks + " calmTicks=" + ticksSinceSetback, true);
     }
 
     public static void recordOutgoing(Object packet) {
@@ -99,7 +99,17 @@ public final class PacketTelemetry {
         if (shouldSuppress(packet)) {
             return;
         }
-        append("OUT " + describePacket(packet));
+        append("OUT " + describePacket(packet), false);
+    }
+
+    public static void recordIncoming(Object packet) {
+        if (!enabled || packet == null) {
+            return;
+        }
+        if (!isPlacementFeedbackPacket(packet)) {
+            return;
+        }
+        append("IN " + describePacket(packet), false);
     }
 
     public static Path dumpToFile() throws IOException {
@@ -138,7 +148,7 @@ public final class PacketTelemetry {
         return result;
     }
 
-    private static void append(String message) {
+    private static void append(String message, boolean logLive) {
         long tick = currentTick();
         long delta = lastTick == Long.MIN_VALUE || tick < 0 || lastTick < 0
                 ? 0
@@ -152,8 +162,10 @@ public final class PacketTelemetry {
         if (size < EVENTS.length) {
             size++;
         }
-        LOGGER.info("[PacketTrace] #{} t={} dt={} {}", event.sequence, event.tick,
-                event.deltaTicks, event.line);
+        if (logLive) {
+            LOGGER.info("[PacketTrace] #{} t={} dt={} {}", event.sequence, event.tick,
+                    event.deltaTicks, event.line);
+        }
     }
 
     private static String describePacket(Object packet) {
@@ -179,6 +191,21 @@ public final class PacketTelemetry {
     private static boolean shouldSuppress(Object packet) {
         String simpleName = packet.getClass().getSimpleName();
         return QUIET_PACKET_NAMES.contains(simpleName);
+    }
+
+    private static boolean isPlacementFeedbackPacket(Object packet) {
+        String className = packet.getClass().getName().toLowerCase(java.util.Locale.ROOT);
+        String simpleName = packet.getClass().getSimpleName().toLowerCase(java.util.Locale.ROOT);
+        String type = packetType(packet).toLowerCase(java.util.Locale.ROOT);
+        return className.contains("blockchangedack")
+                || className.contains("blockupdate")
+                || className.contains("sectionblocksupdate")
+                || simpleName.equals("class_4463")
+                || simpleName.equals("class_2626")
+                || simpleName.equals("class_2637")
+                || type.contains("block_changed_ack")
+                || type.contains("block_update")
+                || type.contains("section_blocks_update");
     }
 
     private static String packetType(Object packet) {

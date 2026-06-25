@@ -1,6 +1,7 @@
 package dev.moar.travel.bounce;
 
 import dev.moar.travel.plan.HighwayCandidate;
+import dev.moar.util.MoarNetworkManager;
 
 /*? if >=26.1 {*//*
 import net.minecraft.client.Minecraft;
@@ -328,6 +329,11 @@ public final class BounceController {
 
     // Ask the server to start elytra flight.
     private void sendStartFlying() {
+        if (!MoarNetworkManager.tryAcquire(
+                MoarNetworkManager.Lane.MOVEMENT,
+                MoarNetworkManager.OWNER_BOUNCE, 1, 2)) {
+            return;
+        }
         /*? if >=26.1 {*//*
         Minecraft mc = Minecraft.getInstance();
         if (mc.player == null) return;

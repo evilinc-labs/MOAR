@@ -3,6 +3,7 @@ package dev.moar.stash;
 import dev.moar.MoarMod;
 import dev.moar.chest.ChestManager;
 import dev.moar.util.ChatHelper;
+import dev.moar.util.MoarNetworkManager;
 import dev.moar.util.PathWalker;
 /*? if >=26.1 {*//*
 import net.minecraft.world.level.block.*;
@@ -625,6 +626,12 @@ public final class StashManager {
 
         // Send interact on tick 1
         if (openWaitTicks == 1) {
+            if (!MoarNetworkManager.tryAcquire(
+                    MoarNetworkManager.Lane.INTERACTION,
+                    MoarNetworkManager.OWNER_STASH_MANAGER, 2, 2)) {
+                openWaitTicks = 0;
+                return;
+            }
             /*? if >=26.1 {*//*
             mc.gameMode.useItemOn(
             *//*?} else {*/

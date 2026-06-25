@@ -944,23 +944,46 @@ public final class StashDatabase {
     /**
      * Search for all containers that hold a specific item.
      * Returns a list of (ContainerEntry, quantity) pairs sorted by quantity descending.
+     *
+     * <p>Equivalent to {@link #searchItem(String, RegionBounds)} with no region scope.
+     * Prefer the bounded variant when an active stash region is set, to avoid mixing
+     * results from other sessions sharing the same {@code stash.db}.
      */
     public List<SearchResult> searchItem(String itemIdFragment) {
+        return searchItem(itemIdFragment, null);
+    }
+
+    /**
+     * Search for all containers that hold a specific item, optionally restricted to
+     * a region (inclusive AABB).
+     *
+     * @param bounds region AABB, or {@code null} to search the entire database.
+     */
+    public List<SearchResult> searchItem(String itemIdFragment, RegionBounds bounds) {
         List<SearchResult> results = new ArrayList<>();
         if (!isOpen()) return results;
 
-        // Includes items nested inside shulker boxes
-        try (PreparedStatement ps = connection.prepareStatement(
-                "SELECT x, y, z, item_id, quantity FROM (" +
-                "  SELECT i.x, i.y, i.z, i.item_id, i.quantity FROM items i WHERE i.item_id LIKE ?" +
+        // Includes items nested inside shulker boxes. The optional region predicate is
+        // applied at the SQL level so we don't materialize rows we'll throw away.
+        String regionPred = bounds == null
+                ? ""
+                : " AND x BETWEEN ? AND ? AND y BETWEEN ? AND ? AND z BETWEEN ? AND ?";
+        String sql = "SELECT x, y, z, item_id, quantity FROM (" +
+                "  SELECT i.x, i.y, i.z, i.item_id, i.quantity FROM items i" +
+                "    WHERE i.item_id LIKE ?" + regionPred +
                 "  UNION ALL" +
                 "  SELECT s.x, s.y, s.z, si.item_id, si.quantity" +
                 "    FROM shulker_items si" +
                 "    JOIN shulkers s ON s.id = si.shulker_id" +
-                "    WHERE si.item_id LIKE ?" +
-                ")")) {
-            ps.setString(1, "%" + itemIdFragment + "%");
-            ps.setString(2, "%" + itemIdFragment + "%");
+                "    WHERE si.item_id LIKE ?" + regionPred +
+                ")";
+
+        try (PreparedStatement ps = connection.prepareStatement(sql)) {
+            int idx = 1;
+            ps.setString(idx++, "%" + itemIdFragment + "%");
+            if (bounds != null) idx = bindBounds(ps, idx, bounds);
+            ps.setString(idx++, "%" + itemIdFragment + "%");
+            if (bounds != null) bindBounds(ps, idx, bounds);
             try (ResultSet rs = ps.executeQuery()) {
                 // group by position
                 Map<BlockPos, Map<String, Integer>> posItems = new LinkedHashMap<>();
@@ -986,20 +1009,71 @@ public final class StashDatabase {
     /** Result of an item search against the database. */
     public record SearchResult(BlockPos pos, Map<String, Integer> matchedItems, int totalQuantity) {}
 
+    /**
+     * Inclusive AABB used to restrict stash queries to a single stash region. Built
+     * from raw user corners via {@link #of(BlockPos, BlockPos)} which normalizes the
+     * min/max regardless of which corner the user selected first.
+     */
+    public record RegionBounds(int minX, int minY, int minZ, int maxX, int maxY, int maxZ) {
+        public static RegionBounds of(BlockPos a, BlockPos b) {
+            if (a == null || b == null) return null;
+            return new RegionBounds(
+                    Math.min(a.getX(), b.getX()),
+                    Math.min(a.getY(), b.getY()),
+                    Math.min(a.getZ(), b.getZ()),
+                    Math.max(a.getX(), b.getX()),
+                    Math.max(a.getY(), b.getY()),
+                    Math.max(a.getZ(), b.getZ())
+            );
+        }
+
+        public boolean contains(BlockPos p) {
+            int x = p.getX(), y = p.getY(), z = p.getZ();
+            return x >= minX && x <= maxX
+                && y >= minY && y <= maxY
+                && z >= minZ && z <= maxZ;
+        }
+    }
+
+    /** Bind 6 region-bounds parameters starting at {@code startIdx}. Returns the next free index. */
+    private static int bindBounds(PreparedStatement ps, int startIdx, RegionBounds b) throws SQLException {
+        ps.setInt(startIdx,     b.minX());
+        ps.setInt(startIdx + 1, b.maxX());
+        ps.setInt(startIdx + 2, b.minY());
+        ps.setInt(startIdx + 3, b.maxY());
+        ps.setInt(startIdx + 4, b.minZ());
+        ps.setInt(startIdx + 5, b.maxZ());
+        return startIdx + 6;
+    }
+
     /** Find containers holding any of the given item IDs (including shulker contents). */
     public Map<BlockPos, Map<String, Integer>> findContainersForExactItems(Set<String> itemIds) {
+        return findContainersForExactItems(itemIds, null);
+    }
+
+    /**
+     * Find containers holding any of the given item IDs (including shulker contents),
+     * optionally restricted to a region.
+     *
+     * @param bounds region AABB, or {@code null} to search the entire database.
+     */
+    public Map<BlockPos, Map<String, Integer>> findContainersForExactItems(Set<String> itemIds, RegionBounds bounds) {
         Map<BlockPos, Map<String, Integer>> result = new LinkedHashMap<>();
         if (!isOpen() || itemIds.isEmpty()) return result;
 
         // Build IN clause: (?, ?, ...)
         String placeholders = String.join(",", itemIds.stream().map(id -> "?").toList());
+        String regionPred = bounds == null
+                ? ""
+                : " AND x BETWEEN ? AND ? AND y BETWEEN ? AND ? AND z BETWEEN ? AND ?";
         String sql = "SELECT x, y, z, item_id, quantity FROM (" +
-                "  SELECT i.x, i.y, i.z, i.item_id, i.quantity FROM items i WHERE i.item_id IN (" + placeholders + ")" +
+                "  SELECT i.x, i.y, i.z, i.item_id, i.quantity FROM items i" +
+                "    WHERE i.item_id IN (" + placeholders + ")" + regionPred +
                 "  UNION ALL" +
                 "  SELECT s.x, s.y, s.z, si.item_id, si.quantity" +
                 "    FROM shulker_items si" +
                 "    JOIN shulkers s ON s.id = si.shulker_id" +
-                "    WHERE si.item_id IN (" + placeholders + ")" +
+                "    WHERE si.item_id IN (" + placeholders + ")" + regionPred +
                 ")";
 
         try (PreparedStatement ps = connection.prepareStatement(sql)) {
@@ -1007,9 +1081,11 @@ public final class StashDatabase {
             for (String id : itemIds) {
                 ps.setString(idx++, id);
             }
+            if (bounds != null) idx = bindBounds(ps, idx, bounds);
             for (String id : itemIds) {
                 ps.setString(idx++, id);
             }
+            if (bounds != null) bindBounds(ps, idx, bounds);
             try (ResultSet rs = ps.executeQuery()) {
                 while (rs.next()) {
                     BlockPos pos = new BlockPos(rs.getInt("x"), rs.getInt("y"), rs.getInt("z"));
