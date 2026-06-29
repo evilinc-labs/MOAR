@@ -87,7 +87,7 @@ Scan, index, and organize containers across large areas.
 | 1.21.8 | 0.136.1+1.21.8 | 21 |
 | 1.21.9–1.21.10 | 0.138.4+1.21.10 | 21 |
 | 1.21.11 | 0.141.3+1.21.11 | 21 |
-| 26.1.1 (unobfuscated) | 0.145.4+26.1.1 | 21 |
+| 26.1.1 (unobfuscated) | 0.145.4+26.1.1 | 25 |
 
 All versions require [Fabric Loader](https://fabricmc.net/use/) ≥ 0.18.4.
 
@@ -334,11 +334,14 @@ See [docs/grafana-setup.md](docs/grafana-setup.md) for a step-by-step guide to c
 
 ## Building from Source
 
-Requires **JDK 21+**.
+Requires **JDK 21+** for 1.21.x builds.
+The experimental 26.1.1 target requires **JDK 25+** and is only included
+when explicitly requested.
 
 ```bash
-./gradlew build                  # Build all versions
+./gradlew build                  # Build targets supported by the current JDK
 ./gradlew :1.21.8:build          # Build one version
+./gradlew -Pmoar.includeJava25Targets=true build  # Include 26.1.1 on JDK 25+
 ./gradlew buildAndCollect        # Collect all JARs -> build/libs/3.0.0/
 ```
 

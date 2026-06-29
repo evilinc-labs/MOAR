@@ -14,14 +14,14 @@ import net.minecraft.client.network.ClientPlayerEntity;
 // Thread-safe sneak override flag. A mixin on KeyboardInput.tick() checks
 // shouldSneak() after keyboard polling. Sneak is only forced when the player
 // is near a platform edge (via EdgeDetector), preserving full walk speed on
-// safe ground. setForceAbsoluteSneak bypasses the edge check entirely.
+// safe ground. setForceAbsoluteSneak skips the edge check entirely.
 public final class SneakOverride {
 
     private SneakOverride() {}
 
     private static volatile boolean forceSneak;
 
-    // Force sneak unconditionally (bypasses EdgeDetector). Used during
+    // Force sneak unconditionally (skips EdgeDetector). Used during
     // edge-walking where the position is inherently narrow.
     private static volatile boolean forceAbsoluteSneak;
 

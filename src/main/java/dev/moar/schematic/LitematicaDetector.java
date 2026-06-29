@@ -509,6 +509,8 @@ public final class LitematicaDetector {
         // Keep the best-matching candidate.
         BlockPos bestAnchor = null;
         int bestScore = 0;
+        int secondBestScore = 0;
+        int bestScoreTies = 0;
 
         for (BlockPos candidate : candidates) {
             int score = 0;
@@ -524,14 +526,34 @@ public final class LitematicaDetector {
                 }
             }
             if (score > bestScore) {
+                secondBestScore = bestScore;
                 bestScore = score;
                 bestAnchor = candidate;
+                bestScoreTies = 1;
+            } else if (score == bestScore) {
+                bestScoreTies++;
+            } else if (score > secondBestScore) {
+                secondBestScore = score;
             }
+        }
+
+        int sampleCount = hologramBlocks.size();
+        int minimumScore = Math.max(4, (sampleCount * 3 + 3) / 4);
+        if (bestAnchor == null || bestScore < minimumScore) {
+            LOGGER.warn("SchematicWorld anchor confidence too low: best score {}/{}"
+                    + " below minimum {} ({} candidates)",
+                    bestScore, sampleCount, minimumScore, candidates.size());
+            return null;
+        }
+        if (bestScoreTies > 1 && bestScore - secondBestScore <= 1) {
+            LOGGER.warn("SchematicWorld anchor ambiguous: {} candidates tied at {}/{}",
+                    bestScoreTies, bestScore, sampleCount);
+            return null;
         }
 
         if (bestAnchor != null) {
             LOGGER.info("Anchor correlated from SchematicWorld: {} (score {}/{})",
-                    bestAnchor, bestScore, hologramBlocks.size());
+                    bestAnchor, bestScore, sampleCount);
         }
         return bestAnchor;
     }

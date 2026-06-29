@@ -27,7 +27,7 @@ public final class DetourPlanner {
 
     private DetourPlanner() {}
 
-    // Build side, bypass, and return waypoints.
+    // Build side, detour, and return waypoints.
     public static List<BlockPos> plan(HighwayCandidate highway,
                                       IntegrityReport report,
                                       BlockPos playerPos,

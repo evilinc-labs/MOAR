@@ -25,6 +25,14 @@ public final class PrinterNetworkCoordinator {
         return MoarNetworkManager.tryAcquire(toLane(lane), owner, packetCost, cooldownTicks);
     }
 
+    public static boolean tryLease(String owner, int cooldownTicks) {
+        return MoarNetworkManager.tryLease(owner, cooldownTicks);
+    }
+
+    public static boolean canAct(String owner) {
+        return MoarNetworkManager.canAct(owner);
+    }
+
     public static boolean hasOwnerOtherThan(String owner) {
         return MoarNetworkManager.hasOwnerOtherThan(owner);
     }

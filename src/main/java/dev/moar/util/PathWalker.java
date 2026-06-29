@@ -181,7 +181,7 @@ public final class PathWalker {
 
     // mining descent state
     /** True when the player is descending by breaking the pillar
-     *  beneath their feet — bypasses Baritone entirely. */
+     *  beneath their feet — skips Baritone entirely. */
     private static boolean miningDescent;
     /** True when we've fallen back from Baritone to vanilla walking
      *  because Baritone couldn't compute a short path. */
@@ -347,7 +347,7 @@ public final class PathWalker {
 
     /**
      * Start walking to the given position using vanilla WASD movement,
-     * bypassing Baritone entirely.  Useful when Baritone can't compute
+     * without Baritone.  Useful when Baritone can't compute
      * a path but the target is on roughly the same Y level and a
      * straight-line walk is likely to succeed (e.g. clearing illegal
      * blocks on flat terrain).
@@ -850,7 +850,7 @@ public final class PathWalker {
             return;
         }
 
-        // Look straight down for anti-cheat compliance
+        // Look straight down for strict server validation compliance
         /*? if >=26.1 {*//*
         mc.player.setXRot(90.0f);
         *//*?} else {*/

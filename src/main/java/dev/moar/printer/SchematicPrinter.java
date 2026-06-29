@@ -305,7 +305,7 @@ public class SchematicPrinter {
     private int restockWaitTicks;
     // Ticks waiting for server to sync chest contents in RESTOCKING.
     private int chestSyncDelay;
-    private static final int CONTAINER_ACTION_TIMEOUT_TICKS = 20;
+    private static final int CONTAINER_ACTION_TIMEOUT_TICKS = 8;
     // Consecutive restock failures without grabbing any items.
     private int restockFailures;
     private enum ContainerTransferLane { NONE, RESTOCK, DUMP, SHULKER }
@@ -314,8 +314,6 @@ public class SchematicPrinter {
     private int pendingContainerSlot = -1;
     private ItemStack pendingContainerSlotSnapshot = ItemStack.EMPTY;
     private int pendingContainerTicks;
-    private ContainerTransferLane completedContainerLane = ContainerTransferLane.NONE;
-    private boolean completedContainerChanged;
     private final Set<Integer> blockedRestockSlots = new HashSet<>();
     private final Set<Integer> blockedDumpSlots = new HashSet<>();
     private final Set<Integer> blockedShulkerSlots = new HashSet<>();
@@ -362,10 +360,6 @@ public class SchematicPrinter {
     private static final int WALK_SETBACK_PAUSE_TICKS = 16;
     private int buildHandoffSettleTicks;
     private static final int BUILD_HANDOFF_SETTLE_TICKS = 4;
-    private Item activeBuildMaterialRun;
-    private Item deferredBuildInventorySwapItem;
-    private int deferredBuildInventorySwapTicks;
-    private static final int BUILD_INVENTORY_SWAP_WAIT_LIMIT_TICKS = 8;
     // Ticks until next skippedItems re-evaluation.
     private int skippedItemRecheckCooldown;
     private static final int SKIPPED_RECHECK_INTERVAL = 200; // ~10s
@@ -480,19 +474,6 @@ public class SchematicPrinter {
             return allowedSupports::contains;
         }
     }
-    private static final class BuildMaterialRunStats {
-        final int firstIndex;
-        int count;
-        final boolean heldReady;
-        final boolean hotbarReady;
-
-        BuildMaterialRunStats(int firstIndex, boolean heldReady, boolean hotbarReady) {
-            this.firstIndex = firstIndex;
-            this.heldReady = heldReady;
-            this.hotbarReady = hotbarReady;
-            this.count = 1;
-        }
-    }
     private final Map<PlacementAttemptKey, Long> cooledDownPlacementAttempts =
             new LinkedHashMap<>(32, 0.75f, false) {
                 @Override protected boolean removeEldestEntry(Map.Entry<PlacementAttemptKey, Long> eldest) {
@@ -574,7 +555,6 @@ public class SchematicPrinter {
     private int shulkerSyncDelay;
     private int shulkerUnloadFailures;
     private static final int MAX_SHULKER_FAILURES = 3;
-    private boolean shulkerMovedNeededItems;
     // Skip shulker shortcut — walk to supply chest instead.
     private boolean shulkerNoSpaceSkipped;
     private int platformBuildAttempts;
@@ -624,8 +604,6 @@ public class SchematicPrinter {
     private static final int RESTOCK_WORKING_SET_TYPES = 10;
     private static final int RESTOCK_TARGET_STACKS_PER_ITEM = 1;
     private static final int RESTOCK_RESERVED_FREE_SLOTS = 4;
-    private static final int SUPPLY_REGION_MARGIN_XZ = 256;
-    private static final int SUPPLY_REGION_MARGIN_Y = 96;
     private static final int RENDER_SCAN_EXTRA_CHUNKS = 1;
     private static final int CHUNK_DIFF_CACHE_TTL = 20;
     private static final double APPROACH_STAGING_EXTRA_REACH = 2.5;
@@ -775,7 +753,6 @@ public class SchematicPrinter {
         triedLinearRestock = false;
         triedPlacementRestock = false;
         shulkerNoSpaceSkipped = false;
-        shulkerMovedNeededItems = false;
         placementCheckCooldown = 0;
         skippedItemRecheckCooldown = SKIPPED_RECHECK_INTERVAL;
         neededItemCounts.clear();
@@ -1216,7 +1193,6 @@ public class SchematicPrinter {
         PrinterDatabase.clearScaffold();
         MoarMod.getChestManager().clearSessionData();
         resetPlacementFailureRecovery();
-        resetBuildCooldownMemory();
         resetContainerTransferTracking();
         buildHandoffSettleTicks = 0;
     }
@@ -1238,7 +1214,6 @@ public class SchematicPrinter {
         PathWalker.stop();
         autoState = AutoState.IDLE;
         buildHandoffSettleTicks = 0;
-        clearBuildMaterialRun("unload");
         if (enabled) disable();
     }
 
@@ -1273,7 +1248,6 @@ public class SchematicPrinter {
             walkFailCount = 0;
             triedPlacementWalk = false;
             resetPlacementFailureRecovery();
-            resetBuildCooldownMemory();
             resetContainerTransferTracking();
         }
     }
@@ -1338,8 +1312,6 @@ public class SchematicPrinter {
         buildLayerAccessFailures.clear();
         cooledDownBuildLayers.clear();
         buildLayerCooldownStage.clear();
-        clearBuildMaterialRun("reset");
-        clearBuildInventorySwapWait();
     }
 
     private void prepareForBuildFromCurrentStance() {
@@ -1367,7 +1339,6 @@ public class SchematicPrinter {
         buildHandoffSettleTicks = 0;
         buildGateStallTicks = 0;
         remainingCacheTick = Long.MIN_VALUE;
-        clearBuildInventorySwapWait();
     }
 
     private void refreshPlacementPlannerState() {
@@ -1884,8 +1855,6 @@ public class SchematicPrinter {
 
     private void resetContainerTransferTracking() {
         clearPendingContainerAction();
-        completedContainerLane = ContainerTransferLane.NONE;
-        completedContainerChanged = false;
         blockedRestockSlots.clear();
         blockedDumpSlots.clear();
         blockedShulkerSlots.clear();
@@ -1925,8 +1894,6 @@ public class SchematicPrinter {
     private void beginPendingContainerAction(ScreenHandler handler, int slot,
                                              ContainerTransferLane lane) {
     /*?}*/
-        completedContainerLane = ContainerTransferLane.NONE;
-        completedContainerChanged = false;
         pendingContainerLane = lane;
         pendingContainerSyncId = getContainerSyncId(handler);
         pendingContainerSlot = slot;
@@ -1955,8 +1922,6 @@ public class SchematicPrinter {
 
         ItemStack current = copyContainerSlotStack(handler, pendingContainerSlot);
         if (!sameContainerSlotSnapshot(current, pendingContainerSlotSnapshot)) {
-            completedContainerLane = lane;
-            completedContainerChanged = true;
             clearPendingContainerAction();
             return true;
         }
@@ -1967,21 +1932,11 @@ public class SchematicPrinter {
         }
 
         blockedSlots.add(pendingContainerSlot);
-        completedContainerLane = lane;
-        completedContainerChanged = false;
         LOGGER.debug("Container action timed out lane={} slot={} syncId={} item={}",
                 lane, pendingContainerSlot, pendingContainerSyncId,
                 ItemIdentifier.getItemId(pendingContainerSlotSnapshot));
         clearPendingContainerAction();
         return true;
-    }
-
-    private boolean consumeCompletedContainerAction(ContainerTransferLane lane) {
-        if (completedContainerLane != lane) return false;
-        boolean changed = completedContainerChanged;
-        completedContainerLane = ContainerTransferLane.NONE;
-        completedContainerChanged = false;
-        return changed;
     }
 
     private void pruneCooledDownPlacementTargets(long now) {
@@ -2080,21 +2035,6 @@ public class SchematicPrinter {
         PacketTelemetry.mark("build no-hit cooldown target=" + pos
                 + " desired=" + (target != null ? target.getBlock() : "unknown")
                 + " ticks=" + NO_VISIBLE_HIT_TARGET_COOLDOWN_TICKS);
-    }
-
-    private boolean isWrongSideProbeFailure(String probeFailure) {
-        return probeFailure != null && probeFailure.startsWith("wrong-side ");
-    }
-
-    private void recoverWrongSidePlacement(BlockPos pos, BlockState target, String probeFailure) {
-        recordBuildLayerAccessFailure(pos, "wrong-side local stance");
-        schedulePlacementAccessReposition(
-                pos,
-                "wrong-side support face",
-                PLACEMENT_START_FAILURE_PAUSE_TICKS);
-        PacketTelemetry.mark("build wrong-side recovery target=" + pos
-                + " desired=" + (target != null ? target.getBlock() : "unknown")
-                + " probe=" + probeFailure);
     }
 
     private void coolDownPlacementTargets(Collection<BlockPos> positions, int ticks, String reason) {
@@ -2276,10 +2216,8 @@ public class SchematicPrinter {
         SetbackMonitor setbackMonitor = SetbackMonitor.get();
         int recentSetbacks = setbackMonitor.recentSetbackCount(
                 TIMEOUT_SETBACK_REPOSITION_WINDOW_TICKS);
-        boolean retryAsVanilla = status == PlacementEngine.VerificationStatus.TIMEOUT
-                && PlacementEngine.hasScheduledVanillaRetry(pos);
         boolean forceReposition = status == PlacementEngine.VerificationStatus.REJECTED
-                || (status == PlacementEngine.VerificationStatus.TIMEOUT && !retryAsVanilla)
+                || status == PlacementEngine.VerificationStatus.TIMEOUT
                 || failures >= SERVER_TIMEOUT_REPOSITION_THRESHOLD
                 || PlacementEngine.getConsecutiveFailures() >= SERVER_REJECT_THRESHOLD;
         beginPlacementFailureRecovery(
@@ -2306,24 +2244,22 @@ public class SchematicPrinter {
     /*?}*/
         boolean softTimeout = status == PlacementEngine.VerificationStatus.TIMEOUT
                 && !forceReposition;
-        int targetCooldown = 0;
-        if (!softTimeout) {
-            if (status == PlacementEngine.VerificationStatus.REJECTED) {
-                targetCooldown = REJECTED_TARGET_COOLDOWN_TICKS;
-            } else {
-                int timeoutPenalty = Math.max(0, failureCount - 1) * TIMEOUT_TARGET_COOLDOWN_STEP_TICKS;
-                targetCooldown = Math.min(
-                        MAX_TIMEOUT_TARGET_COOLDOWN_TICKS,
-                        TIMEOUT_TARGET_COOLDOWN_TICKS + timeoutPenalty);
-            }
+        int targetCooldown;
+        if (status == PlacementEngine.VerificationStatus.REJECTED) {
+            targetCooldown = REJECTED_TARGET_COOLDOWN_TICKS;
+        } else {
+            int timeoutPenalty = Math.max(0, failureCount - 1) * TIMEOUT_TARGET_COOLDOWN_STEP_TICKS;
+            targetCooldown = Math.min(
+                    MAX_TIMEOUT_TARGET_COOLDOWN_TICKS,
+                    TIMEOUT_TARGET_COOLDOWN_TICKS + timeoutPenalty);
         }
+        PlacementEngine.reset();
         if (!softTimeout) {
-            PlacementEngine.reset();
             PlacementEngine.clearCorrectionHistory();
             PathWalker.stop();
-            coolDownPlacementTarget(pos, targetCooldown);
-            coolDownPlacementAttempt(pos, supportPos, stancePos, targetCooldown);
         }
+        coolDownPlacementTarget(pos, targetCooldown);
+        coolDownPlacementAttempt(pos, supportPos, stancePos, targetCooldown);
         int recoveryPause = softTimeout
                 ? SOFT_TIMEOUT_FAILURE_PAUSE_TICKS
                 : forceReposition
@@ -2866,7 +2802,7 @@ public class SchematicPrinter {
         }
 
         // Water bailout: if the player is swimming and the build zone
-        // is above them, don't try to place — anti-cheat servers reject
+        // is above them, don't try to place — strict server validation rejects
         // placements from swimming positions, and the failed attempts
         // reset noProgressTicks so the walk-to-zone logic never triggers.
         // Instead, navigate to dry land or scaffold out first.
@@ -3553,7 +3489,7 @@ public class SchematicPrinter {
         // Determine if the target is vertically unreachable from ground.
         // When the player is in water, any block above them requires
         // climbing — swimming positions can't reliably place blocks and
-        // anti-cheat servers reject placements from water.
+        // strict server validation rejects placements from water.
         /*? if >=26.1 {*//*
         boolean playerInWater = mc.player.isInWater();
         *//*?} else {*/
@@ -4707,11 +4643,12 @@ public class SchematicPrinter {
         if (pos == null || target == null || existing == null) {
             return false;
         }
-        // Non-air schematic cells are build/repair work, not broad demolition.
-        if (!target.isAir()) {
+        // Do not treat every air cell inside a huge schematic as demolition work.
+        // Air-space blockers are only cleared by explicit access-mining.
+        if (target.isAir()) {
             return false;
         }
-        if (!PrinterDatabase.isScaffold(pos)) {
+        if (isEffectivelyPlaced(existing, target)) {
             return false;
         }
         if (isStorageBlacklistedForClearing(existing, pos, protectedStorage)) {
@@ -4754,7 +4691,7 @@ public class SchematicPrinter {
         if (!accessClearInProgress
                 && !isBroadSchematicClearTarget(
                 target,
-                getRawSchematicStateAt(target),
+                getDesiredBuildStateAt(target),
                 existing,
                 getProtectedStoragePositions())) {
             return false;
@@ -4894,7 +4831,7 @@ public class SchematicPrinter {
             if (!accessClearInProgress
                     && !isBroadSchematicClearTarget(
                     clearBreakTarget,
-                    getRawSchematicStateAt(clearBreakTarget),
+                    getDesiredBuildStateAt(clearBreakTarget),
                     current,
                     getProtectedStoragePositions())) {
                 /*? if >=26.1 {*//*
@@ -5629,8 +5566,6 @@ public class SchematicPrinter {
 
             // Snapshot inventory before taking items so we can detect failure
             Map<Item, Integer> invBefore = PlacementEngine.getInventoryContents();
-            int neededShulkerBefore = findShulkerWithNeededItems(mc.player);
-            int neededShulkerCountBefore = countShulkersWithNeededItems(mc.player);
 
             // Index chest contents before taking items (snapshot for future queries)
             if (supplyTarget != null) {
@@ -5649,22 +5584,12 @@ public class SchematicPrinter {
 
             // Verify that items were actually obtained
             Map<Item, Integer> invAfter = PlacementEngine.getInventoryContents();
-            boolean inventoryGained = false;
+            boolean gotSomething = false;
             for (var entry : invAfter.entrySet()) {
                 if (entry.getValue() > invBefore.getOrDefault(entry.getKey(), 0)) {
-                    inventoryGained = true;
+                    gotSomething = true;
                     break;
                 }
-            }
-            int neededShulkerAfter = findShulkerWithNeededItems(mc.player);
-            int neededShulkerCountAfter = countShulkersWithNeededItems(mc.player);
-            boolean gainedNeededShulker = neededShulkerCountAfter > neededShulkerCountBefore;
-            boolean gotSomething = inventoryGained || gainedNeededShulker;
-            if (gainedNeededShulker) {
-                PacketTelemetry.mark("restock success via needed-shulker before="
-                        + neededShulkerBefore + " after=" + neededShulkerAfter
-                        + " countBefore=" + neededShulkerCountBefore
-                        + " countAfter=" + neededShulkerCountAfter);
             }
 
             // Only invalidate the snapshot when we actually modified the
@@ -5674,16 +5599,11 @@ public class SchematicPrinter {
             // cycle for items it doesn't contain (instead of repeatedly
             // walking back to an empty chest because the unindexed-chest
             // fallback ranking re-picked it).
-            if (inventoryGained && supplyTarget != null) {
+            if (gotSomething && supplyTarget != null) {
                 MoarMod.getChestManager().invalidateSnapshot(supplyTarget);
             }
 
             if (!gotSomething) {
-                if (neededShulkerAfter >= 0 && neededShulkerCountAfter == neededShulkerCountBefore) {
-                    PacketTelemetry.mark("restock unchanged needed-shulker before="
-                            + neededShulkerBefore + " after=" + neededShulkerAfter
-                            + " count=" + neededShulkerCountAfter);
-                }
                 restockFailures++;
                 if (restockFailures >= MAX_RESTOCK_FAILURES) {
                     if (statusMessages) {
@@ -5708,9 +5628,9 @@ public class SchematicPrinter {
             // available, so clear the skip list and let tryPlaceNextBlock
             // re-evaluate everything.
             skippedItems.clear();
-            if (gainedNeededShulker) {
-                shulkerNoSpaceSkipped = false;
-            }
+            // Player is at the supply chest — there's likely flat ground
+            // here, so clear the no-space flag for shulker unloading.
+            shulkerNoSpaceSkipped = false;
             // Only clear the specific chest we just used from the
             // unreachable list — other chests may genuinely be
             // unreachable from different positions in a large build.
@@ -5725,9 +5645,7 @@ public class SchematicPrinter {
             // Check if we grabbed any shulker boxes that need unloading.
             // If so, transition to UNLOADING_SHULKER instead of walking
             // back immediately — the build needs loose items, not shulkers.
-            if (!shulkerNoSpaceSkipped
-                    && neededShulkerAfter >= 0
-                    && (gainedNeededShulker || inventoryGained)) {
+            if (findShulkerWithNeededItems(mc.player) >= 0) {
                 if (statusMessages) {
                     ChatHelper.info("§aRestocked (shulkers found). Unloading shulker boxes…");
                 }
@@ -5735,7 +5653,6 @@ public class SchematicPrinter {
                 shulkerUnloadTicks = 0;
                 shulkerTotalTicks = 0;
                 shulkerUnloadFailures = 0;
-                shulkerMovedNeededItems = false;
                 clearPendingContainerAction();
                 blockedShulkerSlots.clear();
                 autoState = AutoState.UNLOADING_SHULKER;
@@ -6266,31 +6183,6 @@ public class SchematicPrinter {
     }
 
     /*? if >=26.1 {*//*
-    private int countShulkersWithNeededItems(LocalPlayer player) {
-    *//*?} else {*/
-    private int countShulkersWithNeededItems(ClientPlayerEntity player) {
-    /*?}*/
-        if (player == null || neededItems == null || neededItems.isEmpty()) return 0;
-        /*? if >=26.1 {*//*
-        Inventory inv = player.getInventory();
-        *//*?} else {*/
-        PlayerInventory inv = player.getInventory();
-        /*?}*/
-        int count = 0;
-        for (int i = 0; i < 36; i++) {
-            /*? if >=26.1 {*//*
-            ItemStack stack = inv.getItem(i);
-            *//*?} else {*/
-            ItemStack stack = inv.getStack(i);
-            /*?}*/
-            if (isShulkerBox(stack) && shulkerContainsNeeded(stack, neededItems)) {
-                count++;
-            }
-        }
-        return count;
-    }
-
-    /*? if >=26.1 {*//*
     private int findAnyShulkerInInventory(LocalPlayer player) {
     *//*?} else {*/
     private int findAnyShulkerInInventory(ClientPlayerEntity player) {
@@ -6781,7 +6673,6 @@ public class SchematicPrinter {
                     finishShulkerUnloading(mc);
                     return;
                 }
-                shulkerMovedNeededItems = false;
                 shulkerHotbarSlot = slot;
                 shulkerPlacePos = findShulkerPlaceSpot(player, world);
                 if (shulkerPlacePos == null) {
@@ -6903,7 +6794,7 @@ public class SchematicPrinter {
                 }
 
                 // Rotate toward the placement target before placing so
-                // servers with anti-cheat accept the interaction packet.
+                // servers with strict validation accept the interaction packet.
                 /*? if >=26.1 {*//*
                 Vec3 eyePos = player.getEyePosition();
                 *//*?} else {*/
@@ -7091,9 +6982,6 @@ public class SchematicPrinter {
                 if (handler instanceof ShulkerBoxScreenHandler shulkerHandler) {
                 /*?}*/
                     if (tickPendingContainerAction(shulkerHandler, ContainerTransferLane.SHULKER, blockedShulkerSlots)) {
-                        if (consumeCompletedContainerAction(ContainerTransferLane.SHULKER)) {
-                            shulkerMovedNeededItems = true;
-                        }
                         return;
                     }
                     // Wait for server sync
@@ -7133,9 +7021,6 @@ public class SchematicPrinter {
                     // count items that would consume a NEW slot.
                     int slotsReserved = 1; // for the shulker item itself
 
-                    boolean sawNeededItem = false;
-                    boolean blockedBySpace = false;
-
                     // Take needed items — shulker boxes always have 27 slots (3×9)
                     for (int slot = 0; slot < 27; slot++) {
                         if (blockedShulkerSlots.contains(slot)) continue;
@@ -7152,7 +7037,6 @@ public class SchematicPrinter {
                         /*?}*/
                         int shortage = remainingNeed.getOrDefault(itemId, 0);
                         if (shortage > 0) {
-                            sawNeededItem = true;
                             // Check if this item would stack with something
                             // already in the player's inventory.
                             boolean wouldStack = false;
@@ -7181,7 +7065,6 @@ public class SchematicPrinter {
                                 // Would consume a new slot
                                 if (freeSlots <= slotsReserved) {
                                     // Not enough room — stop taking items
-                                    blockedBySpace = true;
                                     break;
                                 }
                                 freeSlots--;
@@ -7209,14 +7092,6 @@ public class SchematicPrinter {
                             shulkerSyncDelay = 0;
                             return;
                         }
-                    }
-
-                    if (!shulkerMovedNeededItems && sawNeededItem) {
-                        shulkerNoSpaceSkipped = true;
-                        PacketTelemetry.mark("restock shulker no-transfer"
-                                + " slot=" + shulkerHotbarSlot
-                                + " blockedBySpace=" + blockedBySpace
-                                + " blockedSlots=" + blockedShulkerSlots.size());
                     }
 
                     // Close the screen
@@ -7495,15 +7370,6 @@ public class SchematicPrinter {
         platformBuildAttempts = 0;
         platformBlockPos = null;
         shulkerOpenRetries = 0;
-
-        if (!shulkerNoSpaceSkipped
-                && !shulkerMovedNeededItems
-                && mc.player != null
-                && findShulkerWithNeededItems(mc.player) >= 0) {
-            shulkerNoSpaceSkipped = true;
-            PacketTelemetry.mark("restock shulker no-progress; using supply chest");
-        }
-        shulkerMovedNeededItems = false;
 
         if (statusMessages) {
             if (shulkerNoSpaceSkipped) {
@@ -8143,26 +8009,6 @@ public class SchematicPrinter {
         return false;
     }
 
-    private boolean shulkerContainsCurrentRestockNeed(ItemStack shulkerStack,
-                                                      Map<String, Integer> remainingNeed) {
-        return shulkerContainsNeeded(shulkerStack, remainingNeed)
-                || shulkerContainsNeeded(shulkerStack, neededItems);
-    }
-
-    private boolean shouldSkipRestockSlot(int slot, ItemStack stack,
-                                          Map<String, Integer> remainingNeed) {
-        if (!blockedRestockSlots.contains(slot)) {
-            return false;
-        }
-        if (isShulkerBox(stack) && shulkerContainsCurrentRestockNeed(stack, remainingNeed)) {
-            blockedRestockSlots.remove(slot);
-            PacketTelemetry.mark("restock retry needed-shulker blocked-slot=" + slot
-                    + " chest=" + supplyTarget);
-            return false;
-        }
-        return true;
-    }
-
     // DUMP — deposit mined items into a dump chest when inventory is full
 
     /*? if >=26.1 {*//*
@@ -8285,7 +8131,6 @@ public class SchematicPrinter {
             shulkerUnloadTicks = 0;
             shulkerTotalTicks = 0;
             shulkerUnloadFailures = 0;
-            shulkerMovedNeededItems = false;
             blockedShulkerSlots.clear();
             autoState = AutoState.UNLOADING_SHULKER;
             return;
@@ -8296,28 +8141,15 @@ public class SchematicPrinter {
         *//*?} else {*/
         MinecraftClient mc = MinecraftClient.getInstance();
         /*?}*/
-        Set<BlockPos> outOfRegionSupplyChests = findOutOfRegionSupplyChests();
-        Set<BlockPos> excludedSupplyChests = new HashSet<>(unreachableChests);
-        excludedSupplyChests.addAll(outOfRegionSupplyChests);
-        int totalSupplyChests = MoarMod.getChestManager().supplyChestCount();
-        int localSupplyChests = Math.max(0, totalSupplyChests - outOfRegionSupplyChests.size());
-        if (!outOfRegionSupplyChests.isEmpty()) {
-            PacketTelemetry.mark("restock supply scope local=" + localSupplyChests
-                    + " outOfRegion=" + outOfRegionSupplyChests.size()
-                    + " unreachable=" + unreachableChests.size());
-        }
         BlockPos nearest = MoarMod.getChestManager().findBestChest(
                 /*? if >=26.1 {*//*
-                player.blockPosition(), neededItems, excludedSupplyChests);
+                player.blockPosition(), neededItems, unreachableChests);
                 *//*?} else {*/
-                player.getBlockPos(), neededItems, excludedSupplyChests);
+                player.getBlockPos(), neededItems, unreachableChests);
                 /*?}*/
         if (nearest == null) {
             if (statusMessages) {
-                if (totalSupplyChests > 0 && localSupplyChests == 0) {
-                    ChatHelper.info("§eNo supply chests inside this build region. "
-                            + "Use §f/printer supply add §enear the active schematic.");
-                } else if (!unreachableChests.isEmpty()) {
+                if (!unreachableChests.isEmpty()) {
                     ChatHelper.info("§cAll supply chests unreachable ("
                             + unreachableChests.size() + " skipped). Going idle."
                             + " Move closer or add a reachable chest.");
@@ -8386,34 +8218,6 @@ public class SchematicPrinter {
         }
     }
 
-    private Set<BlockPos> findOutOfRegionSupplyChests() {
-        Set<BlockPos> out = new HashSet<>();
-        if (schematic == null || anchor == null) {
-            return out;
-        }
-        for (BlockPos pos : MoarMod.getChestManager().getSupplyPositions()) {
-            if (!isInsideActiveBuildSupplyRegion(pos)) {
-                out.add(immutableBlockPos(pos));
-            }
-        }
-        return out;
-    }
-
-    private boolean isInsideActiveBuildSupplyRegion(BlockPos pos) {
-        if (schematic == null || anchor == null || pos == null) {
-            return true;
-        }
-        int minX = anchor.getX() - SUPPLY_REGION_MARGIN_XZ;
-        int maxX = anchor.getX() + schematic.getSizeX() - 1 + SUPPLY_REGION_MARGIN_XZ;
-        int minY = anchor.getY() - SUPPLY_REGION_MARGIN_Y;
-        int maxY = anchor.getY() + schematic.getSizeY() - 1 + SUPPLY_REGION_MARGIN_Y;
-        int minZ = anchor.getZ() - SUPPLY_REGION_MARGIN_XZ;
-        int maxZ = anchor.getZ() + schematic.getSizeZ() - 1 + SUPPLY_REGION_MARGIN_XZ;
-        return pos.getX() >= minX && pos.getX() <= maxX
-                && pos.getY() >= minY && pos.getY() <= maxY
-                && pos.getZ() >= minZ && pos.getZ() <= maxZ;
-    }
-
     // Builds greedy nearest-neighbour waypoints from player to supply
     // chest using known database positions (other chests + scaffold).
     // Last entry is always the chest itself.
@@ -8423,16 +8227,14 @@ public class SchematicPrinter {
 
         // Other registered chests (not the target itself)
         for (BlockPos chest : MoarMod.getChestManager().getSupplyPositions()) {
-            if (!chest.equals(to) && !chest.equals(from)
-                    && isInsideActiveBuildSupplyRegion(chest)) {
+            if (!chest.equals(to) && !chest.equals(from)) {
                 candidates.add(chest);
             }
         }
 
         // Scaffold blocks
         for (BlockPos scaffold : PrinterDatabase.getScaffoldEntries().keySet()) {
-            if (!scaffold.equals(to) && !scaffold.equals(from)
-                    && isInsideActiveBuildSupplyRegion(scaffold)) {
+            if (!scaffold.equals(to) && !scaffold.equals(from)) {
                 candidates.add(scaffold);
             }
         }
@@ -8904,7 +8706,7 @@ public class SchematicPrinter {
                 /*?}*/
 
         // Release sneak overrides before interacting — if the player is
-        // sneaking, interactBlock bypasses block use (chest open) and
+        // sneaking, interactBlock skips block use (chest open) and
         // tries to place the held item instead.
         Runnable restoreSneak = PlacementEngine.releaseForInteraction(mc.player);
 
@@ -9055,13 +8857,13 @@ public class SchematicPrinter {
         // Reserve a slot for the shulker if one is needed from this chest.
         boolean hasNeededShulker = false;
         for (int slot = 0; slot < chestSlots; slot++) {
+            if (blockedRestockSlots.contains(slot)) continue;
             /*? if >=26.1 {*//*
             ItemStack stack = handler.getSlot(slot).getItem();
             *//*?} else {*/
             ItemStack stack = handler.getSlot(slot).getStack();
             /*?}*/
-            if (shouldSkipRestockSlot(slot, stack, remainingNeed)) continue;
-            if (isShulkerBox(stack) && shulkerContainsCurrentRestockNeed(stack, remainingNeed)) {
+            if (isShulkerBox(stack) && shulkerContainsNeeded(stack, neededItems)) {
                 hasNeededShulker = true;
                 break;
             }
@@ -9069,11 +8871,6 @@ public class SchematicPrinter {
         // When a needed shulker is involved, keep one slot for the shulker
         // itself and another for the loose items that must come out of it.
         int reservedFreeSlots = RESTOCK_RESERVED_FREE_SLOTS + (hasNeededShulker ? 2 : 0);
-        if (hasNeededShulker) {
-            PacketTelemetry.mark("restock found needed-shulker chest=" + supplyTarget
-                    + " needed=" + formatNeededItemIds(neededItems)
-                    + " reservedSlots=" + reservedFreeSlots);
-        }
 
         // Pass 1: stage one hotbar stack per needed item when possible.
         for (int slot = 0; slot < chestSlots; slot++) {
@@ -9128,23 +8925,20 @@ public class SchematicPrinter {
             /*?}*/
             if (stack.isEmpty()) freeSlotsAfterHotbarStage++;
         }
-        if (hasNeededShulker && freeSlotsAfterHotbarStage > 0) {
+        if (hasNeededShulker && freeSlotsAfterHotbarStage > RESTOCK_RESERVED_FREE_SLOTS) {
             for (int slot = 0; slot < chestSlots; slot++) {
+                if (blockedRestockSlots.contains(slot)) continue;
                 /*? if >=26.1 {*//*
                 ItemStack stack = handler.getSlot(slot).getItem();
                 *//*?} else {*/
                 ItemStack stack = handler.getSlot(slot).getStack();
                 /*?}*/
-                if (shouldSkipRestockSlot(slot, stack, remainingNeed)) continue;
                 if (stack.isEmpty()) continue;
                 if (!isShulkerBox(stack)) continue;
-                if (!shulkerContainsCurrentRestockNeed(stack, remainingNeed)) continue;
+                if (!shulkerContainsNeeded(stack, remainingNeed)) continue;
                 if (!tryPrinterInventory(2)) {
                     return false;
                 }
-                PacketTelemetry.mark("restock take needed-shulker slot=" + slot
-                        + " chest=" + supplyTarget
-                        + " remaining=" + formatNeededItemIds(remainingNeed.keySet()));
                 /*? if >=26.1 {*//*
                 mc.gameMode.handleContainerInput(
                 *//*?} else {*/
@@ -9252,24 +9046,21 @@ public class SchematicPrinter {
             if (stack.isEmpty()) freeSlotsAfterLoosePulls++;
         }
         for (int slot = 0; slot < chestSlots; slot++) {
+            if (blockedRestockSlots.contains(slot)) continue;
             /*? if >=26.1 {*//*
             ItemStack stack = handler.getSlot(slot).getItem();
             *//*?} else {*/
             ItemStack stack = handler.getSlot(slot).getStack();
             /*?}*/
-            if (shouldSkipRestockSlot(slot, stack, remainingNeed)) continue;
             if (stack.isEmpty()) continue;
 
-            if (freeSlotsAfterLoosePulls <= 0) {
+            if (freeSlotsAfterLoosePulls <= RESTOCK_RESERVED_FREE_SLOTS) {
                 break;
             }
-            if (isShulkerBox(stack) && shulkerContainsCurrentRestockNeed(stack, remainingNeed)) {
+            if (isShulkerBox(stack) && shulkerContainsNeeded(stack, remainingNeed)) {
                 if (!tryPrinterInventory(2)) {
                     return false;
                 }
-                PacketTelemetry.mark("restock take fallback-shulker slot=" + slot
-                        + " chest=" + supplyTarget
-                        + " remaining=" + formatNeededItemIds(remainingNeed.keySet()));
                 /*? if >=26.1 {*//*
                 mc.gameMode.handleContainerInput(
                 *//*?} else {*/
@@ -9290,10 +9081,6 @@ public class SchematicPrinter {
                 return false; // only one shulker per visit
             }
         }
-        PacketTelemetry.mark("restock no matching transfer chest=" + supplyTarget
-                + " needed=" + formatNeededItemIds(neededItems)
-                + " hasNeededShulker=" + hasNeededShulker
-                + " blockedSlots=" + blockedRestockSlots.size());
         return true;
     }
 
@@ -10294,7 +10081,7 @@ public class SchematicPrinter {
         }
         BlockState current = world.getBlockState(pos);
         // NOTE: water/lava cells are accepted here so sea-level builds (e.g.
-        // 2b2t y=63 floors) have any feet candidates at all. The caller in
+        // low y=63 floors) have any feet candidates at all. The caller in
         // findBuildAccessTarget penalises wet positions via
         // BUILD_ACCESS_WATER_PENALTY so dry land is still preferred when
         // available. Hard-rejecting fluids previously caused
@@ -11417,8 +11204,8 @@ public class SchematicPrinter {
                     double playerDist = player.getPos().squaredDistanceTo(Vec3d.ofCenter(feetPos));
                     /*?}*/
                     boolean inWater = !feetState.getFluidState().isEmpty();
-                    // Heavy penalty for water positions — anti-cheat servers
-                    // reject placements from swimming, so strongly prefer
+                    // Heavy penalty for water positions — strict server validation
+                    // rejects placements from swimming, so strongly prefer
                     // dry-land positions.
                     double penalty = inWater ? 500.0 : 0.0;
 
@@ -11899,221 +11686,6 @@ public class SchematicPrinter {
     private int placeDebugCooldown = 0;
     private static final int PLACE_SCAN_NONE_COOLDOWN_TICKS = 40;
 
-    private Item getRequiredBuildItem(BlockState target) {
-        if (target == null || target.isAir()) {
-            return Items.AIR;
-        }
-        if (isLiquidSource(target)) {
-            Item bucket = getLiquidBucketItem(target);
-            return bucket != null ? bucket : Items.AIR;
-        }
-        return target.getBlock().asItem();
-    }
-
-    private Item getRequiredBuildItem(BlockPos worldPos) {
-        if (worldPos == null || schematic == null || anchor == null) {
-            return Items.AIR;
-        }
-        int sx = worldPos.getX() - anchor.getX();
-        int sy = worldPos.getY() - anchor.getY();
-        int sz = worldPos.getZ() - anchor.getZ();
-        if (!schematic.contains(sx, sy, sz)) {
-            return Items.AIR;
-        }
-        return getRequiredBuildItem(schematic.getBlockState(sx, sy, sz));
-    }
-
-    private int getChronologicalRegionMajor(BlockPos worldPos) {
-        return anchor != null && worldPos != null ? worldPos.getZ() - anchor.getZ() : 0;
-    }
-
-    private int getChronologicalRegionMinor(BlockPos worldPos) {
-        return anchor != null && worldPos != null ? worldPos.getX() - anchor.getX() : 0;
-    }
-
-    private void filterChronologicalBuildFrontier(List<BlockPos> candidates) {
-        if (candidates == null || candidates.size() <= 1) {
-            return;
-        }
-        if (sortMode != SortMode.BOTTOM_UP && sortMode != SortMode.TOP_DOWN) {
-            return;
-        }
-
-        int frontierY = candidates.get(0).getY();
-        for (BlockPos candidate : candidates) {
-            int y = candidate.getY();
-            if (sortMode == SortMode.BOTTOM_UP) {
-                frontierY = Math.min(frontierY, y);
-            } else {
-                frontierY = Math.max(frontierY, y);
-            }
-        }
-
-        int before = candidates.size();
-        int finalFrontierY = frontierY;
-        candidates.removeIf(pos -> pos.getY() != finalFrontierY);
-        if (before != candidates.size()) {
-            PacketTelemetry.mark("build chronological frontier y=" + finalFrontierY
-                    + " kept=" + candidates.size()
-                    + " deferred=" + (before - candidates.size()));
-        }
-    }
-
-    private void clearBuildMaterialRun(String reason) {
-        if (activeBuildMaterialRun != null) {
-            PacketTelemetry.mark("build material run clear item=" + activeBuildMaterialRun
-                    + " reason=" + reason);
-        }
-        activeBuildMaterialRun = null;
-    }
-
-    private void clearBuildInventorySwapWait() {
-        deferredBuildInventorySwapItem = null;
-        deferredBuildInventorySwapTicks = 0;
-    }
-
-    private int tickBuildInventorySwapWait(Item item) {
-        if (item == null || item == Items.AIR) {
-            clearBuildInventorySwapWait();
-            return 0;
-        }
-        if (deferredBuildInventorySwapItem != item) {
-            deferredBuildInventorySwapItem = item;
-            deferredBuildInventorySwapTicks = 0;
-        }
-        return ++deferredBuildInventorySwapTicks;
-    }
-
-    private boolean canReleaseDeferredBuildInventorySwap() {
-        if (!swapItems) return false;
-        if (PlacementEngine.areSwapsSuspended()) return false;
-        if (!SetbackMonitor.get().isCalm()) return false;
-        return PlacementEngine.getConsecutiveFailures() == 0
-                && PlacementEngine.getConsecutiveRejections() == 0;
-    }
-
-    private String buildInventorySwapGateReason() {
-        if (!swapItems) return "swap-disabled";
-        if (PlacementEngine.areSwapsSuspended()) return "swaps-suspended";
-        SetbackMonitor monitor = SetbackMonitor.get();
-        if (!monitor.isCalm()) return "setback-cooldown";
-        int recentSetbacks = monitor.recentSetbackCount(BUILD_SWAP_RECENT_SETBACK_WINDOW);
-        if (recentSetbacks > 0) return "recent-setbacks=" + recentSetbacks;
-        if (!monitor.isStationaryFor(3)) return "not-stationary";
-        if (PlacementEngine.getConsecutiveFailures() > 0) {
-            return "failures=" + PlacementEngine.getConsecutiveFailures();
-        }
-        if (PlacementEngine.getConsecutiveRejections() > 0) {
-            return "rejections=" + PlacementEngine.getConsecutiveRejections();
-        }
-        return "open";
-    }
-
-    private Item activateBuildMaterialRun(Item item, BuildMaterialRunStats stats, String reason) {
-        if (item == null || item == Items.AIR || stats == null) {
-            clearBuildMaterialRun(reason);
-            return null;
-        }
-        if (activeBuildMaterialRun != item) {
-            PacketTelemetry.mark("build material run item=" + item
-                    + " candidates=" + stats.count
-                    + " held=" + stats.heldReady
-                    + " hotbar=" + stats.hotbarReady
-                    + " reason=" + reason);
-        }
-        activeBuildMaterialRun = item;
-        if (stats.heldReady || stats.hotbarReady) {
-            clearBuildInventorySwapWait();
-        }
-        return item;
-    }
-
-    /*? if >=26.1 {*//*
-    private Item chooseBuildMaterialRun(List<BlockPos> candidates, Level world, Item heldBuildItem,
-                                        Map<Item, Integer> hotbarInventory,
-                                        Map<Item, Integer> fullInventory) {
-    *//*?} else {*/
-    private Item chooseBuildMaterialRun(List<BlockPos> candidates, World world, Item heldBuildItem,
-                                        Map<Item, Integer> hotbarInventory,
-                                        Map<Item, Integer> fullInventory) {
-    /*?}*/
-        if (candidates == null || candidates.isEmpty()) {
-            clearBuildMaterialRun("no-candidates");
-            return null;
-        }
-
-        Map<Item, BuildMaterialRunStats> runnable = new LinkedHashMap<>();
-        for (int i = 0; i < candidates.size(); i++) {
-            BlockPos worldPos = candidates.get(i);
-            int sx = worldPos.getX() - anchor.getX();
-            int sy = worldPos.getY() - anchor.getY();
-            int sz = worldPos.getZ() - anchor.getZ();
-            if (!schematic.contains(sx, sy, sz)) continue;
-
-            BlockState target = schematic.getBlockState(sx, sy, sz);
-            if (!BlockDependency.isReadyToPlace(world, worldPos, target)) continue;
-            Item item = getRequiredBuildItem(target);
-            if (item == null || item == Items.AIR || skippedItems.contains(item)) continue;
-            if (fullInventory.getOrDefault(item, 0) <= 0) continue;
-
-            boolean heldReady = item == heldBuildItem;
-            boolean hotbarReady = heldReady || hotbarInventory.getOrDefault(item, 0) > 0;
-            BuildMaterialRunStats stats = runnable.get(item);
-            if (stats == null) {
-                runnable.put(item, new BuildMaterialRunStats(i, heldReady, hotbarReady));
-            } else {
-                stats.count++;
-            }
-        }
-
-        if (runnable.isEmpty()) {
-            clearBuildMaterialRun("no-runnable-materials");
-            return null;
-        }
-
-        BuildMaterialRunStats activeStats = runnable.get(activeBuildMaterialRun);
-        if (activeStats != null) {
-            return activeBuildMaterialRun;
-        }
-        if (activeBuildMaterialRun != null) {
-            clearBuildMaterialRun("local-run-exhausted");
-        }
-
-        Item bestHeld = null;
-        BuildMaterialRunStats bestHeldStats = null;
-        Item bestHotbar = null;
-        BuildMaterialRunStats bestHotbarStats = null;
-        Item bestInventory = null;
-        BuildMaterialRunStats bestInventoryStats = null;
-
-        for (Map.Entry<Item, BuildMaterialRunStats> entry : runnable.entrySet()) {
-            Item item = entry.getKey();
-            BuildMaterialRunStats stats = entry.getValue();
-            if (stats.heldReady) {
-                if (bestHeldStats == null || stats.firstIndex < bestHeldStats.firstIndex) {
-                    bestHeld = item;
-                    bestHeldStats = stats;
-                }
-            } else if (stats.hotbarReady) {
-                if (bestHotbarStats == null || stats.firstIndex < bestHotbarStats.firstIndex) {
-                    bestHotbar = item;
-                    bestHotbarStats = stats;
-                }
-            } else if (bestInventoryStats == null || stats.firstIndex < bestInventoryStats.firstIndex) {
-                bestInventory = item;
-                bestInventoryStats = stats;
-            }
-        }
-
-        if (bestHeld != null) {
-            return activateBuildMaterialRun(bestHeld, bestHeldStats, "held");
-        }
-        if (bestHotbar != null) {
-            return activateBuildMaterialRun(bestHotbar, bestHotbarStats, "hotbar");
-        }
-        return activateBuildMaterialRun(bestInventory, bestInventoryStats, "inventory-staging");
-    }
-
     /*? if >=26.1 {*//*
     private boolean tryPlaceNextBlock(LocalPlayer player, Level world) {
     *//*?} else {*/
@@ -12204,24 +11776,6 @@ public class SchematicPrinter {
                         /*?}*/
                         continue;
                     }
-                    /*? if >=26.1 {*//*
-                    if (!existingState.isAir() && !existingState.canBeReplaced()
-                    *//*?} else {*/
-                    if (!existingState.isAir() && !existingState.isReplaceable()
-                    /*?}*/
-                            && existingState.getBlock() == target.getBlock()
-                            && !PlacementEngine.isOrientationMismatch(existingState, target)) {
-                        if (observedPlacedChunks.add(chunkKey(worldPos))) {
-                            invalidateChunkDiffCache(worldPos);
-                        }
-                        dbgPlaced++;
-                        /*? if >=26.1 {*//*
-                        if (dbgFirstFiltered == null) { dbgFirstFiltered = worldPos.immutable(); dbgFirstReason = "occupied same block (" + existingState.getBlock() + " vs " + target.getBlock() + ")"; }
-                        *//*?} else {*/
-                        if (dbgFirstFiltered == null) { dbgFirstFiltered = worldPos.toImmutable(); dbgFirstReason = "occupied same block (" + existingState.getBlock() + " vs " + target.getBlock() + ")"; }
-                        /*?}*/
-                        continue;
-                    }
 
                     if (!printInAir && !PlacementEngine.hasAdjacentSolid(world, worldPos)) {
                         dbgNoAdj++;
@@ -12291,17 +11845,17 @@ public class SchematicPrinter {
                     + " occluded=" + dbgOccluded
                     + (probeFailure != null ? " probe=" + probeFailure : ""));
             boolean pureOcclusion = dbgOccluded > 0 && dbgUnstable == 0;
-            BlockPos blockedTarget = fallbackCandidates.get(0);
-            if (isWrongSideProbeFailure(probeFailure)) {
-                int sx = blockedTarget.getX() - anchor.getX();
-                int sy = blockedTarget.getY() - anchor.getY();
-                int sz = blockedTarget.getZ() - anchor.getZ();
-                BlockState blockedState = schematic.contains(sx, sy, sz)
-                        ? schematic.getBlockState(sx, sy, sz)
-                        : null;
-                recoverWrongSidePlacement(blockedTarget, blockedState, probeFailure);
+            if (pureOcclusion && !deferredPlacementReposition && !PathWalker.isActive()) {
+                // fix28: pocket is reachable but our own body occludes the
+                // down-face probe. Try one in-pocket stance reposition before
+                // abandoning the pocket — finishing it locally is far cheaper
+                // than walking to a fresh zone and back.
+                schedulePlacementAccessReposition(
+                        fallbackCandidates.get(0),
+                        "occluded local stance — repositioning in pocket",
+                        PLACEMENT_START_FAILURE_PAUSE_TICKS);
             } else if (pureOcclusion) {
-                recordBuildLayerAccessFailure(blockedTarget, "occluded local stance");
+                recordBuildLayerAccessFailure(fallbackCandidates.get(0), "occluded local stance");
                 coolDownPlacementTargets(
                         fallbackCandidates,
                         OCCLUDED_TARGET_COOLDOWN_TICKS,
@@ -12314,6 +11868,7 @@ public class SchematicPrinter {
                     }
                 }
             } else if (!deferredPlacementReposition) {
+                BlockPos blockedTarget = fallbackCandidates.get(0);
                 schedulePlacementAccessReposition(
                         blockedTarget,
                         "nearby candidates need a better stance",
@@ -12419,8 +11974,6 @@ public class SchematicPrinter {
                         int sz2 = p.getZ() - anchor.getZ();
                         return BlockDependency.getTier(schematic.getBlockState(sx2, sy2, sz2));
                     })
-                .thenComparingInt(this::getChronologicalRegionMajor)
-                .thenComparingInt(this::getChronologicalRegionMinor)
                 .thenComparingInt(p -> -getConfirmedBuildAdjacencyScore(p, world))
                 .thenComparingInt(p -> getBuildItemPriority(p, heldBuildItem, hotbarInventory))
                 /*? if >=26.1 {*//*
@@ -12436,8 +11989,6 @@ public class SchematicPrinter {
                         int sz2 = p.getZ() - anchor.getZ();
                         return BlockDependency.getTier(schematic.getBlockState(sx2, sy2, sz2));
                     })
-                .thenComparingInt(this::getChronologicalRegionMajor)
-                .thenComparingInt(this::getChronologicalRegionMinor)
                 .thenComparingInt(p -> -getConfirmedBuildAdjacencyScore(p, world))
                 .thenComparingInt(p -> getBuildItemPriority(p, heldBuildItem, hotbarInventory))
                 /*? if >=26.1 {*//*
@@ -12452,8 +12003,6 @@ public class SchematicPrinter {
                         int sz2 = p.getZ() - anchor.getZ();
                         return BlockDependency.getTier(schematic.getBlockState(sx2, sy2, sz2));
                     })
-                .thenComparingInt(this::getChronologicalRegionMajor)
-                .thenComparingInt(this::getChronologicalRegionMinor)
                 .thenComparingInt(p -> -getConfirmedBuildAdjacencyScore(p, world))
                 .thenComparingInt(p -> getBuildItemPriority(p, heldBuildItem, hotbarInventory))
                 /*? if >=26.1 {*//*
@@ -12463,50 +12012,10 @@ public class SchematicPrinter {
                 /*?}*/
         }
         candidates.sort(comparator);
-        filterChronologicalBuildFrontier(candidates);
-
-        Item materialRunItem = chooseBuildMaterialRun(
-                candidates, world, heldBuildItem, hotbarInventory, fullInventory);
-        if (materialRunItem != null && materialRunItem != Items.AIR) {
-            int beforeMaterialFilter = candidates.size();
-            candidates.removeIf(pos -> getRequiredBuildItem(pos) != materialRunItem);
-            if (beforeMaterialFilter != candidates.size()) {
-                PacketTelemetry.mark("build material run filter item=" + materialRunItem
-                        + " kept=" + candidates.size()
-                        + " dropped=" + (beforeMaterialFilter - candidates.size()));
-            }
-            if (candidates.isEmpty()) {
-                clearBuildMaterialRun("filtered-empty");
-                return false;
-            }
-        }
-
-        boolean inventorySwapAllowedThisTick = liveInventorySwapAllowed;
-        boolean releasedDeferredInventorySwap = false;
-        int inventorySwapWaitTicks = 0;
-        String inventorySwapGateReason = buildInventorySwapGateReason();
-        if (liveInventorySwapAllowed) {
-            clearBuildInventorySwapWait();
-        } else if (materialRunItem != null
-                && materialRunItem != Items.AIR
-                && !isBuildItemFastLaneEligible(materialRunItem, heldBuildItem, hotbarInventory)
-                && fullInventory.getOrDefault(materialRunItem, 0) > 0) {
-            inventorySwapWaitTicks = tickBuildInventorySwapWait(materialRunItem);
-            if (inventorySwapWaitTicks >= BUILD_INVENTORY_SWAP_WAIT_LIMIT_TICKS
-                    && canReleaseDeferredBuildInventorySwap()) {
-                inventorySwapAllowedThisTick = true;
-                releasedDeferredInventorySwap = true;
-                PacketTelemetry.mark("build inventory-swap release item=" + materialRunItem
-                        + " wait=" + inventorySwapWaitTicks
-                        + " gate=" + inventorySwapGateReason);
-                clearBuildInventorySwapWait();
-            }
-        }
 
         Set<Item> missing = new HashSet<>();
         int dbgDepSkip = 0, dbgPlaceFail = 0, dbgScaffold = 0;
         int deferredInventorySwapCandidates = 0;
-        Item deferredInventorySwapItem = null;
         BlockPos dbgFirstPlaceFail = null;
         BlockState dbgFirstPlaceFailTarget = null;
         BlockState dbgFirstPlaceFailExisting = null;
@@ -12567,17 +12076,13 @@ public class SchematicPrinter {
                         continue;
                     }
                     if (missing.contains(bucketItem)) continue;
-                    if (!fastLaneOnly && !inventorySwapAllowedThisTick) {
+                    if (!fastLaneOnly && !liveInventorySwapAllowed) {
                         deferredInventorySwapCandidates++;
-                        if (deferredInventorySwapItem == null) {
-                            deferredInventorySwapItem = bucketItem;
-                        }
                         continue;
                     }
 
-                    if (PlacementEngine.placeLiquid(worldPos, target, !fastLaneOnly && inventorySwapAllowedThisTick)) {
+                    if (PlacementEngine.placeLiquid(worldPos, target, !fastLaneOnly && liveInventorySwapAllowed)) {
                         lastMissingItems.clear();
-                        clearBuildInventorySwapWait();
                         return true;
                     }
                     // Don't add to missing — placement failed for positional
@@ -12599,11 +12104,8 @@ public class SchematicPrinter {
                     missing.add(requiredItem);
                     continue;
                 }
-                if (!fastLaneOnly && !inventorySwapAllowedThisTick) {
+                if (!fastLaneOnly && !liveInventorySwapAllowed) {
                     deferredInventorySwapCandidates++;
-                    if (deferredInventorySwapItem == null) {
-                        deferredInventorySwapItem = requiredItem;
-                    }
                     continue;
                 }
 
@@ -12612,23 +12114,6 @@ public class SchematicPrinter {
                 // PlacementEngine's correction mechanism will break the scaffold,
                 // and on the next cycle the position will be air → normal placement.
                 BlockState existing = world.getBlockState(worldPos);
-                if (isEffectivelyPlaced(existing, target)) {
-                    invalidateChunkDiffCache(worldPos);
-                    continue;
-                }
-                /*? if >=26.1 {*//*
-                if (!existing.isAir() && !existing.canBeReplaced()
-                *//*?} else {*/
-                if (!existing.isAir() && !existing.isReplaceable()
-                /*?}*/
-                        && existing.getBlock() == target.getBlock()
-                        && !PlacementEngine.isOrientationMismatch(existing, target)) {
-                    invalidateChunkDiffCache(worldPos);
-                    PacketTelemetry.mark("build skip occupied same-block target=" + worldPos
-                            + " desired=" + target.getBlock()
-                            + " actual=" + existing.getBlock());
-                    continue;
-                }
                 /*? if >=26.1 {*//*
                 if (!existing.isAir() && !existing.canBeReplaced()
                 *//*?} else {*/
@@ -12637,19 +12122,13 @@ public class SchematicPrinter {
                         && existing.getBlock() != target.getBlock()) {
                     dbgScaffold++;
                     if (PlacementEngine.placeBlock(
-                            worldPos, target, !fastLaneOnly && inventorySwapAllowedThisTick,
+                            worldPos, target, !fastLaneOnly && liveInventorySwapAllowed,
                             createBuildSupportFilter(worldPos, world, playerPos))) {
                         lastMissingItems.clear();
-                        clearBuildInventorySwapWait();
                         return true;
                     }
                     if (PlacementEngine.wasLastPlacementBlockedByNoVisibleHit(worldPos)) {
-                        String probeFailure = PlacementEngine.consumeLastProbeFailure();
-                        if (isWrongSideProbeFailure(probeFailure)) {
-                            recoverWrongSidePlacement(worldPos, target, probeFailure);
-                        } else {
-                            recordNoVisibleHitPlacementBlock(worldPos, target);
-                        }
+                        recordNoVisibleHitPlacementBlock(worldPos, target);
                     } else if (PlacementEngine.wasLastPlacementBlockedByBodyClearance(worldPos)) {
                         coolDownPlacementTarget(worldPos, PLACEMENT_START_FAILURE_TARGET_COOLDOWN_TICKS);
                         PacketTelemetry.mark("build body-clearance cooldown target=" + worldPos
@@ -12677,20 +12156,14 @@ public class SchematicPrinter {
                 }
 
                 if (PlacementEngine.placeBlock(
-                        worldPos, target, !fastLaneOnly && inventorySwapAllowedThisTick,
+                        worldPos, target, !fastLaneOnly && liveInventorySwapAllowed,
                         createBuildSupportFilter(worldPos, world, playerPos))) {
                     lastMissingItems.clear();
-                    clearBuildInventorySwapWait();
                     placeDebugCooldown = 0;
                     return true;
                 }
                 if (PlacementEngine.wasLastPlacementBlockedByNoVisibleHit(worldPos)) {
-                    String probeFailure = PlacementEngine.consumeLastProbeFailure();
-                    if (isWrongSideProbeFailure(probeFailure)) {
-                        recoverWrongSidePlacement(worldPos, target, probeFailure);
-                    } else {
-                        recordNoVisibleHitPlacementBlock(worldPos, target);
-                    }
+                    recordNoVisibleHitPlacementBlock(worldPos, target);
                     continue;
                 } else if (PlacementEngine.wasLastPlacementBlockedByBodyClearance(worldPos)) {
                     coolDownPlacementTarget(worldPos, PLACEMENT_START_FAILURE_TARGET_COOLDOWN_TICKS);
@@ -12715,10 +12188,9 @@ public class SchematicPrinter {
 
         if (batchTargets != null && !batchTargets.isEmpty()) {
             int placed = PlacementEngine.placeBatch(batchTargets, batchStates,
-                    inventorySwapAllowedThisTick);
+                    allowLiveInventorySwapsDuringBuild());
             if (placed > 0) {
                 lastMissingItems.clear();
-                clearBuildInventorySwapWait();
                 placeDebugCooldown = 0;
                 return true;
             }
@@ -12746,27 +12218,16 @@ public class SchematicPrinter {
         if (placeDebugCooldown > 0) placeDebugCooldown--;
 
         if (deferredInventorySwapCandidates > 0) {
-            if (inventorySwapWaitTicks <= 0) {
-                inventorySwapWaitTicks = tickBuildInventorySwapWait(deferredInventorySwapItem);
-            }
             PacketTelemetry.mark("build wait inventory-swap candidates=" + deferredInventorySwapCandidates
                     + " fastLaneSeen=" + sawFastLaneCandidate
                     + " calm=" + SetbackMonitor.get().isCalm()
                     + " failures=" + PlacementEngine.getConsecutiveFailures()
-                    + " rejections=" + PlacementEngine.getConsecutiveRejections()
-                    + " wait=" + inventorySwapWaitTicks + "/" + BUILD_INVENTORY_SWAP_WAIT_LIMIT_TICKS
-                    + " gate=" + inventorySwapGateReason
-                    + " released=" + releasedDeferredInventorySwap);
-            if (inventorySwapWaitTicks < BUILD_INVENTORY_SWAP_WAIT_LIMIT_TICKS) {
-                placementFailurePauseTicks = Math.max(
-                        placementFailurePauseTicks, PLACEMENT_START_FAILURE_PAUSE_TICKS);
-                walkAttemptCooldown = Math.max(
-                        walkAttemptCooldown, PLACEMENT_START_FAILURE_PAUSE_TICKS);
-                noProgressTicks = 0;
-            } else {
-                clearBuildMaterialRun("inventory-swap-gated");
-                noProgressTicks = Math.max(noProgressTicks, NO_PROGRESS_WALK_RECHECK_TICKS - 1);
-            }
+                    + " rejections=" + PlacementEngine.getConsecutiveRejections());
+            placementFailurePauseTicks = Math.max(
+                    placementFailurePauseTicks, PLACEMENT_START_FAILURE_PAUSE_TICKS);
+            walkAttemptCooldown = Math.max(
+                    walkAttemptCooldown, PLACEMENT_START_FAILURE_PAUSE_TICKS);
+            noProgressTicks = 0;
             lastMissingItems.clear();
             return false;
         }
@@ -13125,19 +12586,6 @@ public class SchematicPrinter {
             return null;
         }
         return desired;
-    }
-
-    private BlockState getRawSchematicStateAt(BlockPos worldPos) {
-        if (worldPos == null || schematic == null || anchor == null) {
-            return null;
-        }
-        int sx = worldPos.getX() - anchor.getX();
-        int sy = worldPos.getY() - anchor.getY();
-        int sz = worldPos.getZ() - anchor.getZ();
-        if (!schematic.contains(sx, sy, sz)) {
-            return null;
-        }
-        return schematic.getBlockState(sx, sy, sz);
     }
 
     private BlockPos sanitizeBuildStandingPosition(BlockPos targetPos, BlockPos standPos,

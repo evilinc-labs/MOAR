@@ -941,24 +941,15 @@ public final class StashDatabase {
         return Map.copyOf(items);
     }
 
-    /**
-     * Search for all containers that hold a specific item.
-     * Returns a list of (ContainerEntry, quantity) pairs sorted by quantity descending.
-     *
-     * <p>Equivalent to {@link #searchItem(String, RegionBounds)} with no region scope.
-     * Prefer the bounded variant when an active stash region is set, to avoid mixing
-     * results from other sessions sharing the same {@code stash.db}.
-     */
+    // Search all containers holding an item; returns (ContainerEntry, qty) pairs
+    // sorted by quantity descending. Global scope; prefer the bounded variant
+    // when an active stash region is set to avoid mixing other sessions' results.
     public List<SearchResult> searchItem(String itemIdFragment) {
         return searchItem(itemIdFragment, null);
     }
 
-    /**
-     * Search for all containers that hold a specific item, optionally restricted to
-     * a region (inclusive AABB).
-     *
-     * @param bounds region AABB, or {@code null} to search the entire database.
-     */
+    // Search all containers holding an item, optionally restricted to a region
+    // (inclusive AABB). bounds null searches the entire database.
     public List<SearchResult> searchItem(String itemIdFragment, RegionBounds bounds) {
         List<SearchResult> results = new ArrayList<>();
         if (!isOpen()) return results;
@@ -1006,14 +997,11 @@ public final class StashDatabase {
         return results;
     }
 
-    /** Result of an item search against the database. */
+    // Result of an item search against the database.
     public record SearchResult(BlockPos pos, Map<String, Integer> matchedItems, int totalQuantity) {}
 
-    /**
-     * Inclusive AABB used to restrict stash queries to a single stash region. Built
-     * from raw user corners via {@link #of(BlockPos, BlockPos)} which normalizes the
-     * min/max regardless of which corner the user selected first.
-     */
+    // Inclusive AABB restricting stash queries to a single region. Built from raw
+    // user corners via of(...) which normalizes min/max regardless of order.
     public record RegionBounds(int minX, int minY, int minZ, int maxX, int maxY, int maxZ) {
         public static RegionBounds of(BlockPos a, BlockPos b) {
             if (a == null || b == null) return null;
@@ -1035,7 +1023,7 @@ public final class StashDatabase {
         }
     }
 
-    /** Bind 6 region-bounds parameters starting at {@code startIdx}. Returns the next free index. */
+    // Bind 6 region-bounds parameters starting at startIdx. Returns the next free index.
     private static int bindBounds(PreparedStatement ps, int startIdx, RegionBounds b) throws SQLException {
         ps.setInt(startIdx,     b.minX());
         ps.setInt(startIdx + 1, b.maxX());
@@ -1046,17 +1034,13 @@ public final class StashDatabase {
         return startIdx + 6;
     }
 
-    /** Find containers holding any of the given item IDs (including shulker contents). */
+    // Find containers holding any of the given item IDs (including shulker contents).
     public Map<BlockPos, Map<String, Integer>> findContainersForExactItems(Set<String> itemIds) {
         return findContainersForExactItems(itemIds, null);
     }
 
-    /**
-     * Find containers holding any of the given item IDs (including shulker contents),
-     * optionally restricted to a region.
-     *
-     * @param bounds region AABB, or {@code null} to search the entire database.
-     */
+    // Find containers holding any of the given item IDs (including shulker contents),
+    // optionally restricted to a region. bounds null searches the entire database.
     public Map<BlockPos, Map<String, Integer>> findContainersForExactItems(Set<String> itemIds, RegionBounds bounds) {
         Map<BlockPos, Map<String, Integer>> result = new LinkedHashMap<>();
         if (!isOpen() || itemIds.isEmpty()) return result;

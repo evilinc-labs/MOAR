@@ -404,7 +404,7 @@ public final class TravelManager {
             transition(TravelPhase.VERIFYING_DETOUR, "grief detected: " + rep);
             return;
         }
-        // ── Wall / obstacle ahead: short forward bypass ───────────
+        // ── Wall / obstacle ahead: short forward detour ───────────
         if (bounce.isWallAhead()) {
             LOGGER.warn("[Travel] wall/obstacle ahead during bounce, triggering bypass");
             if (state.mission == null || !state.mission.allowDetour) {
@@ -535,7 +535,7 @@ public final class TravelManager {
         }
     }
 
-    // 10-tick yaw-hold after detour/bypass before resuming the bounce.
+    // 10-tick yaw-hold after detour before resuming the bounce.
     private void tickSettle() {
         settleTicks--;
         if (settleTicks <= 0) {

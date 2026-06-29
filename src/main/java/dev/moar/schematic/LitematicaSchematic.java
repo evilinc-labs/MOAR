@@ -291,14 +291,10 @@ public final class LitematicaSchematic {
         private final long[] blockStates;
         private final int bitsPerEntry;
         private final long mask;
-        /**
-         * Set when {@link #getBlockState} encounters a paletteIndex outside the
-         * palette range. We log exactly once per region (with a sample
-         * coordinate) and then silently fall back to AIR on subsequent hits to
-         * avoid log floods. A non-zero value here on a previously-good
-         * schematic indicates corruption, mismatched bitsPerEntry, or a bug
-         * in {@link #readPackedValue}.
-         */
+        // Set when getBlockState hits a paletteIndex outside the palette range.
+        // Logged once per region (with a sample coord), then AIR fallback to
+        // avoid log floods. A non-zero value on a previously-good schematic
+        // indicates corruption, mismatched bitsPerEntry, or a readPackedValue bug.
         private boolean decodeErrorLogged;
 
         private Region(String regionName,

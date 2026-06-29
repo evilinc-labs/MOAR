@@ -187,12 +187,12 @@ public class SpawnProofer {
 
     /** Cooldown ticks after arriving at a position before the first placement.
      *  Gives the server time to acknowledge our position and reduces
-     *  packet bursts that trigger anti-cheat velocity setbacks. */
+     *  packet bursts that trigger velocity setbacks under strict server validation. */
     private int placementSettleTicks;
     private static final int PLACEMENT_SETTLE_DELAY = 3;
 
     /** If the server rejects this many consecutive placements, auto-pause.
-     *  Likely caused by cross-region rejection on Folia or anti-cheat. */
+     *  Likely caused by region-threaded cross-region rejection or strict validation. */
     private static final int REJECT_PAUSE_THRESHOLD = 6;
 
     /** Retry silent placement timeouts a couple of times before repositioning. */
@@ -501,7 +501,7 @@ public class SpawnProofer {
         // Process the verification queue so rejected placements are tracked
         PlacementEngine.tickVerification();
 
-        // Auto-pause if the server keeps rejecting placements (Folia cross-region, anti-cheat)
+        // Auto-pause if the server keeps rejecting placements (region-threaded cross-region, strict validation)
         if (PlacementEngine.getConsecutiveFailures() >= REJECT_PAUSE_THRESHOLD) {
             PlacementEngine.resetRejectionCounters();
             ChatHelper.info("§cServer failed to confirm " + REJECT_PAUSE_THRESHOLD
@@ -693,7 +693,7 @@ public class SpawnProofer {
             return;
         }
 
-        // Wait for settle cooldown after walking to reduce anti-cheat velocity setbacks
+        // Wait for settle cooldown after walking to reduce velocity setbacks under strict validation
         if (placementSettleTicks > 0) {
             placementSettleTicks--;
             return;

@@ -90,10 +90,6 @@ import net.minecraft.network.protocol.game.ServerboundSetCarriedItemPacket;
 import net.minecraft.network.packet.c2s.play.UpdateSelectedSlotC2SPacket;
 /*?}*/
 /*? if >=26.1 {*//*
-*//*?} else {*/
-import net.minecraft.network.packet.c2s.play.PlayerInteractBlockC2SPacket;
-/*?}*/
-/*? if >=26.1 {*//*
 import net.minecraft.network.protocol.game.ServerboundMovePlayerPacket;
 *//*?} else {*/
 import net.minecraft.network.packet.c2s.play.PlayerMoveC2SPacket;
@@ -193,8 +189,6 @@ public final class PlacementEngine {
         }
     }
 
-    private record PlacementLook(float yaw, float pitch) {}
-
     private static PlacePhase phase = PlacePhase.IDLE;
 
     private static BlockPos   pendingTarget;
@@ -212,10 +206,6 @@ public final class PlacementEngine {
     private static int        rotateTicks;
     private static int        lookSyncTicks;
     private static boolean    lookSyncedForPendingPlacement;
-    private static boolean    carriedSlotSyncedForPendingPlacement;
-    private static int        carriedSlotSyncSettleTicks;
-    private static boolean    positionSyncedForPendingPlacement;
-    private static int        positionSyncSettleTicks;
     private static int        pendingHotbarSlot = -1;
     private static int        pendingInventorySwapSlot = -1;
     private static ItemSelectionKind pendingSelectionKind = ItemSelectionKind.NONE;
@@ -224,27 +214,19 @@ public final class PlacementEngine {
     private static final int  HOTBAR_SELECT_SETTLE_TICKS = 2;
     private static final int  HOTBAR_SELECT_PACKET_SETTLE_TICKS = 3;
     private static final int  PRE_PLACE_LOOK_SYNC_TICKS = 1;
-    private static final int  PRE_PLACE_POSITION_SYNC_TICKS = 1;
     private static final int  INVENTORY_SWAP_SETTLE_TICKS = 7;
     private static final int  INVENTORY_SWAP_ITEM_VARIETY_SETTLE_TICKS = 4;
     private static final float ORIENTATION_LOOK_MAX_YAW_DIFF = 18.0f;
     private static final float ORIENTATION_LOOK_MAX_PITCH_DIFF = 18.0f;
     private static final double FACE_PROBE_OFFSET = 0.22;
-    private static final double FACE_EDGE_INSET = 0.10;
-    private static final double FACE_VISIBILITY_MARGIN = 0.03;
     private static int        inventorySwapSettleTicks;
     private static Item       lastPlacementItem;
     private static int        itemVarietyCooldownTicks;
     private static final int  ITEM_VARIETY_SETTLE_TICKS = 3;
     private static final int  SETBACK_RECENT_WINDOW_TICKS = 40;
     private static final double SAFE_PLACE_REACH_BLOCKS = 3.85;
-    /**
-     * Floating-point tolerance subtracted from the player's
-     * {@code block_interaction_range} attribute when computing the effective
-     * placement reach. Absorbs minor desync between client eye position (this
-     * tick) and server eye position (last acknowledged tick); the printer
-     * is generally stationary during placement so 0.05 is sufficient.
-     */
+    // Tolerance subtracted from block_interaction_range when computing reach;
+    // absorbs minor client/server eye desync. Stationary printer needs little.
     private static final double REACH_AC_SAFETY_MARGIN = 0.15;
     /** Sane upper bound that prevents runaway in case of a misconfigured attribute. */
     private static final double REACH_HARD_CEILING = 6.0;
@@ -299,12 +281,8 @@ public final class PlacementEngine {
     // than just the last face attempted in iteration order.
     private static volatile String lastProbeFailure = null;
     private static volatile int    lastProbeFailureRank = -1;
-    /**
-     * @param rank higher = more informative failure. 5 = same-neighbor
-     *             wrong-face (closest to success); 4 = wall hit on
-     *             different block; 3 = mixed miss+far; 2 = all miss;
-     *             1 = all too far; 0 = support-filter rejected.
-     */
+    // rank: higher = more informative. 5 same-neighbor wrong-face, 4 wall hit,
+    // 3 mixed miss+far, 2 all miss, 1 all too far, 0 support-filter rejected.
     private static void recordProbeFailure(String reason, int rank) {
         if (rank > lastProbeFailureRank) {
             lastProbeFailure = reason;
@@ -335,13 +313,11 @@ public final class PlacementEngine {
     private static long   throttleTick      = Long.MIN_VALUE;
     private static double placeCredits      = MAX_PLACE_CREDITS;
 
-    // Server-side placement verification — detect anti-cheat rollbacks.
+    // Server-side placement verification — detect strict server validation rollbacks.
     private static final int VERIFY_DELAY_TICKS = 3;
-    private static final int VERIFY_STABLE_TICKS = 12;
-    // 2b2t runs at 0.25–1 TPS; block-change responses can take 1000–4000 ms.
-    // Test #13/#14 trace showed `verify late-accept totalElapsed=109` — the
-    // server's intake queue processes UseItemOn at ~109 client-ticks under
-    // current 2b2t load. 120 ticks (6s) gives headroom above that and covers
+    // Low-TPS servers run at 0.25–1 TPS; block-change responses can take 1000–4000 ms.
+    // Trace showed late-accept totalElapsed=109 — server intake processes UseItemOn
+    // at ~109 client-ticks under heavy load. 120 ticks (6s) gives headroom and covers
     // down to ~0.17 TPS (one server tick every 6 client seconds).
     private static final int VERIFY_TIMEOUT_TICKS = 120;
     private static final int MAX_VERIFY_QUEUE = 32;
@@ -354,8 +330,8 @@ public final class PlacementEngine {
     // server to acknowledge each placement before sending the next,
     // serializing through the server's queue. Throughput is limited to
     // ~1 placement per server processing cycle (~109 ticks = 5.45s under
-    // current 2b2t load), but every packet lands cleanly.
-    private static final int MAX_INFLIGHT_PLACEMENT_VERIFICATIONS = 1;
+    // heavy load), but every packet lands cleanly.
+    private static final int MAX_INFLIGHT_PLACEMENT_VERIFICATIONS = 4;
 
     // Fix #22: placement queue — pre-planned candidates filled while the
     // current placement is awaiting server ACK.  When canPlace() is checked
@@ -369,13 +345,13 @@ public final class PlacementEngine {
             boolean allowSwap,
             java.util.function.Predicate<BlockPos> supportFilter) {}
     private static final ArrayDeque<QueuedPlacement> placementQueue = new ArrayDeque<>();
-    private static final int PLACEMENT_QUEUE_CAPACITY = 4;
-    // Folia/Paper can acknowledge a placed block to the client before every
-    // interaction path sees it as a stable support. Defer dependent placements
-    // long enough to avoid racing server-side region state.
-    private static final int RECENT_SUPPORT_SETTLE_TICKS = 100;
+    private static final int PLACEMENT_QUEUE_CAPACITY = 8;
+    // Freshly placed supports ACK in ~3 ticks, so 8 ticks is enough to let the
+    // server register a support before we build against it without abandoning
+    // the local pocket and walking away.
+    private static final int RECENT_SUPPORT_SETTLE_TICKS = 8;
     private static final int MAX_RECENT_ACCEPTED_SUPPORTS = 128;
-    private static final int POST_PLACE_SETTLE_TICKS = 4;
+    private static final int POST_PLACE_SETTLE_TICKS = 2;
     private static final int PLACE_ROTATION_PRESERVE_TICKS = 1;
     private static int lastSentSelectedSlot = -1;
     private static boolean suppressVanillaMoveOnce = false;
@@ -421,7 +397,7 @@ public final class PlacementEngine {
 
     private record PendingVerification(BlockPos pos, BlockState expected, BlockState original,
                                        BlockPos supportPos, PlacementLane lane, boolean usedSwap,
-                                       long placeTick, long firstExpectedTick) {}
+                                       long placeTick) {}
     private record VerificationSnapshot(BlockState expected, VerificationStatus status,
                                          BlockPos supportPos) {}
     private enum PlacementLane {
@@ -431,20 +407,18 @@ public final class PlacementEngine {
     private static final ArrayDeque<PendingVerification> verifyQueue = new ArrayDeque<>();
     private static final Map<BlockPos, VerificationSnapshot> verificationStates = new HashMap<>();
 
-    /** Fix #20: post-timeout watch list. After we mark a placement TIMEOUT we
-     *  keep checking the position for another LATE_WATCH_TICKS to see if the
-     *  server's ack just arrived after our 4-second window. A late-accept means
-     *  the packet was NOT dropped, only delayed — that's a critical distinction
-     *  for diagnosing 2b2t/Folia/GrimAC/ViaVersion behavior. */
+    // Post-timeout watch list: after marking a placement TIMEOUT, keep checking
+    // the position for LATE_WATCH_TICKS in case the ack arrived after the window.
+    // A late-accept means the packet was delayed, not dropped — useful for
+    // diagnosing high-latency/low-TPS, region-threaded, strict-validation and
+    // protocol-translation behavior.
     private record LateAcceptWatch(BlockState expected, long timeoutTick,
-                                   PlacementLane lane, long placeTick,
-                                   long firstExpectedTick) {}
+                                   PlacementLane lane, long placeTick) {}
     private static final Map<BlockPos, LateAcceptWatch> lateAcceptWatch = new HashMap<>();
     private static final long LATE_WATCH_TICKS = 100; // ~5s past timeout
 
-    /** Fix #20: last sent block-use sequence id. Captured by
-     *  {@link #trySequencedBlockPlacement} so the caller can include it in the
-     *  place-lane mark for cross-referencing with server reach/window logs. */
+    // Last sent block-use sequence id. Captured by trySequencedBlockPlacement so
+    // the caller can cross-reference it against server reach/window logs.
     private static int lastSentBlockUseSequence = -1;
     private static final Map<BlockPos, Long> recentAcceptedSupports = new LinkedHashMap<>(32, 0.75f, false) {
         @Override protected boolean removeEldestEntry(Map.Entry<BlockPos, Long> eldest) {
@@ -542,6 +516,17 @@ public final class PlacementEngine {
         verificationStates.remove(pos);
     }
 
+    /** True while a placement at this pos is still awaiting server confirmation. */
+    public static boolean isPlacementVerificationUnstable(BlockPos pos, BlockState expected) {
+        if (pos == null) return false;
+        VerificationSnapshot snapshot = verificationStates.get(pos);
+        if (snapshot == null) return false;
+        if (expected != null && snapshot.expected.getBlock() != expected.getBlock()) {
+            return false;
+        }
+        return snapshot.status == VerificationStatus.PENDING;
+    }
+
     private static void pruneRecentAcceptedSupports(long currentTick) {
         if (recentAcceptedSupports.isEmpty()) return;
         recentAcceptedSupports.entrySet().removeIf(entry ->
@@ -553,11 +538,6 @@ public final class PlacementEngine {
         pruneRecentAcceptedSupports(currentTick);
         Long acceptedTick = recentAcceptedSupports.get(pos);
         return acceptedTick != null && currentTick - acceptedTick < RECENT_SUPPORT_SETTLE_TICKS;
-    }
-
-    private static long acceptedSupportAge(BlockPos pos, long currentTick) {
-        Long acceptedTick = recentAcceptedSupports.get(pos);
-        return acceptedTick != null ? currentTick - acceptedTick : -1L;
     }
 
     public static BlockPos getLastVerificationPos() {
@@ -620,29 +600,7 @@ public final class PlacementEngine {
             BlockState actual = mc.world.getBlockState(pv.pos);
             /*?}*/
             if (actual.getBlock() == pv.expected.getBlock()) {
-                long firstExpectedTick = pv.firstExpectedTick;
-                if (firstExpectedTick < 0) {
-                    PendingVerification updated = new PendingVerification(
-                            pv.pos, pv.expected, pv.original, pv.supportPos,
-                            pv.lane, pv.usedSwap, pv.placeTick, currentTick);
-                    verifyQueue.poll();
-                    verifyQueue.addFirst(updated);
-                    verificationStates.put(pv.pos,
-                            new VerificationSnapshot(
-                                    pv.expected, VerificationStatus.PENDING, pv.supportPos));
-                    PacketTelemetry.mark("verify saw expected pos=" + pv.pos
-                            + " expected=" + pv.expected.getBlock()
-                            + " lane=" + pv.lane
-                            + " elapsed=" + elapsedTicks);
-                    break;
-                }
-                if (currentTick - firstExpectedTick < VERIFY_STABLE_TICKS) {
-                    verificationStates.put(pv.pos,
-                            new VerificationSnapshot(
-                                    pv.expected, VerificationStatus.PENDING, pv.supportPos));
-                    break;
-                }
-                // Stable long enough to treat as server accepted.
+                // Confirmed — server accepted the placement
                 verifyQueue.poll();
                 verificationStates.put(pv.pos,
                         new VerificationSnapshot(
@@ -651,38 +609,12 @@ public final class PlacementEngine {
                 PacketTelemetry.mark("verify accepted pos=" + pv.pos
                         + " expected=" + pv.expected.getBlock()
                         + " lane=" + pv.lane
-                        + " elapsed=" + elapsedTicks
-                        + " stable=" + (currentTick - firstExpectedTick));
+                        + " elapsed=" + elapsedTicks);
                 consecutiveFailures = 0;
                 consecutiveRejections = 0;
                 consecutiveSwapTimeouts = 0;
                 consecutiveTimeouts = 0;
                 clearVanillaRetry(pv.pos);
-            } else if (pv.firstExpectedTick >= 0
-                    && actual.getBlock() == pv.original.getBlock()) {
-                // The client predicted placement, then the server rolled it back.
-                verifyQueue.poll();
-                verificationStates.put(pv.pos,
-                        new VerificationSnapshot(
-                                pv.expected, VerificationStatus.REJECTED, pv.supportPos));
-                PacketTelemetry.mark("verify rollback pos=" + pv.pos
-                        + " expected=" + pv.expected.getBlock()
-                        + " original=" + pv.original.getBlock()
-                        + " actual=" + actual.getBlock()
-                        + " lane=" + pv.lane
-                        + " elapsed=" + elapsedTicks
-                        + " stableSeen=" + (currentTick - pv.firstExpectedTick));
-                consecutiveFailures++;
-                consecutiveRejections++;
-                totalRejections++;
-                if (pv.lane == PlacementLane.DIRECT && !pv.usedSwap) {
-                    scheduleVanillaRetry(pv.pos);
-                } else {
-                    if (pv.lane == PlacementLane.DIRECT && pv.usedSwap) {
-                        PacketTelemetry.mark("place retry skipped used-swap target=" + pv.pos);
-                    }
-                    clearVanillaRetry(pv.pos);
-                }
             } else if (actual.getBlock() != pv.original.getBlock()) {
                 // Another server-side update won the race, so this attempt was rejected.
                 verifyQueue.poll();
@@ -698,12 +630,9 @@ public final class PlacementEngine {
                 consecutiveFailures++;
                 consecutiveRejections++;
                 totalRejections++;
-                if (pv.lane == PlacementLane.DIRECT && !pv.usedSwap) {
+                if (pv.lane == PlacementLane.DIRECT) {
                     scheduleVanillaRetry(pv.pos);
                 } else {
-                    if (pv.lane == PlacementLane.DIRECT && pv.usedSwap) {
-                        PacketTelemetry.mark("place retry skipped used-swap target=" + pv.pos);
-                    }
                     clearVanillaRetry(pv.pos);
                 }
             } else if (elapsedTicks >= VERIFY_TIMEOUT_TICKS) {
@@ -728,7 +657,7 @@ public final class PlacementEngine {
                 // Fix #20: enroll in late-accept watch so we can detect whether
                 // the server's ack just arrived after our timeout window.
                 lateAcceptWatch.put(pv.pos,
-                        new LateAcceptWatch(pv.expected, currentTick, pv.lane, pv.placeTick, -1L));
+                        new LateAcceptWatch(pv.expected, currentTick, pv.lane, pv.placeTick));
                 consecutiveFailures++;
                 totalTimeouts++;
                 consecutiveTimeouts++;
@@ -758,12 +687,9 @@ public final class PlacementEngine {
                             + " consecutiveSwapTimeouts=" + consecutiveSwapTimeouts
                             + " threshold=" + TIMEOUT_DISABLE_THRESHOLD);
                 }
-                if (pv.lane == PlacementLane.DIRECT && !pv.usedSwap) {
+                if (pv.lane == PlacementLane.DIRECT) {
                     scheduleVanillaRetry(pv.pos);
                 } else {
-                    if (pv.lane == PlacementLane.DIRECT && pv.usedSwap) {
-                        PacketTelemetry.mark("place retry skipped used-swap target=" + pv.pos);
-                    }
                     clearVanillaRetry(pv.pos);
                 }
             } else {
@@ -788,31 +714,12 @@ public final class PlacementEngine {
                 BlockState actual = mc.world.getBlockState(pos);
                 /*?}*/
                 if (actual.getBlock() == lw.expected.getBlock()) {
-                    long firstExpectedTick = lw.firstExpectedTick;
-                    if (firstExpectedTick < 0) {
-                        entry.setValue(new LateAcceptWatch(
-                                lw.expected, lw.timeoutTick, lw.lane, lw.placeTick, nowTick));
-                        return false;
-                    }
-                    if (nowTick - firstExpectedTick < VERIFY_STABLE_TICKS) {
-                        return false;
-                    }
-                    clearVanillaRetry(pos);
-                    verificationStates.put(pos,
-                            new VerificationSnapshot(lw.expected, VerificationStatus.ACCEPTED,
-                                    getVerificationSupportPos(pos)));
-                    recentAcceptedSupports.put(pos, nowTick);
-                    verifyQueue.removeIf(pv -> pv.pos.equals(pos));
                     PacketTelemetry.mark("verify late-accept pos=" + pos
                             + " expected=" + lw.expected.getBlock()
                             + " lane=" + lw.lane
                             + " postTimeoutTicks=" + (nowTick - lw.timeoutTick)
                             + " totalElapsed=" + (nowTick - lw.placeTick));
                     return true;
-                }
-                if (lw.firstExpectedTick >= 0) {
-                    entry.setValue(new LateAcceptWatch(
-                            lw.expected, lw.timeoutTick, lw.lane, lw.placeTick, -1L));
                 }
                 return nowTick - lw.timeoutTick >= LATE_WATCH_TICKS;
             });
@@ -855,15 +762,13 @@ public final class PlacementEngine {
                 supportPos != null ? supportPos.immutable() : null,
                 lane,
                 placementUsedInventorySwap,
-                mc.level.getGameTime(),
-                -1L);
+                mc.level.getGameTime());
                 *//*?} else {*/
                 pos.toImmutable(), expected, original,
                 supportPos != null ? supportPos.toImmutable() : null,
                 lane,
                 placementUsedInventorySwap,
-                mc.world.getTime(),
-                -1L);
+                mc.world.getTime());
                 /*?}*/
         placementUsedInventorySwap = false;
         verifyQueue.add(pending);
@@ -894,14 +799,15 @@ public final class PlacementEngine {
         return attempts != null && attempts > 0;
     }
 
-    public static boolean hasScheduledVanillaRetry(BlockPos pos) {
-        return pos != null && vanillaRetryTargets.getOrDefault(immutablePos(pos), 0) > 0;
-    }
-
     private static void clearVanillaRetry(BlockPos pos) {
         if (pos != null) {
             vanillaRetryTargets.remove(immutablePos(pos));
         }
+    }
+
+    /** True if a vanilla retry is queued for this pos (non-consuming). */
+    public static boolean hasScheduledVanillaRetry(BlockPos pos) {
+        return pos != null && vanillaRetryTargets.getOrDefault(immutablePos(pos), 0) > 0;
     }
 
     private static BlockPos immutablePos(BlockPos pos) {
@@ -957,7 +863,7 @@ public final class PlacementEngine {
     }
 
     public static boolean shouldSuppressVanillaMovementPackets() {
-        // Keep vanilla flying packets alive; Grim uses them to close bursts.
+        // Keep vanilla flying packets alive; strict validation uses them to close bursts.
         return false;
     }
 
@@ -1007,26 +913,8 @@ public final class PlacementEngine {
     private static boolean tryEnqueuePlacement(BlockPos target, BlockState desired,
                                                boolean allowSwap,
                                                java.util.function.Predicate<BlockPos> supportFilter) {
-        if (target == null || desired == null) return false;
         if (placementQueue.size() >= PLACEMENT_QUEUE_CAPACITY) return false;
         if (!isPlacementWindowSafe()) return false;
-        /*? if >=26.1 {*//*
-        Minecraft mc = Minecraft.getInstance();
-        if (mc.level == null) return false;
-        BlockState current = mc.level.getBlockState(target);
-        *//*?} else {*/
-        MinecraftClient mc = MinecraftClient.getInstance();
-        if (mc.world == null) return false;
-        BlockState current = mc.world.getBlockState(target);
-        /*?}*/
-        if (isAlreadySatisfiedTarget(current, desired)
-                || (!current.isAir() && !isReplaceableState(current))) {
-            PacketTelemetry.mark("queue enqueue skip target=" + target
-                    + " actual=" + current.getBlock()
-                    + " desired=" + desired.getBlock());
-            clearVanillaRetry(target);
-            return false;
-        }
         /*? if >=26.1 {*//*
         BlockPos imm = target.immutable();
         *//*?} else {*/
@@ -1069,22 +957,14 @@ public final class PlacementEngine {
         // while the entry was sitting in the queue.
         /*? if >=26.1 {*//*
         BlockState current = mc.level.getBlockState(head.target());
+        boolean stillNeeded = current.isAir() || current.canBeReplaced();
         *//*?} else {*/
         BlockState current = mc.world.getBlockState(head.target());
+        boolean stillNeeded = current.isAir() || current.isReplaceable();
         /*?}*/
-        if (isAlreadySatisfiedTarget(current, head.desired())) {
-            PacketTelemetry.mark("queue drain skip target=" + head.target()
-                    + " already-satisfied actual=" + current.getBlock()
-                    + " remaining=" + placementQueue.size());
-            clearVanillaRetry(head.target());
-            return;
-        }
-        boolean stillNeeded = current.isAir() || isReplaceableState(current);
         if (!stillNeeded) {
             PacketTelemetry.mark("queue drain skip target=" + head.target()
-                    + " already-filled actual=" + current.getBlock()
-                    + " remaining=" + placementQueue.size());
-            clearVanillaRetry(head.target());
+                    + " already-filled remaining=" + placementQueue.size());
             return; // discard; next tick will try the next entry
         }
         PacketTelemetry.mark("queue drain target=" + head.target()
@@ -1176,7 +1056,6 @@ public final class PlacementEngine {
         finishingTicks = 0;
         lookSyncTicks = 0;
         lookSyncedForPendingPlacement = false;
-        clearPlacementSlotSyncState();
         lastSentSelectedSlot = -1;
         suppressVanillaMoveOnce = false;
         lastPlacementItem = null;
@@ -1198,13 +1077,6 @@ public final class PlacementEngine {
         pendingSelectionKind = ItemSelectionKind.NONE;
         pendingSelectionStep = ItemSelectionStep.NONE;
         pendingSelectionSettleTicks = 0;
-    }
-
-    private static void clearPlacementSlotSyncState() {
-        carriedSlotSyncedForPendingPlacement = false;
-        carriedSlotSyncSettleTicks = 0;
-        positionSyncedForPendingPlacement = false;
-        positionSyncSettleTicks = 0;
     }
 
     public static void clearCorrectionHistory() {
@@ -1380,7 +1252,6 @@ public final class PlacementEngine {
         pendingSupportFilter = null;
         pendingItem = null;
         clearPendingSelectionState();
-        clearPlacementSlotSyncState();
     }
 
     private static void abortPendingPlacementAttempt() {
@@ -1394,7 +1265,6 @@ public final class PlacementEngine {
         pendingItem = null;
         lookSyncedForPendingPlacement = false;
         clearPendingSelectionState();
-        clearPlacementSlotSyncState();
     }
 
     private static ItemSelectionResult stageHotbarSelection(int slot) {
@@ -1603,9 +1473,6 @@ public final class PlacementEngine {
             Item held = inv.getStack(inv.selectedSlot).getItem();
             /*?}*/
             if (held != pendingItem) {
-                PacketTelemetry.mark("place held-mismatch expected=" + pendingItem
-                        + " held=" + held);
-                clearPlacementSlotSyncState();
                 ItemSelectionResult selection = selectItem(player, mc, pendingItem, true);
                 if (selection == ItemSelectionResult.FAILED) {
                     if (pendingNeedsSneak) {
@@ -1630,31 +1497,12 @@ public final class PlacementEngine {
                     phase = PlacePhase.IDLE;
                     pendingTarget = null;
                     pendingDesired = null;
-                    clearPlacementSlotSyncState();
                     return false;
                 }
                 if (selection == ItemSelectionResult.STAGED) {
                     return false;
                 }
             }
-        }
-
-        if (!carriedSlotSyncedForPendingPlacement) {
-            if (!PrinterNetworkCoordinator.tryAcquire(
-                    PrinterNetworkCoordinator.Lane.INVENTORY,
-                    NETWORK_OWNER, 1, HOTBAR_SELECT_PACKET_SETTLE_TICKS)) {
-                return false;
-            }
-            lastSentSelectedSlot = -1;
-            syncSelectedSlotPacket(player);
-            carriedSlotSyncedForPendingPlacement = true;
-            carriedSlotSyncSettleTicks = HOTBAR_SELECT_PACKET_SETTLE_TICKS;
-            PacketTelemetry.mark("place pre-use slot sync");
-            return false;
-        }
-        if (carriedSlotSyncSettleTicks > 0) {
-            carriedSlotSyncSettleTicks--;
-            return false;
         }
 
         /*? if >=26.1 {*//*
@@ -1771,18 +1619,6 @@ public final class PlacementEngine {
         BlockState hitBlockState = mc.world.getBlockState(hitBlockPos);
         /*?}*/
 
-        if (!pendingAirPlace && isAlreadySatisfiedTarget(targetState, pendingDesired)) {
-            PacketTelemetry.mark("place abort target-satisfied target=" + pendingTarget
-                    + " desired=" + pendingDesired.getBlock()
-                    + " actual=" + targetState.getBlock()
-                    + " face=" + pendingFace
-                    + " hitBlock=" + hitBlockPos
-                    + " hitSide=" + hitSide);
-            clearVanillaRetry(pendingTarget);
-            abortPendingPlacementAttempt();
-            return false;
-        }
-
         /*? if >=26.1 {*//*
         boolean isLiquidPlacement = pendingDesired.getBlock() instanceof LiquidBlock;
         *//*?} else {*/
@@ -1837,41 +1673,6 @@ public final class PlacementEngine {
             }
         }
 
-        /*? if >=26.1 {*//*
-        Vec3 hitLocationForLook = hitResult.getLocation();
-        *//*?} else {*/
-        Vec3d hitLocationForLook = hitResult.getPos();
-        /*?}*/
-        PlacementLook latestLook = computePlacementLook(
-                pendingDesired, eyePos, hitLocationForLook, placeYaw, placePitch);
-        if (!isLookAligned(placeYaw, placePitch, latestLook)) {
-            targetYaw = latestLook.yaw();
-            targetPitch = latestLook.pitch();
-            rotateTicks = 0;
-            lookSyncedForPendingPlacement = false;
-            positionSyncedForPendingPlacement = false;
-            positionSyncSettleTicks = 0;
-            phase = PlacePhase.ROTATING;
-            PacketTelemetry.mark("place retarget look target=" + pendingTarget
-                    + " support=" + hitBlockPos
-                    + " side=" + hitSide
-                    + " yawDiff=" + String.format("%.2f",
-                            wrapDegreesLocal(targetYaw - placeYaw))
-                    + " pitchDiff=" + String.format("%.2f", targetPitch - placePitch));
-            return false;
-        }
-        placeYaw = latestLook.yaw();
-        placePitch = latestLook.pitch();
-
-        String hitPosText;
-        /*? if >=26.1 {*//*
-        Vec3 hitLocationForLog = hitLocationForLook;
-        *//*?} else {*/
-        Vec3d hitLocationForLog = hitLocationForLook;
-        /*?}*/
-        hitPosText = String.format("%.2f,%.2f,%.2f",
-                hitLocationForLog.x, hitLocationForLog.y, hitLocationForLog.z);
-
         if (silentRotation && !singleTickInProgress && usesDirectLookPackets()) {
             if (!PrinterNetworkCoordinator.tryAcquire(
                     PrinterNetworkCoordinator.Lane.LOOK, NETWORK_OWNER, 1, PRE_PLACE_LOOK_SYNC_TICKS)) {
@@ -1891,23 +1692,6 @@ public final class PlacementEngine {
             }
             sendImmediateLookSync(player, placeYaw, placePitch);
             lookSyncedForPendingPlacement = true;
-        }
-
-        if (!positionSyncedForPendingPlacement) {
-            if (!PrinterNetworkCoordinator.tryAcquire(
-                    PrinterNetworkCoordinator.Lane.MOVEMENT,
-                    NETWORK_OWNER, 1, PRE_PLACE_POSITION_SYNC_TICKS)) {
-                return false;
-            }
-            sendImmediatePositionLookSync(player, placeYaw, placePitch);
-            positionSyncedForPendingPlacement = true;
-            positionSyncSettleTicks = PRE_PLACE_POSITION_SYNC_TICKS;
-            PacketTelemetry.mark("place pre-use position sync target=" + pendingTarget);
-            return false;
-        }
-        if (positionSyncSettleTicks > 0) {
-            positionSyncSettleTicks--;
-            return false;
         }
 
         PacketTelemetry.mark("place hand=" + getSelectedItem(player).toString()
@@ -1932,7 +1716,6 @@ public final class PlacementEngine {
                 + " pitch=" + String.format("%.2f", placePitch)
                 + " hitBlock=" + hitBlockPos
                 + " hitSide=" + hitSide
-                + " hitPos=" + hitPosText
                 + " targetState=" + targetState.getBlock()
                 + " hitState=" + hitBlockState.getBlock()
                 + " hit=" + hitResult);
@@ -1946,23 +1729,17 @@ public final class PlacementEngine {
             /*? if >=26.1 {*//*
             InteractionResult result = mc.gameMode.useItem(player, InteractionHand.MAIN_HAND);
             if (result.consumesAction()) {
-                boolean swing = shouldClientSwing(result);
-                if (swing) {
+                if (shouldClientSwing(result)) {
                     player.swing(InteractionHand.MAIN_HAND);
                 }
-                PacketTelemetry.mark("place liquid result=" + result
-                        + " swing=" + swing);
             }
             if (result.consumesAction()) {
             *//*?} else {*/
             ActionResult result = mc.interactionManager.interactItem(player, Hand.MAIN_HAND);
             if (result.isAccepted()) {
-                boolean swing = shouldClientSwing(result);
-                if (swing) {
+                if (shouldClientSwing(result)) {
                     player.swingHand(Hand.MAIN_HAND);
                 }
-                PacketTelemetry.mark("place liquid result=" + result
-                        + " swing=" + swing);
             }
             if (result.isAccepted()) {
             /*?}*/
@@ -1985,7 +1762,7 @@ public final class PlacementEngine {
                 placed = false;
             }
         } else {
-            // Match Baritone: validated raycast, then vanilla block interaction.
+            // Keep normal building on one explicit packet lane.
             boolean vanillaRetry = consumeVanillaRetry(pendingTarget);
             if (!vanillaRetry && trySequencedBlockPlacement(player, hitResult)) {
                 sendPlacementSwing(player);
@@ -1995,40 +1772,27 @@ public final class PlacementEngine {
                 placed = true;
             } else {
                 PacketTelemetry.mark("place lane=vanilla target=" + pendingTarget
-                        + " retry=" + vanillaRetry
-                        + " directFailure=" + lastSequenceFailure);
+                        + " retry=" + vanillaRetry);
             /*? if >=26.1 {*//*
             InteractionResult result = mc.gameMode.useItemOn(player, InteractionHand.MAIN_HAND, hitResult);
             if (result.consumesAction()) {
-                boolean swing = shouldClientSwing(result);
-                if (swing) {
+                if (shouldClientSwing(result)) {
                     player.swing(InteractionHand.MAIN_HAND);
                 }
-                PacketTelemetry.mark("place result=" + result
-                        + " swing=" + swing
-                        + " target=" + pendingTarget);
                 enqueueVerification(pendingTarget, pendingDesired, targetState, hitBlockPos, PlacementLane.VANILLA);
                 placed = true;
             } else {
-                PacketTelemetry.mark("place result-reject=" + result
-                        + " target=" + pendingTarget);
                 placed = false;
             }
             *//*?} else {*/
             ActionResult result = mc.interactionManager.interactBlock(player, Hand.MAIN_HAND, hitResult);
             if (result.isAccepted()) {
-                boolean swing = shouldClientSwing(result);
-                if (swing) {
+                if (shouldClientSwing(result)) {
                     player.swingHand(Hand.MAIN_HAND);
                 }
-                PacketTelemetry.mark("place result=" + result
-                        + " swing=" + swing
-                        + " target=" + pendingTarget);
                 enqueueVerification(pendingTarget, pendingDesired, targetState, hitBlockPos, PlacementLane.VANILLA);
                 placed = true;
             } else {
-                PacketTelemetry.mark("place result-reject=" + result
-                        + " target=" + pendingTarget);
                 placed = false;
             }
             /*?}*/
@@ -2064,7 +1828,6 @@ public final class PlacementEngine {
             pendingItem = null;
             lookSyncedForPendingPlacement = false;
             clearPendingSelectionState();
-            clearPlacementSlotSyncState();
         }
 
         return placed;
@@ -2112,7 +1875,6 @@ public final class PlacementEngine {
         pendingItem = null;
         lookSyncedForPendingPlacement = false;
         clearPendingSelectionState();
-        clearPlacementSlotSyncState();
         finishingTicks = 0;
         return false;
     }
@@ -2328,13 +2090,6 @@ public final class PlacementEngine {
 
         // Wrong orientation → break and re-place
         BlockState existing = world.getBlockState(target);
-        if (isAlreadySatisfiedTarget(existing, desired)) {
-            clearVanillaRetry(target);
-            PacketTelemetry.mark("place skip target-satisfied target=" + target
-                    + " desired=" + desired.getBlock()
-                    + " actual=" + existing.getBlock());
-            return false;
-        }
         /*? if >=26.1 {*//*
         if (!existing.isAir() && !existing.canBeReplaced()
         *//*?} else {*/
@@ -2475,11 +2230,8 @@ public final class PlacementEngine {
             BlockPos supportPos = target.offset(face);
             /*?}*/
             if (isFreshAcceptedSupport(supportPos, currentTick)) {
-                long age = acceptedSupportAge(supportPos, currentTick);
                 PacketTelemetry.mark("place defer fresh-support target=" + target
-                        + " support=" + supportPos
-                        + " age=" + age
-                        + " wait=" + RECENT_SUPPORT_SETTLE_TICKS);
+                        + " support=" + supportPos);
                 return false;
             }
         }
@@ -2573,7 +2325,6 @@ public final class PlacementEngine {
         savedPitch = player.getPitch();
         /*?}*/
         clearPendingSelectionState();
-        clearPlacementSlotSyncState();
         ItemSelectionResult selection = selectItem(player, mc, requiredItem, allowSwap);
         if (selection == ItemSelectionResult.FAILED) {
             pendingTarget = null;
@@ -2583,7 +2334,6 @@ public final class PlacementEngine {
             pendingAirPlace = false;
             pendingSupportFilter = null;
             pendingItem = null;
-            clearPlacementSlotSyncState();
             return false;
         }
         if (selection == ItemSelectionResult.STAGED) {
@@ -2621,20 +2371,12 @@ public final class PlacementEngine {
     }
     /*?}*/
 
-    /**
-     * Effective max placement reach (blocks). Reads the player's
-     * {@code block_interaction_range} attribute (1.20.5+) so a survival player
-     * gets the vanilla 4.5, a creative player the 6.0 they're entitled to, and
-     * any server-modified attribute is honored. Subtracts a small AC safety
-     * margin and floors at {@link #SAFE_PLACE_REACH_BLOCKS} to preserve the
-     * legacy minimum on misbehaving setups.
-     *
-     * <p>Rationale: vanilla MC sends placement packets out to the attribute
-     * value, and Grim/other AC follow the same attribute. The previous
-     * hardcoded 3.85 was unnecessarily conservative \u2014 it caused legitimate
-     * edge-of-reach placements to be rejected by the engine before any packet
-     * was sent, even though both vanilla and AC would have accepted them.
-     */
+    // Effective max placement reach (blocks). Reads block_interaction_range
+    // (1.20.5+) so survival gets 4.5, creative 6.0, server overrides honored.
+    // Subtracts a small safety margin and floors at SAFE_PLACE_REACH_BLOCKS.
+    // Vanilla sends placement packets to the attribute value and strict
+    // validation follows the same attribute; the old hardcoded 3.85 was too
+    // conservative and rejected legitimate edge-of-reach placements.
     /*? if >=26.1 {*//*
     private static double effectivePlaceReach(LocalPlayer player) {
         double attr;
@@ -2661,7 +2403,7 @@ public final class PlacementEngine {
     }
     /*?}*/
 
-    /** Squared form of {@link #effectivePlaceReach} for distance comparisons. */
+    /** Squared form of effectivePlaceReach for distance comparisons. */
     /*? if >=26.1 {*//*
     private static double effectivePlaceReachSq(LocalPlayer player) {
     *//*?} else {*/
@@ -2824,7 +2566,6 @@ public final class PlacementEngine {
         savedPitch = player.getPitch();
         /*?}*/
         clearPendingSelectionState();
-        clearPlacementSlotSyncState();
         ItemSelectionResult selection = selectItem(player, mc, bucketItem, allowSwap);
         if (selection == ItemSelectionResult.FAILED) {
             pendingTarget = null;
@@ -2833,7 +2574,6 @@ public final class PlacementEngine {
             pendingNeedsSneak = false;
             pendingAirPlace = false;
             pendingItem = null;
-            clearPlacementSlotSyncState();
             return false;
         }
         if (selection == ItemSelectionResult.STAGED) {
@@ -2847,7 +2587,7 @@ public final class PlacementEngine {
     }
     public static int placeBatch(List<BlockPos> targets, List<BlockState> states,
                                  boolean allowSwap) {
-        // Strict anti-cheat and region-threaded servers expect block use
+        // Strict server validation and region-threaded servers expect block use
         // packets to stay aligned to world ticks. Bursting several placements
         // in one client tick causes more harm than it saves, so keep batch
         // placement disabled and fall back to the single-placement path.
@@ -2973,118 +2713,6 @@ public final class PlacementEngine {
         return true;
     }
 
-    /*? if >=26.1 {*//*
-    private static Vec3[] getBaritoneFaceHits(Level world, BlockPos neighbor, Direction clickSide) {
-        BlockState state = world.getBlockState(neighbor);
-        net.minecraft.world.phys.shapes.VoxelShape shape = state.getShape(world, neighbor);
-        if (shape.isEmpty()) {
-            return new Vec3[]{getFaceCenterHit(neighbor, clickSide)};
-        }
-        net.minecraft.world.phys.AABB box = shape.bounds();
-        double minX = neighbor.getX() + box.minX;
-        double maxX = neighbor.getX() + box.maxX;
-        double minY = neighbor.getY() + box.minY;
-        double maxY = neighbor.getY() + box.maxY;
-        double minZ = neighbor.getZ() + box.minZ;
-        double maxZ = neighbor.getZ() + box.maxZ;
-        double midX = (minX + maxX) * 0.5;
-        double midY = (minY + maxY) * 0.5;
-        double midZ = (minZ + maxZ) * 0.5;
-
-        return switch (clickSide) {
-            case UP -> new Vec3[]{
-                    new Vec3(midX, maxY, midZ),
-                    new Vec3(minX + (maxX - minX) * 0.9, maxY, midZ),
-                    new Vec3(minX + (maxX - minX) * 0.1, maxY, midZ),
-                    new Vec3(midX, maxY, minZ + (maxZ - minZ) * 0.9),
-                    new Vec3(midX, maxY, minZ + (maxZ - minZ) * 0.1)
-            };
-            case DOWN -> new Vec3[]{
-                    new Vec3(midX, minY, midZ),
-                    new Vec3(minX + (maxX - minX) * 0.9, minY, midZ),
-                    new Vec3(minX + (maxX - minX) * 0.1, minY, midZ),
-                    new Vec3(midX, minY, minZ + (maxZ - minZ) * 0.9),
-                    new Vec3(midX, minY, minZ + (maxZ - minZ) * 0.1)
-            };
-            case NORTH -> new Vec3[]{
-                    new Vec3(midX, minY + (maxY - minY) * 0.75, minZ),
-                    new Vec3(midX, minY + (maxY - minY) * 0.25, minZ),
-                    new Vec3(midX, midY, minZ)
-            };
-            case SOUTH -> new Vec3[]{
-                    new Vec3(midX, minY + (maxY - minY) * 0.75, maxZ),
-                    new Vec3(midX, minY + (maxY - minY) * 0.25, maxZ),
-                    new Vec3(midX, midY, maxZ)
-            };
-            case EAST -> new Vec3[]{
-                    new Vec3(maxX, minY + (maxY - minY) * 0.75, midZ),
-                    new Vec3(maxX, minY + (maxY - minY) * 0.25, midZ),
-                    new Vec3(maxX, midY, midZ)
-            };
-            case WEST -> new Vec3[]{
-                    new Vec3(minX, minY + (maxY - minY) * 0.75, midZ),
-                    new Vec3(minX, minY + (maxY - minY) * 0.25, midZ),
-                    new Vec3(minX, midY, midZ)
-            };
-        };
-    }
-    *//*?} else {*/
-    private static Vec3d[] getBaritoneFaceHits(World world, BlockPos neighbor, Direction clickSide) {
-        BlockState state = world.getBlockState(neighbor);
-        net.minecraft.util.shape.VoxelShape shape = state.getOutlineShape(world, neighbor);
-        if (shape.isEmpty()) {
-            return new Vec3d[]{getFaceCenterHit(neighbor, clickSide)};
-        }
-        net.minecraft.util.math.Box box = shape.getBoundingBox();
-        double minX = neighbor.getX() + box.minX;
-        double maxX = neighbor.getX() + box.maxX;
-        double minY = neighbor.getY() + box.minY;
-        double maxY = neighbor.getY() + box.maxY;
-        double minZ = neighbor.getZ() + box.minZ;
-        double maxZ = neighbor.getZ() + box.maxZ;
-        double midX = (minX + maxX) * 0.5;
-        double midY = (minY + maxY) * 0.5;
-        double midZ = (minZ + maxZ) * 0.5;
-
-        return switch (clickSide) {
-            case UP -> new Vec3d[]{
-                    new Vec3d(midX, maxY, midZ),
-                    new Vec3d(minX + (maxX - minX) * 0.9, maxY, midZ),
-                    new Vec3d(minX + (maxX - minX) * 0.1, maxY, midZ),
-                    new Vec3d(midX, maxY, minZ + (maxZ - minZ) * 0.9),
-                    new Vec3d(midX, maxY, minZ + (maxZ - minZ) * 0.1)
-            };
-            case DOWN -> new Vec3d[]{
-                    new Vec3d(midX, minY, midZ),
-                    new Vec3d(minX + (maxX - minX) * 0.9, minY, midZ),
-                    new Vec3d(minX + (maxX - minX) * 0.1, minY, midZ),
-                    new Vec3d(midX, minY, minZ + (maxZ - minZ) * 0.9),
-                    new Vec3d(midX, minY, minZ + (maxZ - minZ) * 0.1)
-            };
-            case NORTH -> new Vec3d[]{
-                    new Vec3d(midX, minY + (maxY - minY) * 0.75, minZ),
-                    new Vec3d(midX, minY + (maxY - minY) * 0.25, minZ),
-                    new Vec3d(midX, midY, minZ)
-            };
-            case SOUTH -> new Vec3d[]{
-                    new Vec3d(midX, minY + (maxY - minY) * 0.75, maxZ),
-                    new Vec3d(midX, minY + (maxY - minY) * 0.25, maxZ),
-                    new Vec3d(midX, midY, maxZ)
-            };
-            case EAST -> new Vec3d[]{
-                    new Vec3d(maxX, minY + (maxY - minY) * 0.75, midZ),
-                    new Vec3d(maxX, minY + (maxY - minY) * 0.25, midZ),
-                    new Vec3d(maxX, midY, midZ)
-            };
-            case WEST -> new Vec3d[]{
-                    new Vec3d(minX, minY + (maxY - minY) * 0.75, midZ),
-                    new Vec3d(minX, minY + (maxY - minY) * 0.25, midZ),
-                    new Vec3d(minX, midY, midZ)
-            };
-        };
-    }
-    /*?}*/
-
     /** Computes a hit position on the given face via ray cast, falling back to face center. */
     /*? if >=26.1 {*//*
     private static Vec3 getFaceCenterHit(BlockPos neighbor, Direction face) {
@@ -3097,52 +2725,6 @@ public final class PlacementEngine {
                 .add(Vec3d.of(face.getVector()).multiply(0.5));
     }
     /*?}*/
-
-    /*? if >=26.1 {*//*
-    private static Vec3 getFaceEdgeHit(BlockPos neighbor, Direction face, Vec3 eyePos) {
-        double x = edgeCoordinateTowardEye(eyePos.x, neighbor.getX());
-        double y = edgeCoordinateTowardEye(eyePos.y, neighbor.getY());
-        double z = edgeCoordinateTowardEye(eyePos.z, neighbor.getZ());
-        switch (face.getAxis()) {
-            case X -> x = fixedFaceCoordinate(neighbor.getX(), face, Direction.Axis.X);
-            case Y -> y = fixedFaceCoordinate(neighbor.getY(), face, Direction.Axis.Y);
-            case Z -> z = fixedFaceCoordinate(neighbor.getZ(), face, Direction.Axis.Z);
-        }
-        return new Vec3(x, y, z);
-    }
-    *//*?} else {*/
-    private static Vec3d getFaceEdgeHit(BlockPos neighbor, Direction face, Vec3d eyePos) {
-        double x = edgeCoordinateTowardEye(eyePos.x, neighbor.getX());
-        double y = edgeCoordinateTowardEye(eyePos.y, neighbor.getY());
-        double z = edgeCoordinateTowardEye(eyePos.z, neighbor.getZ());
-        switch (face.getAxis()) {
-            case X -> x = fixedFaceCoordinate(neighbor.getX(), face, Direction.Axis.X);
-            case Y -> y = fixedFaceCoordinate(neighbor.getY(), face, Direction.Axis.Y);
-            case Z -> z = fixedFaceCoordinate(neighbor.getZ(), face, Direction.Axis.Z);
-        }
-        return new Vec3d(x, y, z);
-    }
-    /*?}*/
-
-    private static double edgeCoordinateTowardEye(double eyeCoordinate, int blockOrigin) {
-        double center = blockOrigin + 0.5;
-        return eyeCoordinate < center
-                ? blockOrigin + FACE_EDGE_INSET
-                : blockOrigin + 1.0 - FACE_EDGE_INSET;
-    }
-
-    private static double fixedFaceCoordinate(int blockOrigin, Direction face, Direction.Axis axis) {
-        if (face.getAxis() != axis) {
-            return blockOrigin + 0.5;
-        }
-        /*? if >=26.1 {*//*
-        return face.getAxisDirection() == Direction.AxisDirection.POSITIVE
-                ? blockOrigin + 1.0 : blockOrigin;
-        *//*?} else {*/
-        return face.getDirection() == Direction.AxisDirection.POSITIVE
-                ? blockOrigin + 1.0 : blockOrigin;
-        /*?}*/
-    }
 
     /** Computes a hit position on the given face via ray cast, falling back to face center. */
     /*? if >=26.1 {*//*
@@ -3329,19 +2911,73 @@ public final class PlacementEngine {
     }
     *//*?} else {*/
     private static boolean trySequencedBlockPlacement(ClientPlayerEntity player, BlockHitResult hitResult) {
-        if (player == null || player.networkHandler == null || hitResult == null) {
-            lastSequenceFailure = "missing-player-or-hit";
+        MinecraftClient mc = MinecraftClient.getInstance();
+        if (mc.world == null) {
+            lastSequenceFailure = "no-world";
+            PacketTelemetry.mark("place direct unavailable reason=" + lastSequenceFailure);
             return false;
         }
-        Integer sequence = nextBlockUseSequence();
-        if (sequence == null) {
+
+        lastSequenceFailure = "lookup-handler";
+        Object pendingUpdateManager = invokeNoArg(mc.world,
+                "getPendingUpdateManager",
+                "getBlockStatePredictionHandler",
+                "method_41925");
+        if (pendingUpdateManager == null) {
+            pendingUpdateManager = findMemberByTypeName(mc.world, "PendingUpdateManager");
+        }
+        if (pendingUpdateManager == null) {
+            pendingUpdateManager = findMemberByTypeName(mc.world, "BlockStatePredictionHandler");
+        }
+        if (pendingUpdateManager == null) {
+            pendingUpdateManager = findMemberByTypeName(mc.world, "class_7202");
+        }
+        if (pendingUpdateManager == null) {
+            lastSequenceFailure = "no-prediction-handler world=" + mc.world.getClass().getName();
+            PacketTelemetry.mark("place direct unavailable reason=" + lastSequenceFailure);
             return false;
         }
-        lastSentBlockUseSequence = sequence;
-        player.networkHandler.sendPacket(new PlayerInteractBlockC2SPacket(
-                Hand.MAIN_HAND, hitResult, sequence));
-        lastSequenceFailure = "";
-        return true;
+
+        lastSequenceFailure = "start-predicting handler=" + pendingUpdateManager.getClass().getName();
+        Object sequenceHandle = invokeNoArg(pendingUpdateManager,
+                "incrementSequence",
+                "startPredicting",
+                "method_41937");
+        if (sequenceHandle == null) {
+            lastSequenceFailure = "no-start-predicting handler=" + pendingUpdateManager.getClass().getName();
+            PacketTelemetry.mark("place direct unavailable reason=" + lastSequenceFailure);
+            return false;
+        }
+
+        try {
+            lastSequenceFailure = "read-sequence handle=" + sequenceHandle.getClass().getName();
+            Object sequence = invokeNoArg(sequenceHandle,
+                    "getSequence",
+                    "currentSequence",
+                    "method_41942");
+            if (sequence instanceof Integer value) {
+                lastSequenceFailure = "";
+                lastSentBlockUseSequence = value;
+                // Swap item to offhand, place from offhand, swap back — keeps strict server validation happy.
+                player.networkHandler.sendPacket(
+                        new net.minecraft.network.packet.c2s.play.PlayerActionC2SPacket(
+                                net.minecraft.network.packet.c2s.play.PlayerActionC2SPacket.Action.SWAP_ITEM_WITH_OFFHAND,
+                                net.minecraft.util.math.BlockPos.ORIGIN, net.minecraft.util.math.Direction.DOWN));
+                player.networkHandler.sendPacket(
+                        new net.minecraft.network.packet.c2s.play.PlayerInteractBlockC2SPacket(
+                                Hand.OFF_HAND, hitResult, value));
+                player.networkHandler.sendPacket(
+                        new net.minecraft.network.packet.c2s.play.PlayerActionC2SPacket(
+                                net.minecraft.network.packet.c2s.play.PlayerActionC2SPacket.Action.SWAP_ITEM_WITH_OFFHAND,
+                                net.minecraft.util.math.BlockPos.ORIGIN, net.minecraft.util.math.Direction.DOWN));
+                return true;
+            }
+            lastSequenceFailure = "no-current-sequence handle=" + sequenceHandle.getClass().getName();
+            PacketTelemetry.mark("place direct unavailable reason=" + lastSequenceFailure);
+            return false;
+        } finally {
+            closeQuietly(sequenceHandle);
+        }
     }
     /*?}*/
 
@@ -3596,6 +3232,7 @@ public final class PlacementEngine {
             setLookRotation(player, yaw, pitch);
             return;
         }
+        yaw = wrapDegrees180(yaw);
         /*? if >=26.1 {*//*
         pitch = Mth.clamp(pitch, -90.0f, 90.0f);
         *//*?} else {*/
@@ -3614,6 +3251,7 @@ public final class PlacementEngine {
 
     /*? if >=26.1 {*//*
     private static void sendImmediateLookSync(LocalPlayer player, float yaw, float pitch) {
+        yaw = wrapDegrees180(yaw);
         pitch = Mth.clamp(pitch, -90.0f, 90.0f);
         player.connection.send(
                 new ServerboundMovePlayerPacket.Rot(yaw, pitch,
@@ -3621,29 +3259,10 @@ public final class PlacementEngine {
     }
     *//*?} else {*/
     private static void sendImmediateLookSync(ClientPlayerEntity player, float yaw, float pitch) {
+        yaw = wrapDegrees180(yaw);
         pitch = MathHelper.clamp(pitch, -90.0f, 90.0f);
         player.networkHandler.sendPacket(
                 new PlayerMoveC2SPacket.LookAndOnGround(
-                        yaw, pitch,
-                        player.isOnGround(), player.horizontalCollision));
-    }
-    /*?}*/
-
-    /*? if >=26.1 {*//*
-    private static void sendImmediatePositionLookSync(LocalPlayer player, float yaw, float pitch) {
-        pitch = Mth.clamp(pitch, -90.0f, 90.0f);
-        player.connection.send(
-                new ServerboundMovePlayerPacket.PosRot(
-                        player.getX(), player.getY(), player.getZ(),
-                        yaw, pitch,
-                        player.onGround(), player.horizontalCollision));
-    }
-    *//*?} else {*/
-    private static void sendImmediatePositionLookSync(ClientPlayerEntity player, float yaw, float pitch) {
-        pitch = MathHelper.clamp(pitch, -90.0f, 90.0f);
-        player.networkHandler.sendPacket(
-                new PlayerMoveC2SPacket.Full(
-                        player.getX(), player.getY(), player.getZ(),
                         yaw, pitch,
                         player.isOnGround(), player.horizontalCollision));
     }
@@ -3659,6 +3278,7 @@ public final class PlacementEngine {
             setLookRotation(player, yaw, pitch);
             return;
         }
+        yaw = wrapDegrees180(yaw);
         /*? if >=26.1 {*//*
         pitch = Mth.clamp(pitch, -90.0f, 90.0f);
         *//*?} else {*/
@@ -3685,10 +3305,8 @@ public final class PlacementEngine {
         /*?}*/
     }
 
-    /**
-     * Sets yaw/pitch with jitter, relying on vanilla's end-of-tick
-     * flying packet to avoid anti-cheat duplicate-packet flags.
-     */
+    // Sets yaw/pitch with jitter, relying on vanilla's end-of-tick flying
+    // packet to avoid duplicate-packet flags under strict server validation.
     /*? if >=26.1 {*//*
     public static void setLookRotation(LocalPlayer player, float yaw, float pitch) {
     *//*?} else {*/
@@ -3700,7 +3318,7 @@ public final class PlacementEngine {
         *//*?} else {*/
         pitch = MathHelper.clamp(pitch + jitter, -90.0f, 90.0f);
         /*?}*/
-        yaw += jitter;
+        yaw = wrapDegrees180(yaw + jitter);
         /*? if >=26.1 {*//*
         player.setYRot(yaw);
         *//*?} else {*/
@@ -3959,7 +3577,7 @@ public final class PlacementEngine {
         int containerInvSlot = inventorySlotToContainerSlot(inventorySlot);
         int containerHotbarSlot = inventorySlotToContainerSlot(selectedSlot);
         // Three PICKUP clicks: pick up from inv, swap into hotbar, return old hotbar item to inv.
-        // Avoids SWAP click type which ViaVersion may mishandle when downgrading 1.21.5+ packet format.
+        // Avoids SWAP click type which protocol-translation layers may mishandle when downgrading 1.21.5+ packet format.
         mc.gameMode.handleContainerInput(player.containerMenu.containerId, containerInvSlot, 0, ContainerInput.PICKUP, player);
         mc.gameMode.handleContainerInput(player.containerMenu.containerId, containerHotbarSlot, 0, ContainerInput.PICKUP, player);
         mc.gameMode.handleContainerInput(player.containerMenu.containerId, containerInvSlot, 0, ContainerInput.PICKUP, player);
@@ -3977,7 +3595,7 @@ public final class PlacementEngine {
         int containerInvSlot = inventorySlotToContainerSlot(inventorySlot);
         int containerHotbarSlot = inventorySlotToContainerSlot(selectedSlot);
         // Three PICKUP clicks: pick up from inv, swap into hotbar, return old hotbar item to inv.
-        // Avoids SWAP click type which ViaVersion may mishandle when downgrading 1.21.5+ packet format.
+        // Avoids SWAP click type which protocol-translation layers may mishandle when downgrading 1.21.5+ packet format.
         mc.interactionManager.clickSlot(player.currentScreenHandler.syncId, containerInvSlot, 0, SlotActionType.PICKUP, player);
         mc.interactionManager.clickSlot(player.currentScreenHandler.syncId, containerHotbarSlot, 0, SlotActionType.PICKUP, player);
         mc.interactionManager.clickSlot(player.currentScreenHandler.syncId, containerInvSlot, 0, SlotActionType.PICKUP, player);
@@ -5150,34 +4768,17 @@ public final class PlacementEngine {
         return null; // no preferred face available — caller falls back to default
     }
 
-    /**
-     * Detects whether two states of the same block differ in a property the
-     * printer can correct by re-placing.
-     *
-     * <p>Covered (placement-controlled): {@code HORIZONTAL_FACING}, {@code FACING},
-     * {@code AXIS}, {@code HALF}, {@code SLAB_TYPE}, {@code ROTATION_16},
-     * {@code HOPPER_FACING}, {@code DOOR_HINGE}. These are all set by the
-     * server's {@code getStateForPlacement} from the click context (player look
-     * + hit position), so re-placing with a corrected hit/yaw fixes them.
-     *
-     * <p>Intentionally NOT covered (server-derived from neighbors):
-     * {@code STAIRS_SHAPE}, wall connections ({@code WALL_NORTH/EAST/SOUTH/WEST}
-     * + {@code UP}), fence/pane/iron-bar connection booleans ({@code NORTH/EAST/
-     * SOUTH/WEST}), redstone wire side states, {@code POWER}, {@code CHEST_TYPE}.
-     * These auto-update via {@code Block.updateShape} when neighbors change, so
-     * the server fixes them once schematic placement reaches the missing
-     * neighbor. Re-placing in advance burns a correction attempt without
-     * progress (the same wrong state would re-derive from the still-incomplete
-     * neighborhood).
-     *
-     * <p>Also intentionally NOT covered (set by post-placement use, not
-     * placement): {@code OPEN}, {@code POWERED}, {@code LIT}, {@code OCCUPIED},
-     * repeater {@code DELAY}/{@code LOCKED}, comparator {@code MODE}.
-     * Re-placing always produces the default and would loop.
-     *
-     * <p>{@code WATERLOGGED} is a known gap (no water-bucket integration); it
-     * is tracked separately and intentionally not flagged here to avoid spam.
-     */
+    // Detects whether two states of the same block differ in a property the
+    // printer can correct by re-placing.
+    // Covered (placement-controlled): HORIZONTAL_FACING, FACING, AXIS, HALF,
+    // SLAB_TYPE, ROTATION_16, HOPPER_FACING, DOOR_HINGE — set by getStateForPlacement
+    // from click context, so re-placing with corrected hit/yaw fixes them.
+    // Not covered (neighbor-derived): STAIRS_SHAPE, wall/fence/pane connections,
+    // redstone wire sides, POWER, CHEST_TYPE — auto-update via updateShape, so
+    // re-placing early just burns an attempt.
+    // Not covered (post-placement use): OPEN, POWERED, LIT, OCCUPIED, repeater
+    // DELAY/LOCKED, comparator MODE — re-placing yields the default and loops.
+    // WATERLOGGED is a known gap (no water-bucket integration), tracked separately.
     public static boolean isOrientationMismatch(BlockState existing, BlockState desired) {
         if (existing.getBlock() != desired.getBlock()) return false;
 
@@ -5365,69 +4966,6 @@ public final class PlacementEngine {
         /*?}*/
     }
 
-    /*? if >=26.1 {*//*
-    private static PlacementLook computePlacementLook(BlockState desired, Vec3 eyePos,
-                                                      Vec3 hitPos, float currentYaw,
-                                                      float currentPitch) {
-        Vec3 toHit = hitPos.subtract(eyePos);
-        double horizDist = Math.sqrt(toHit.x * toHit.x + toHit.z * toHit.z);
-        float hitYaw = (float) (Mth.atan2(toHit.z, toHit.x) * (180.0 / Math.PI)) - 90.0f;
-        float hitPitch = (float) -(Mth.atan2(toHit.y, horizDist) * (180.0 / Math.PI));
-        float desiredYaw = hitYaw;
-        float desiredPitch = hitPitch;
-        Float facingYaw = getRequiredYaw(desired);
-        Float facingPitch = getRequiredPitch(desired);
-        if (facingYaw != null) {
-            float orientationPitch = facingPitch != null
-                    ? facingPitch
-                    : computePitchToward(eyePos, hitPos);
-            if (isOrientationLookCloseToHit(facingYaw, orientationPitch, hitYaw, hitPitch)) {
-                desiredYaw = facingYaw;
-                desiredPitch = orientationPitch;
-            }
-        } else if (facingPitch != null
-                && isOrientationLookCloseToHit(hitYaw, facingPitch, hitYaw, hitPitch)) {
-            desiredPitch = facingPitch;
-        }
-        return new PlacementLook(
-                snapToMouseGCD(desiredYaw, currentYaw),
-                Mth.clamp(snapToMouseGCD(desiredPitch, currentPitch), -90.0f, 90.0f));
-    }
-    *//*?} else {*/
-    private static PlacementLook computePlacementLook(BlockState desired, Vec3d eyePos,
-                                                      Vec3d hitPos, float currentYaw,
-                                                      float currentPitch) {
-        Vec3d toHit = hitPos.subtract(eyePos);
-        double horizDist = Math.sqrt(toHit.x * toHit.x + toHit.z * toHit.z);
-        float hitYaw = (float) (MathHelper.atan2(toHit.z, toHit.x) * (180.0 / Math.PI)) - 90.0f;
-        float hitPitch = (float) -(MathHelper.atan2(toHit.y, horizDist) * (180.0 / Math.PI));
-        float desiredYaw = hitYaw;
-        float desiredPitch = hitPitch;
-        Float facingYaw = getRequiredYaw(desired);
-        Float facingPitch = getRequiredPitch(desired);
-        if (facingYaw != null) {
-            float orientationPitch = facingPitch != null
-                    ? facingPitch
-                    : computePitchToward(eyePos, hitPos);
-            if (isOrientationLookCloseToHit(facingYaw, orientationPitch, hitYaw, hitPitch)) {
-                desiredYaw = facingYaw;
-                desiredPitch = orientationPitch;
-            }
-        } else if (facingPitch != null
-                && isOrientationLookCloseToHit(hitYaw, facingPitch, hitYaw, hitPitch)) {
-            desiredPitch = facingPitch;
-        }
-        return new PlacementLook(
-                snapToMouseGCD(desiredYaw, currentYaw),
-                MathHelper.clamp(snapToMouseGCD(desiredPitch, currentPitch), -90.0f, 90.0f));
-    }
-    /*?}*/
-
-    private static boolean isLookAligned(float currentYaw, float currentPitch, PlacementLook look) {
-        return Math.abs(wrapDegreesLocal(look.yaw() - currentYaw)) < CONVERGE_THRESHOLD
-                && Math.abs(look.pitch() - currentPitch) < CONVERGE_THRESHOLD;
-    }
-
     private static boolean isOrientationLookCloseToHit(float yaw, float pitch,
                                                        float hitYaw, float hitPitch) {
         return Math.abs(wrapDegreesLocal(yaw - hitYaw)) <= ORIENTATION_LOOK_MAX_YAW_DIFF
@@ -5439,6 +4977,11 @@ public final class PlacementEngine {
         if (wrapped >= 180.0f) wrapped -= 360.0f;
         if (wrapped < -180.0f) wrapped += 360.0f;
         return wrapped;
+    }
+
+    /** Wraps a yaw to [-180, 180) so unbounded accumulation never reaches the server. */
+    private static float wrapDegrees180(float deg) {
+        return ((deg % 360f) + 540f) % 360f - 180f;
     }
 
     private static float snapToMouseGCD(float desired, float serverCurrent) {
@@ -5840,23 +5383,6 @@ public final class PlacementEngine {
     }
 
     /*? if >=26.1 {*//*
-    private static boolean canReachClickSideFromEye(Vec3 eyePos, BlockPos support, Direction clickSide) {
-    *//*?} else {*/
-    private static boolean canReachClickSideFromEye(Vec3d eyePos, BlockPos support, Direction clickSide) {
-    /*?}*/
-        if (eyePos == null || support == null || clickSide == null) {
-            return false;
-        }
-        return switch (clickSide) {
-            case EAST -> eyePos.x > support.getX() + 1.0 + FACE_VISIBILITY_MARGIN;
-            case WEST -> eyePos.x < support.getX() - FACE_VISIBILITY_MARGIN;
-            case SOUTH -> eyePos.z > support.getZ() + 1.0 + FACE_VISIBILITY_MARGIN;
-            case NORTH -> eyePos.z < support.getZ() - FACE_VISIBILITY_MARGIN;
-            default -> true;
-        };
-    }
-
-    /*? if >=26.1 {*//*
     private static BlockHitResult findVisiblePlacementHit(LocalPlayer player, Level world,
                                                           BlockPos target, BlockState desired,
                                                           Direction face) {
@@ -5930,12 +5456,6 @@ public final class PlacementEngine {
             return null;
         }
         Direction clickSide = face.getOpposite();
-        if (!canReachClickSideFromEye(eyePos, neighbor, clickSide)) {
-            recordProbeFailure("wrong-side face=" + face
-                    + " clickSide=" + clickSide
-                    + " neighbor=" + neighbor.getX() + "," + neighbor.getY() + "," + neighbor.getZ(), 4);
-            return null;
-        }
         // Fix #12 diagnostic: track the closest-to-success failure mode
         // across all probes so we can identify the actual occlusion cause.
         int probesTooFar = 0;
@@ -5959,87 +5479,83 @@ public final class PlacementEngine {
         // is non-trivial and the value is constant for the whole probe sweep.
         double probeReachSq = effectivePlaceReachSq(player);
 
-        /*? if >=26.1 {*//*
-        Vec3[] baseHits = getBaritoneFaceHits(world, neighbor, clickSide);
-        for (Vec3 baseHit : baseHits) {
-            for (double[] probe : probes) {
-                Vec3 hitPos = baseHit;
-                hitPos = adjustHitForHalf(hitPos, neighbor, clickSide, desired);
-                hitPos = adjustHitForDoorHinge(hitPos, neighbor, desired);
-                hitPos = offsetFaceHit(hitPos, neighbor, clickSide, probe[0], probe[1]);
-                if (eyePos.distanceToSqr(hitPos) > probeReachSq) {
-                    probesTooFar++;
-                    continue;
-                }
-                HitResult sight = world.clip(new ClipContext(
-                        eyePos,
-                        hitPos,
-                        ClipContext.Block.COLLIDER,
-                        ClipContext.Fluid.NONE,
-                        player));
-                if (sight.getType() != HitResult.Type.BLOCK) {
-                    probesMissed++;
-                    continue;
-                }
-                BlockHitResult blockSight = (BlockHitResult) sight;
-                if (blockSight.getBlockPos().equals(neighbor)
-                        && blockSight.getDirection() == clickSide) {
-                    return blockSight;
-                }
-                if (!requireExactFace
-                        && blockSight.getBlockPos().equals(neighbor)
-                        && canProbeAlternateSupportFaces(desired)) {
-                    return new BlockHitResult(hitPos, clickSide, neighbor, false);
-                }
-                probesHitOther++;
-                if (firstHitPos == null) {
-                    firstHitPos = blockSight.getBlockPos();
-                    firstHitSide = blockSight.getDirection();
-                    firstHitState = world.getBlockState(firstHitPos);
-                }
+        for (double[] probe : probes) {
+            /*? if >=26.1 {*//*
+            Vec3 hitPos = getFaceCenterHit(neighbor, clickSide);
+            hitPos = adjustHitForHalf(hitPos, neighbor, clickSide, desired);
+            hitPos = adjustHitForDoorHinge(hitPos, neighbor, desired);
+            hitPos = offsetFaceHit(hitPos, neighbor, clickSide, probe[0], probe[1]);
+            if (eyePos.distanceToSqr(hitPos) > probeReachSq) {
+                probesTooFar++;
+                continue;
             }
-        }
-        *//*?} else {*/
-        Vec3d[] baseHits = getBaritoneFaceHits(world, neighbor, clickSide);
-        for (Vec3d baseHit : baseHits) {
-            for (double[] probe : probes) {
-                Vec3d hitPos = baseHit;
-                hitPos = adjustHitForHalf(hitPos, neighbor, clickSide, desired);
-                hitPos = adjustHitForDoorHinge(hitPos, neighbor, desired);
-                hitPos = offsetFaceHit(hitPos, neighbor, clickSide, probe[0], probe[1]);
-                if (eyePos.squaredDistanceTo(hitPos) > probeReachSq) {
-                    probesTooFar++;
-                    continue;
-                }
-                HitResult sight = world.raycast(new RaycastContext(
-                        eyePos,
-                        hitPos,
-                        RaycastContext.ShapeType.COLLIDER,
-                        RaycastContext.FluidHandling.NONE,
-                        player));
-                if (sight.getType() != HitResult.Type.BLOCK) {
-                    probesMissed++;
-                    continue;
-                }
-                BlockHitResult blockSight = (BlockHitResult) sight;
-                if (blockSight.getBlockPos().equals(neighbor)
-                        && blockSight.getSide() == clickSide) {
-                    return blockSight;
-                }
-                if (!requireExactFace
-                        && blockSight.getBlockPos().equals(neighbor)
-                        && canProbeAlternateSupportFaces(desired)) {
-                    return new BlockHitResult(hitPos, clickSide, neighbor, false);
-                }
-                probesHitOther++;
-                if (firstHitPos == null) {
-                    firstHitPos = blockSight.getBlockPos();
-                    firstHitSide = blockSight.getSide();
-                    firstHitState = world.getBlockState(firstHitPos);
-                }
+            HitResult sight = world.clip(new ClipContext(
+                    eyePos,
+                    hitPos,
+                    ClipContext.Block.COLLIDER,
+                    ClipContext.Fluid.NONE,
+                    player));
+            if (sight.getType() != HitResult.Type.BLOCK) {
+                probesMissed++;
+                continue;
             }
+            BlockHitResult blockSight = (BlockHitResult) sight;
+            if (blockSight.getBlockPos().equals(neighbor)
+                    && blockSight.getDirection() == clickSide) {
+                return new BlockHitResult(hitPos, clickSide, neighbor, false);
+            }
+            if (!requireExactFace
+                    && blockSight.getBlockPos().equals(neighbor)
+                    && canProbeAlternateSupportFaces(desired)) {
+                return new BlockHitResult(hitPos, clickSide, neighbor, false);
+            }
+            probesHitOther++;
+            if (firstHitPos == null) {
+                firstHitPos = blockSight.getBlockPos();
+                firstHitSide = blockSight.getDirection();
+                firstHitState = world.getBlockState(firstHitPos);
+            }
+            *//*?} else {*/
+            Vec3d hitPos = getFaceCenterHit(neighbor, clickSide);
+            hitPos = adjustHitForHalf(hitPos, neighbor, clickSide, desired);
+            hitPos = adjustHitForDoorHinge(hitPos, neighbor, desired);
+            hitPos = offsetFaceHit(hitPos, neighbor, clickSide, probe[0], probe[1]);
+            if (eyePos.squaredDistanceTo(hitPos) > probeReachSq) {
+                probesTooFar++;
+                continue;
+            }
+            HitResult sight = world.raycast(new RaycastContext(
+                    eyePos,
+                    hitPos,
+                    RaycastContext.ShapeType.COLLIDER,
+                    RaycastContext.FluidHandling.NONE,
+                    player));
+            if (sight.getType() != HitResult.Type.BLOCK) {
+                probesMissed++;
+                continue;
+            }
+            BlockHitResult blockSight = (BlockHitResult) sight;
+            if (blockSight.getBlockPos().equals(neighbor)
+                    && blockSight.getSide() == clickSide) {
+                return new BlockHitResult(hitPos, clickSide, neighbor, false);
+            }
+            if (!requireExactFace
+                    && blockSight.getBlockPos().equals(neighbor)
+                    && canProbeAlternateSupportFaces(desired)) {
+                return new BlockHitResult(hitPos, clickSide, neighbor, false);
+            }
+            // Fix #12: capture WHAT got in the way so we can tell the
+            // difference between (a) raycast hits a different block (wall
+            // occluding line of sight) vs (b) raycast hits the right block
+            // but on the wrong face (geometry / clickSide mismatch).
+            probesHitOther++;
+            if (firstHitPos == null) {
+                firstHitPos = blockSight.getBlockPos();
+                firstHitSide = blockSight.getSide();
+                firstHitState = world.getBlockState(firstHitPos);
+            }
+            /*?}*/
         }
-        /*?}*/
 
         StringBuilder reason = new StringBuilder();
         reason.append("face=").append(face)
@@ -6084,28 +5600,6 @@ public final class PlacementEngine {
 
     private static boolean isSupportAllowed(Predicate<BlockPos> supportFilter, BlockPos support) {
         return supportFilter == null || supportFilter.test(support);
-    }
-
-    private static boolean isReplaceableState(BlockState state) {
-        /*? if >=26.1 {*//*
-        return state.canBeReplaced();
-        *//*?} else {*/
-        return state.isReplaceable();
-        /*?}*/
-    }
-
-    private static boolean isAlreadySatisfiedTarget(BlockState existing, BlockState desired) {
-        if (existing == null || desired == null) {
-            return false;
-        }
-        if (existing.isAir() || isReplaceableState(existing)) {
-            return false;
-        }
-        if (existing.equals(desired)) {
-            return true;
-        }
-        return existing.getBlock() == desired.getBlock()
-                && !isOrientationMismatch(existing, desired);
     }
 
     // interactive block detection

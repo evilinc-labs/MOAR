@@ -18,7 +18,7 @@ import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 
-// Legacy guard; normal flying packets should stay alive for Grim.
+// Legacy guard; normal flying packets should stay alive for strict server validation.
 /*? if >=26.1 {*//*
 @Mixin(LocalPlayer.class)
 public abstract class PlacementMovementSuppressMixin extends AbstractClientPlayer {

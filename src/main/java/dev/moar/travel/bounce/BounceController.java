@@ -43,7 +43,7 @@ public final class BounceController {
     private boolean active;
     private boolean arrived;
     private boolean stuck;
-    // Flag a wall ahead so TravelManager can bypass without aborting.
+    // Flag a wall ahead so TravelManager can detour without aborting.
     private boolean wallAhead;
     // Distinguish falls from generic no-progress stalls.
     private boolean stuckFromFall;
@@ -133,7 +133,7 @@ public final class BounceController {
         // ── Wall / obstruction detection ─────────────────────────
         // Check horizontalCollision and scan 2-6 blocks ahead at
         // player-body height.  TravelManager reads isWallAhead() to
-        // trigger a bypass walk rather than a hard abort.
+        // trigger a detour walk rather than a hard abort.
         wallAhead = detectWallOrCollision(mc);
         if (wallAhead) return; // skip stuck-detection this tick
 

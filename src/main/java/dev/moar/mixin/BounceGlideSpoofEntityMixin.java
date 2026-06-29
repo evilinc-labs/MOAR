@@ -10,7 +10,7 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
  * Spoofs getPose() to STANDING and isSprinting() to true while BounceController is active.
  *
  * Without the pose spoof, isGliding=true causes FALL_FLYING pose client-side,
- * mismatching the server's STANDING pose and triggering anti-cheat setbacks.
+ * mismatching the server's STANDING pose and triggering setbacks under strict validation.
  *
  * Sprint spoof ensures the horizontal boost is applied to jump() regardless
  * of key-binding processing order within the same tick.

@@ -97,7 +97,7 @@ public final class ElytraManager {
     private static final int MEND_THROW_INTERVAL     = 4;    // ticks between bottle throws
     private static final int MEND_MAX_TICKS          = 1800; // 90 s total mending window
     private static final int PHASE_TIMEOUT           = 100;
-    private static final int EC_BREAK_TIMEOUT        = 200; // ender chest hardness 22.5 needs ~84 ticks; 200 gives headroom on 2b2t
+    private static final int EC_BREAK_TIMEOUT        = 200; // ender chest hardness 22.5 needs ~84 ticks; 200 gives headroom on low-TPS servers
     private static final int LOOK_SETTLE             = 4;
     private static final int SWAP_SETTLE             = 6;
     private static final int PLACE_RECENT_WINDOW     = 24;

@@ -12,9 +12,31 @@ plugins {
     id("dev.kikugie.stonecutter") version "0.8.3"
 }
 
+val javaMajor = JavaVersion.current().majorVersion.toInt()
+val includeJava25Targets = providers.gradleProperty("moar.includeJava25Targets")
+    .orNull
+    ?.toBooleanStrictOrNull()
+    ?: false
+
+if (includeJava25Targets && javaMajor < 25) {
+    throw GradleException("Minecraft 26.1.1 requires JDK 25+. "
+        + "Run Gradle with Java 25+ or omit -Pmoar.includeJava25Targets=true.")
+}
+
+val minecraftVersions = buildList {
+    add("1.21.4")
+    add("1.21.5")
+    add("1.21.8")
+    add("1.21.10")
+    add("1.21.11")
+    if (includeJava25Targets) {
+        add("26.1.1")
+    }
+}
+
 stonecutter {
     create(rootProject) {
-        versions("1.21.4", "1.21.5", "1.21.8", "1.21.10", "1.21.11", "26.1.1")
+        versions(*minecraftVersions.toTypedArray())
         vcsVersion = "1.21.4"
     }
 }

@@ -23,11 +23,11 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Set;
 
-// Short-lived packet trace for debugging anti-cheat placement rollbacks.
+// Short-lived packet trace for debugging strict server validation placement rollbacks.
 public final class PacketTelemetry {
 
     private static final Logger LOGGER = LoggerFactory.getLogger("MOAR/Packets");
-    private static final String TRACE_BUILD = "fix22-placement-queue";
+    private static final String TRACE_BUILD = "fix28-pocket-stance";
     private static final int MAX_EVENTS = 768;
     private static final int MAX_FIELDS = 14;
     private static final int MAX_VALUE_LENGTH = 220;
