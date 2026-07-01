@@ -208,6 +208,8 @@ public final class PlacementEngine {
     private static boolean    lookSyncedForPendingPlacement;
     private static int        pendingHotbarSlot = -1;
     private static int        pendingInventorySwapSlot = -1;
+    private static int        pendingInventorySwapHotbarSlot = -1;
+    private static boolean    pendingInventorySwapNeedsSlotSync;
     private static ItemSelectionKind pendingSelectionKind = ItemSelectionKind.NONE;
     private static ItemSelectionStep pendingSelectionStep = ItemSelectionStep.NONE;
     private static int        pendingSelectionSettleTicks;
@@ -1074,6 +1076,8 @@ public final class PlacementEngine {
     private static void clearPendingSelectionState() {
         pendingHotbarSlot = -1;
         pendingInventorySwapSlot = -1;
+        pendingInventorySwapHotbarSlot = -1;
+        pendingInventorySwapNeedsSlotSync = false;
         pendingSelectionKind = ItemSelectionKind.NONE;
         pendingSelectionStep = ItemSelectionStep.NONE;
         pendingSelectionSettleTicks = 0;
@@ -1178,6 +1182,19 @@ public final class PlacementEngine {
             if (!isPlacementWindowSafe()) {
                 return false;
             }
+            if (pendingInventorySwapNeedsSlotSync) {
+                if (!PrinterNetworkCoordinator.tryAcquire(
+                        PrinterNetworkCoordinator.Lane.INVENTORY, NETWORK_OWNER, 1,
+                        HOTBAR_SELECT_SETTLE_TICKS)) {
+                    return false;
+                }
+                PacketTelemetry.mark("select inventory-swap sync selected="
+                        + getSelectedHotbarSlot(player));
+                syncSelectedSlotPacket(player);
+                pendingInventorySwapNeedsSlotSync = false;
+                pendingSelectionSettleTicks = HOTBAR_SELECT_PACKET_SETTLE_TICKS;
+                return false;
+            }
             pendingSelectionStep = ItemSelectionStep.VALIDATE;
             return false;
         }
@@ -1199,7 +1216,7 @@ public final class PlacementEngine {
     private static void applyPendingSelection(ClientPlayerEntity player, MinecraftClient mc) {
     /*?}*/
         if (pendingSelectionKind == ItemSelectionKind.INVENTORY_SWAP) {
-            if (pendingInventorySwapSlot < 0) {
+            if (pendingInventorySwapSlot < 0 || pendingInventorySwapHotbarSlot < 0) {
                 failPendingSelection();
                 return;
             }
@@ -1208,9 +1225,16 @@ public final class PlacementEngine {
                 return;
             }
             int swapSlot = pendingInventorySwapSlot;
+            int hotbarSlot = pendingInventorySwapHotbarSlot;
+            boolean needsSlotSync = getSelectedHotbarSlot(player) != hotbarSlot;
             pendingInventorySwapSlot = -1;
-            PacketTelemetry.mark("select inventory-swap slot=" + swapSlot);
-            swapInventorySlotIntoSelectedHotbar(player, mc, swapSlot);
+            pendingInventorySwapHotbarSlot = -1;
+            PacketTelemetry.mark("select inventory-swap slot=" + swapSlot
+                    + " hotbar=" + hotbarSlot
+                    + " sync=" + needsSlotSync);
+            swapInventorySlotIntoHotbarSlot(player, mc, swapSlot, hotbarSlot);
+            selectHotbarSlot(player, hotbarSlot);
+            pendingInventorySwapNeedsSlotSync = needsSlotSync;
             placementUsedInventorySwap = true;
             recordSelectedItem(pendingItem, true);
             pendingSelectionSettleTicks = INVENTORY_SWAP_SETTLE_TICKS;
@@ -1270,6 +1294,8 @@ public final class PlacementEngine {
     private static ItemSelectionResult stageHotbarSelection(int slot) {
         pendingHotbarSlot = slot;
         pendingInventorySwapSlot = -1;
+        pendingInventorySwapHotbarSlot = -1;
+        pendingInventorySwapNeedsSlotSync = false;
         pendingSelectionKind = ItemSelectionKind.HOTBAR_SELECT;
         pendingSelectionStep = ItemSelectionStep.APPLY;
         pendingSelectionSettleTicks = 0;
@@ -1277,9 +1303,15 @@ public final class PlacementEngine {
         return ItemSelectionResult.STAGED;
     }
 
-    private static ItemSelectionResult stageInventorySwap(int inventorySlot) {
+    private static ItemSelectionResult stageInventorySwap(int inventorySlot, int hotbarSlot) {
+        if (hotbarSlot < 0) {
+            PacketTelemetry.mark("select inventory-swap blocked protected-hotbar inv=" + inventorySlot);
+            return ItemSelectionResult.FAILED;
+        }
         pendingHotbarSlot = -1;
         pendingInventorySwapSlot = inventorySlot;
+        pendingInventorySwapHotbarSlot = hotbarSlot;
+        pendingInventorySwapNeedsSlotSync = false;
         pendingSelectionKind = ItemSelectionKind.INVENTORY_SWAP;
         pendingSelectionStep = ItemSelectionStep.APPLY;
         pendingSelectionSettleTicks = 0;
@@ -3508,7 +3540,7 @@ public final class PlacementEngine {
                 *//*?} else {*/
                 if (inv.getStack(i).getItem() == item) {
                 /*?}*/
-                    return stageInventorySwap(i);
+                    return stageInventorySwap(i, findBuilderInventorySwapHotbarSlot(inv, item));
                 }
             }
         }
@@ -3541,6 +3573,90 @@ public final class PlacementEngine {
     /*?}*/
 
     /*? if >=26.1 {*//*
+    private static int getSelectedHotbarSlot(LocalPlayer player) {
+        return player.getInventory().getSelectedSlot();
+    }
+    *//*?} else {*/
+    private static int getSelectedHotbarSlot(ClientPlayerEntity player) {
+        PlayerInventory inv = player.getInventory();
+        /*? if >=1.21.5 {*//*
+        return inv.getSelectedSlot();
+        *//*?} else {*/
+        return inv.selectedSlot;
+        /*?}*/
+    }
+    /*?}*/
+
+    /*? if >=26.1 {*//*
+    private static int findBuilderInventorySwapHotbarSlot(Inventory inv, Item incomingItem) {
+        int selected = inv.getSelectedSlot();
+        if (isReusableBuilderSwapHotbarStack(inv.getItem(selected), incomingItem)) {
+            return selected;
+        }
+        for (int i = 0; i < 9; i++) {
+            if (inv.getItem(i).isEmpty()) return i;
+        }
+        for (int i = 0; i < 9; i++) {
+            if (i != selected && isReusableBuilderSwapHotbarStack(inv.getItem(i), incomingItem)) {
+                return i;
+            }
+        }
+        return -1;
+    }
+    *//*?} else {*/
+    private static int findBuilderInventorySwapHotbarSlot(PlayerInventory inv, Item incomingItem) {
+        /*? if >=1.21.5 {*//*
+        int selected = inv.getSelectedSlot();
+        *//*?} else {*/
+        int selected = inv.selectedSlot;
+        /*?}*/
+        if (isReusableBuilderSwapHotbarStack(inv.getStack(selected), incomingItem)) {
+            return selected;
+        }
+        for (int i = 0; i < 9; i++) {
+            if (inv.getStack(i).isEmpty()) return i;
+        }
+        for (int i = 0; i < 9; i++) {
+            if (i != selected && isReusableBuilderSwapHotbarStack(inv.getStack(i), incomingItem)) {
+                return i;
+            }
+        }
+        return -1;
+    }
+    /*?}*/
+
+    private static boolean isReusableBuilderSwapHotbarStack(ItemStack stack, Item incomingItem) {
+        if (stack == null || stack.isEmpty()) return true;
+        if (stack.getItem() == incomingItem) return false;
+        if (isProtectedHotbarStack(stack)) return false;
+        return stack.getItem() instanceof BlockItem;
+    }
+
+    private static boolean isProtectedHotbarStack(ItemStack stack) {
+        if (stack == null || stack.isEmpty()) return false;
+        if (
+                /*? if >=26.1 {*//*
+                stack.isDamageableItem()
+                *//*?} else {*/
+                stack.isDamageable()
+                /*?}*/
+        ) {
+            return true;
+        }
+        Item item = stack.getItem();
+        if (item == Items.TOTEM_OF_UNDYING
+                || item == Items.ENDER_CHEST
+                || item == Items.ENDER_PEARL
+                || item == Items.FIREWORK_ROCKET
+                || item == Items.GOLDEN_APPLE
+                || item == Items.ENCHANTED_GOLDEN_APPLE) {
+            return true;
+        }
+        return item instanceof BlockItem blockItem
+                && blockItem.getBlock() instanceof ShulkerBoxBlock;
+    }
+
+    /*? if >=26.1 {*//*
     private static void selectHotbarSlot(LocalPlayer player, int slot) {
         Inventory inv = player.getInventory();
         if (inv.getSelectedSlot() == slot) return;
@@ -3571,11 +3687,13 @@ public final class PlacementEngine {
 
     /*? if >=26.1 {*//*
     private static void swapInventorySlotIntoSelectedHotbar(LocalPlayer player, Minecraft mc, int inventorySlot) {
-        Inventory inv = player.getInventory();
-        int selectedSlot = inv.getSelectedSlot();
-        if (inventorySlot == selectedSlot) return;
+        swapInventorySlotIntoHotbarSlot(player, mc, inventorySlot, player.getInventory().getSelectedSlot());
+    }
+
+    private static void swapInventorySlotIntoHotbarSlot(LocalPlayer player, Minecraft mc,
+                                                        int inventorySlot, int hotbarSlot) {
         int containerInvSlot = inventorySlotToContainerSlot(inventorySlot);
-        int containerHotbarSlot = inventorySlotToContainerSlot(selectedSlot);
+        int containerHotbarSlot = inventorySlotToContainerSlot(hotbarSlot);
         // Three PICKUP clicks: pick up from inv, swap into hotbar, return old hotbar item to inv.
         // Avoids SWAP click type which protocol-translation layers may mishandle when downgrading 1.21.5+ packet format.
         mc.gameMode.handleContainerInput(player.containerMenu.containerId, containerInvSlot, 0, ContainerInput.PICKUP, player);
@@ -3587,13 +3705,16 @@ public final class PlacementEngine {
     private static void swapInventorySlotIntoSelectedHotbar(ClientPlayerEntity player, MinecraftClient mc, int inventorySlot) {
         PlayerInventory inv = player.getInventory();
         /*? if >=1.21.5 {*//*
-        int selectedSlot = inv.getSelectedSlot();
+        swapInventorySlotIntoHotbarSlot(player, mc, inventorySlot, inv.getSelectedSlot());
         *//*?} else {*/
-        int selectedSlot = inv.selectedSlot;
+        swapInventorySlotIntoHotbarSlot(player, mc, inventorySlot, inv.selectedSlot);
         /*?}*/
-        if (inventorySlot == selectedSlot) return;
+    }
+
+    private static void swapInventorySlotIntoHotbarSlot(ClientPlayerEntity player, MinecraftClient mc,
+                                                        int inventorySlot, int hotbarSlot) {
         int containerInvSlot = inventorySlotToContainerSlot(inventorySlot);
-        int containerHotbarSlot = inventorySlotToContainerSlot(selectedSlot);
+        int containerHotbarSlot = inventorySlotToContainerSlot(hotbarSlot);
         // Three PICKUP clicks: pick up from inv, swap into hotbar, return old hotbar item to inv.
         // Avoids SWAP click type which protocol-translation layers may mishandle when downgrading 1.21.5+ packet format.
         mc.interactionManager.clickSlot(player.currentScreenHandler.syncId, containerInvSlot, 0, SlotActionType.PICKUP, player);

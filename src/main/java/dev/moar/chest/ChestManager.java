@@ -3,6 +3,7 @@ package dev.moar.chest;
 import dev.moar.MoarMod;
 import dev.moar.stash.StashDatabase;
 import dev.moar.util.ChatHelper;
+import dev.moar.util.ItemIdentifier;
 import dev.moar.util.MoarNetworkManager;
 import dev.moar.util.PathWalker;
 /*? if >=26.1 {*//*
@@ -231,11 +232,7 @@ public final class ChestManager {
             /*?}*/
             if (stack.isEmpty()) continue;
 
-            /*? if >=26.1 {*//*
-            String itemId = BuiltInRegistries.ITEM.getKey(stack.getItem()).toString();
-            *//*?} else {*/
-            String itemId = Registries.ITEM.getId(stack.getItem()).toString();
-            /*?}*/
+            String itemId = ItemIdentifier.getItemId(stack);
 
             if (isShulkerBox(stack)) {
                 shulkerCount++;
@@ -274,11 +271,7 @@ public final class ChestManager {
         *//*?} else {*/
         for (ItemStack inner : cc.iterateNonEmpty()) {
         /*?}*/
-            /*? if >=26.1 {*//*
-            String innerId = BuiltInRegistries.ITEM.getKey(inner.getItem()).toString();
-            *//*?} else {*/
-            String innerId = Registries.ITEM.getId(inner.getItem()).toString();
-            /*?}*/
+            String innerId = ItemIdentifier.getItemId(inner);
             contents.merge(innerId, inner.getCount(), Integer::sum);
         }
         return contents;

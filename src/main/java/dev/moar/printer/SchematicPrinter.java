@@ -231,6 +231,7 @@ public class SchematicPrinter {
     private boolean autoBuild = false;
     private static final int BUILD_SWAP_RECENT_SETBACK_WINDOW = 40;
     private static final int BOTTOM_UP_ACTIVE_BAND_HEIGHT = 1;
+    private static final int BUILD_PLAN_SECTION_HEIGHT = 16;
     private static final int EXTERIOR_BUILD_SHELL_DEPTH = 4;
     private static final int EXTERIOR_FAILED_ZONE_BUDGET = 24;
 
@@ -269,11 +270,16 @@ public class SchematicPrinter {
         if (!swapItems) return false;
         if (PlacementEngine.areSwapsSuspended()) return false;
         SetbackMonitor monitor = SetbackMonitor.get();
-        return monitor.isCalm()
+        boolean stable = monitor.isCalm()
                 && monitor.recentSetbackCount(BUILD_SWAP_RECENT_SETBACK_WINDOW) == 0
-                && monitor.isStationaryFor(3)
-                && PlacementEngine.getConsecutiveFailures() == 0
                 && PlacementEngine.getConsecutiveRejections() == 0;
+        if (!stable) return false;
+        if (forceLiveInventorySwapOnce) {
+            return monitor.isStationaryFor(6)
+                    && PlacementEngine.getConsecutiveFailures() <= 1;
+        }
+        return monitor.isStationaryFor(3)
+                && PlacementEngine.getConsecutiveFailures() == 0;
     }
 
     // state
@@ -308,6 +314,12 @@ public class SchematicPrinter {
     private static final int CONTAINER_ACTION_TIMEOUT_TICKS = 8;
     // Consecutive restock failures without grabbing any items.
     private int restockFailures;
+    // Pause proactive restock after a shulker unload.
+    private int restockCooldown;
+    private static final int SHULKER_RESTOCK_COOLDOWN = 200;
+    // Consecutive shulker unloads with no build progress in between.
+    private int consecutiveShulkerUnloads;
+    private static final int MAX_CONSECUTIVE_SHULKER_UNLOADS = 3;
     private enum ContainerTransferLane { NONE, RESTOCK, DUMP, SHULKER }
     private ContainerTransferLane pendingContainerLane = ContainerTransferLane.NONE;
     private int pendingContainerSyncId = -1;
@@ -358,6 +370,14 @@ public class SchematicPrinter {
     private int observedWalkingSetbacks;
     private int observedPlacementSetbacks;
     private static final int WALK_SETBACK_PAUSE_TICKS = 16;
+    // Back off when setbacks arrive in bursts.
+    private int setbackStormPauseTicks;
+    private static final int SETBACK_STORM_WINDOW_TICKS = 60;
+    private static final int SETBACK_STORM_THRESHOLD = 4;
+    private static final int SETBACK_STORM_PAUSE_TICKS = 200; // Let position settle.
+    private int inventorySwapWaitTicks;
+    private boolean forceLiveInventorySwapOnce;
+    private static final int INVENTORY_SWAP_WAIT_ESCALATION_TICKS = 40;
     private int buildHandoffSettleTicks;
     private static final int BUILD_HANDOFF_SETTLE_TICKS = 4;
     // Ticks until next skippedItems re-evaluation.
@@ -387,6 +407,7 @@ public class SchematicPrinter {
     private static final int SERVER_TIMEOUT_REPOSITION_THRESHOLD = 2;
     private static final int TIMEOUT_SETBACK_REPOSITION_WINDOW_TICKS = 24;
     private static final int PLACEMENT_START_TIMEOUT_TICKS = 10;
+    private static final int VANILLA_RETRY_IN_PLACE_PAUSE_TICKS = 2;
     private static final int PLACEMENT_FAILURE_PAUSE_TICKS = 6;
     private static final int PLACEMENT_START_FAILURE_PAUSE_TICKS = 4;
     private static final int SOFT_TIMEOUT_FAILURE_PAUSE_TICKS = 4;
@@ -621,6 +642,11 @@ public class SchematicPrinter {
     private record RenderWindow(int chunkRadius, int minChunkX, int maxChunkX, int minChunkZ, int maxChunkZ) {}
     private record SchematicBlockRef(BlockPos pos, BlockState target, Item item, boolean liquid, boolean redstone) {}
     private record ChunkDiffSnapshot(long scanTick, List<SchematicBlockRef> unresolved) {}
+    private record BuildPlanFrontier(int activeBandTopY, int activeRow) {
+        boolean rowConstrained() {
+            return activeRow != Integer.MIN_VALUE;
+        }
+    }
     private record BuildStagingPlan(BlockPos zone, BlockPos standPos, boolean approachOnly) {}
     private record StagingTargetCandidate(SchematicBlockRef ref, double targetDist) {}
     private record BuildAccessTarget(BlockPos feetPos, BlockPos clearPos) {}
@@ -638,6 +664,13 @@ public class SchematicPrinter {
     private int cachedActiveBandMinChunkZ;
     private int cachedActiveBandMaxChunkZ;
     private int cachedActiveBandTopY = Integer.MAX_VALUE;
+    private long cachedBuildPlanFrontierTick = Long.MIN_VALUE;
+    private int cachedBuildPlanFrontierMinChunkX;
+    private int cachedBuildPlanFrontierMaxChunkX;
+    private int cachedBuildPlanFrontierMinChunkZ;
+    private int cachedBuildPlanFrontierMaxChunkZ;
+    private BuildPlanFrontier cachedBuildPlanFrontier =
+            new BuildPlanFrontier(Integer.MAX_VALUE, Integer.MIN_VALUE);
 
     // cached schematic scan results
     // TTL for full-schematic remaining-block scans.
@@ -742,6 +775,11 @@ public class SchematicPrinter {
             observedWalkingSetbacks = totalSetbacks;
             observedPlacementSetbacks = totalSetbacks;
         restockFailures = 0;
+        restockCooldown = 0;
+        setbackStormPauseTicks = 0;
+        inventorySwapWaitTicks = 0;
+        forceLiveInventorySwapOnce = false;
+        consecutiveShulkerUnloads = 0;
         unreachableChests.clear();
         skippedItems.clear();
         accessClearInProgress = false;
@@ -1303,6 +1341,8 @@ public class SchematicPrinter {
         buildGateStallTicks = 0;
         deferredPlacementReposition = false;
         deferredPlacementRepositionPos = null;
+        inventorySwapWaitTicks = 0;
+        forceLiveInventorySwapOnce = false;
         clearPlacementStartFailureState();
     }
 
@@ -1711,8 +1751,11 @@ public class SchematicPrinter {
         BlockPos playerPos = player.getBlockPos();
         Vec3d eyePos = player.getEyePos();
         /*?}*/
-        int activeBandTopY = getBottomUpActiveBandTopY(world, getRenderWindow(playerPos));
-        if (lastWalkTargetZone.getY() > activeBandTopY) {
+        RenderWindow renderWindow = getRenderWindow(playerPos);
+        BuildPlanFrontier buildFrontier = getBuildPlanFrontier(world, renderWindow);
+        int activeBandTopY = buildFrontier.activeBandTopY();
+        if (lastWalkTargetZone.getY() > activeBandTopY
+                || !isInActiveBuildPlanRow(lastWalkTargetZone, buildFrontier)) {
             return false;
         }
         if (!printInAir && !PlacementEngine.hasAdjacentSolid(world, lastWalkTargetZone)) {
@@ -1763,8 +1806,11 @@ public class SchematicPrinter {
         BlockPos playerPos = player.getBlockPos();
         Vec3d eyePos = player.getEyePos();
         /*?}*/
-        int activeBandTopY = getBottomUpActiveBandTopY(world, getRenderWindow(playerPos));
-        if (targetPos.getY() > activeBandTopY) {
+        RenderWindow renderWindow = getRenderWindow(playerPos);
+        BuildPlanFrontier buildFrontier = getBuildPlanFrontier(world, renderWindow);
+        int activeBandTopY = buildFrontier.activeBandTopY();
+        if (targetPos.getY() > activeBandTopY
+                || !isInActiveBuildPlanRow(targetPos, buildFrontier)) {
             return false;
         }
         if (!printInAir && !PlacementEngine.hasAdjacentSolid(world, targetPos)) {
@@ -1826,6 +1872,13 @@ public class SchematicPrinter {
     /*?}*/
         SetbackMonitor setbackMonitor = SetbackMonitor.get();
         int totalSetbacks = setbackMonitor.totalSetbacks();
+        if (setbackStormPauseTicks > 0) {
+            setbackStormPauseTicks--;
+            if (totalSetbacks != observedPlacementSetbacks) {
+                observedPlacementSetbacks = totalSetbacks;
+            }
+            return true;
+        }
         if (totalSetbacks != observedPlacementSetbacks) {
             observedPlacementSetbacks = totalSetbacks;
             PlacementEngine.reset();
@@ -1835,6 +1888,13 @@ public class SchematicPrinter {
             placementFailurePauseTicks = Math.max(
                     placementFailurePauseTicks, PLACEMENT_FAILURE_PAUSE_TICKS);
             walkingSetbackPauseTicks = 0;
+            if (setbackMonitor.recentSetbackCount(SETBACK_STORM_WINDOW_TICKS)
+                    >= SETBACK_STORM_THRESHOLD) {
+                setbackStormPauseTicks = SETBACK_STORM_PAUSE_TICKS;
+                PacketTelemetry.mark("build setback storm pause total=" + totalSetbacks);
+                LOGGER.debug("Setback storm; pausing build to let position settle");
+                return true;
+            }
             PacketTelemetry.mark("build setback refresh total=" + totalSetbacks);
             LOGGER.debug("Setback detected while building — refreshing placement planner");
             return true;
@@ -1995,6 +2055,7 @@ public class SchematicPrinter {
         buildLayerCooldownStage.put(y, stage + 1);
         cooledDownBuildLayers.put(y, now + cooldownTicks);
         cachedActiveBandTick = Long.MIN_VALUE;
+        cachedBuildPlanFrontierTick = Long.MIN_VALUE;
         PacketTelemetry.mark("build layer cooldown y=" + y
                 + " reason=" + reason
                 + " ticks=" + cooldownTicks
@@ -2026,7 +2087,7 @@ public class SchematicPrinter {
         *//*?} else {*/
         cooledDownPlacementTargets.put(pos.toImmutable(), now + ticks);
         /*?}*/
-        cachedActiveBandTick = Long.MIN_VALUE;
+        invalidateBuildStagingPlanCache();
     }
 
     private void recordNoVisibleHitPlacementBlock(BlockPos pos, BlockState target) {
@@ -2211,11 +2272,23 @@ public class SchematicPrinter {
         LOGGER.debug("Placement {} at {} {} {} (failure {}/{})",
                 status, pos.getX(), pos.getY(), pos.getZ(),
                 failures, SERVER_TIMEOUT_REPOSITION_THRESHOLD);
-        clearPendingBuildPlacement();
 
         SetbackMonitor setbackMonitor = SetbackMonitor.get();
         int recentSetbacks = setbackMonitor.recentSetbackCount(
                 TIMEOUT_SETBACK_REPOSITION_WINDOW_TICKS);
+        boolean retryVanillaInPlace = shouldRetryVanillaInPlace(
+                mc, pos, status, failures, recentSetbacks);
+        clearPendingBuildPlacement();
+        if (retryVanillaInPlace) {
+            PlacementEngine.reset();
+            placementFailurePauseTicks = Math.max(
+                    placementFailurePauseTicks, VANILLA_RETRY_IN_PLACE_PAUSE_TICKS);
+            noProgressTicks = 0;
+            PacketTelemetry.mark("place retry deferred lane=vanilla target=" + pos
+                    + " failures=" + failures
+                    + " recentSetbacks=" + recentSetbacks);
+            return true;
+        }
         boolean forceReposition = status == PlacementEngine.VerificationStatus.REJECTED
                 || status == PlacementEngine.VerificationStatus.TIMEOUT
                 || failures >= SERVER_TIMEOUT_REPOSITION_THRESHOLD
@@ -2224,6 +2297,38 @@ public class SchematicPrinter {
                 mc, pos, supportPos, stancePos, status, failures, forceReposition, recentSetbacks);
         return true;
     }
+
+    /*? if >=26.1 {*//*
+    private boolean shouldRetryVanillaInPlace(Minecraft mc, BlockPos pos,
+                                              PlacementEngine.VerificationStatus status,
+                                              int failures,
+                                              int recentSetbacks) {
+        return status == PlacementEngine.VerificationStatus.TIMEOUT
+                && pos != null
+                && failures == 1
+                && recentSetbacks == 0
+                && PlacementEngine.hasScheduledVanillaRetry(pos)
+                && SetbackMonitor.get().isCalm()
+                && mc != null
+                && mc.level != null
+                && isBuildTargetStillActionable(pos, mc.level, false);
+    }
+    *//*?} else {*/
+    private boolean shouldRetryVanillaInPlace(MinecraftClient mc, BlockPos pos,
+                                              PlacementEngine.VerificationStatus status,
+                                              int failures,
+                                              int recentSetbacks) {
+        return status == PlacementEngine.VerificationStatus.TIMEOUT
+                && pos != null
+                && failures == 1
+                && recentSetbacks == 0
+                && PlacementEngine.hasScheduledVanillaRetry(pos)
+                && SetbackMonitor.get().isCalm()
+                && mc != null
+                && mc.world != null
+                && isBuildTargetStillActionable(pos, mc.world, false);
+    }
+    /*?}*/
 
     /*? if >=26.1 {*//*
     private void beginPlacementFailureRecovery(Minecraft mc, BlockPos pos,
@@ -2768,6 +2873,7 @@ public class SchematicPrinter {
         }
         buildGateStallTicks = 0;
         if (missingItemMsgCooldown > 0) missingItemMsgCooldown--;
+        if (restockCooldown > 0) restockCooldown--;
 
         // entrapment safety
         // If the player has no horizontal exit, stop building and try
@@ -2916,6 +3022,9 @@ public class SchematicPrinter {
         if (started) {
             // Pipeline started — block will be placed over next ticks
             noProgressTicks = 0;
+            inventorySwapWaitTicks = 0;
+            forceLiveInventorySwapOnce = false;
+            consecutiveShulkerUnloads = 0;
             // NOTE: do NOT reset restockFailures here — placing a block we
             // already had materials for doesn't mean the supply chests have
             // the items we're still missing.  Resetting here causes an
@@ -4235,6 +4344,13 @@ public class SchematicPrinter {
             }
             noProgressTicks = 0;
 
+            // Stop clearing if repeated targets cannot be reached.
+            if (consecutiveClearFailures >= MAX_CONSECUTIVE_CLEAR_FAILURES) {
+                clearingDone = true;
+                enterBuildMode("clearing aborted; too many unreachable targets");
+                return;
+            }
+
             /*? if >=26.1 {*//*
             BlockPos nextClear = findNextClearTarget(mc.player, mc.level);
             if (nextClear != null) {
@@ -4648,6 +4764,10 @@ public class SchematicPrinter {
         if (target.isAir()) {
             return false;
         }
+        // Skip generated parts so clear validation matches selection.
+        if (isAutoCreatedPart(target)) {
+            return false;
+        }
         if (isEffectivelyPlaced(existing, target)) {
             return false;
         }
@@ -4840,6 +4960,9 @@ public class SchematicPrinter {
                 mc.interactionManager.cancelBlockBreaking();
                 /*?}*/
                 PacketTelemetry.mark("clear cancel unsafe target=" + posLabel(clearBreakTarget));
+                // Retire unsafe clear targets to avoid reselection loops.
+                failedClearTargets.add(clearBreakTarget);
+                consecutiveClearFailures++;
                 clearBreakTarget = null;
                 lastClearTargetBlock = null;
                 clearBreakTicks = 0;
@@ -7030,11 +7153,7 @@ public class SchematicPrinter {
                         ItemStack stack = shulkerHandler.getSlot(slot).getStack();
                         /*?}*/
                         if (stack.isEmpty()) continue;
-                        /*? if >=26.1 {*//*
-                        String itemId = BuiltInRegistries.ITEM.getKey(stack.getItem()).toString();
-                        *//*?} else {*/
-                        String itemId = Registries.ITEM.getId(stack.getItem()).toString();
-                        /*?}*/
+                        String itemId = ItemIdentifier.getItemId(stack);
                         int shortage = remainingNeed.getOrDefault(itemId, 0);
                         if (shortage > 0) {
                             // Check if this item would stack with something
@@ -7371,6 +7490,9 @@ public class SchematicPrinter {
         platformBlockPos = null;
         shulkerOpenRetries = 0;
 
+        // Give building a chance before another unload.
+        restockCooldown = SHULKER_RESTOCK_COOLDOWN;
+
         if (statusMessages) {
             if (shulkerNoSpaceSkipped) {
                 ChatHelper.info("§eNo shulker space — walking to supply chest.");
@@ -7681,6 +7803,7 @@ public class SchematicPrinter {
         liquidsCacheTick = Long.MIN_VALUE;
         redstoneCacheTick = Long.MIN_VALUE;
         cachedActiveBandTick = Long.MIN_VALUE;
+        cachedBuildPlanFrontierTick = Long.MIN_VALUE;
 
         if (schematic == null || anchor == null) return;
 
@@ -7720,6 +7843,7 @@ public class SchematicPrinter {
         liquidsCacheTick = Long.MIN_VALUE;
         redstoneCacheTick = Long.MIN_VALUE;
         cachedActiveBandTick = Long.MIN_VALUE;
+        cachedBuildPlanFrontierTick = Long.MIN_VALUE;
     }
 
     private void invalidateBuildStagingPlanCache() {
@@ -7728,6 +7852,7 @@ public class SchematicPrinter {
         cachedBuildStagingPlanExtraReachBonus = Integer.MIN_VALUE;
         cachedBuildStagingPlan = null;
         cachedActiveBandTick = Long.MIN_VALUE;
+        cachedBuildPlanFrontierTick = Long.MIN_VALUE;
     }
 
     private void rememberRepairPriorityTarget(BlockPos pos) {
@@ -7882,7 +8007,8 @@ public class SchematicPrinter {
         BlockPos bestFallback = null;
         int bestFallbackY = Integer.MAX_VALUE;
         double bestFallbackDist = Double.MAX_VALUE;
-        int activeBandTopY = getBottomUpActiveBandTopY(world, renderWindow);
+        BuildPlanFrontier buildFrontier = getBuildPlanFrontier(world, renderWindow);
+        int activeBandTopY = buildFrontier.activeBandTopY();
 
         /*? if >=26.1 {*//*
         Vec3 playerPos = player.position();
@@ -7907,6 +8033,7 @@ public class SchematicPrinter {
                 if (!isCurrentlyUnresolved(ref, world)) continue;
                 BlockPos worldPos = ref.pos();
                 if (worldPos.getY() > activeBandTopY) continue;
+                if (!isInActiveBuildPlanRow(worldPos, buildFrontier)) continue;
                 if (isBuildTargetCoolingDown(worldPos)) continue;
                 if (!printInAir && !PlacementEngine.hasAdjacentSolid(world, worldPos)) continue;
                 if (!BlockDependency.isReadyToPlace(world, worldPos, ref.target())) continue;
@@ -7965,6 +8092,8 @@ public class SchematicPrinter {
         if (mc == null || mc.player == null) return false;
         if (restockFailures >= MAX_RESTOCK_FAILURES) return false;
         if (MoarMod.getChestManager().supplyChestCount() == 0) return false;
+        // Pause restock churn after unloading shulkers.
+        if (restockCooldown > 0) return false;
 
         /*? if >=26.1 {*//*
         if (!shouldRestock(mc.player, mc.level)) {
@@ -8118,12 +8247,17 @@ public class SchematicPrinter {
         // BUT: if we already tried and couldn't place a shulker (e.g.
         // standing on a 1-block pillar with no space), don't retry —
         // walk to a supply chest instead where there's flat ground.
+        // Fall back to supply chests when shulker unloads stall.
+        if (consecutiveShulkerUnloads >= MAX_CONSECUTIVE_SHULKER_UNLOADS) {
+            shulkerNoSpaceSkipped = true;
+        }
         if (!shulkerNoSpaceSkipped && findShulkerWithNeededItems(player) >= 0) {
             /*? if >=26.1 {*//*
             lastBuildPos = player.blockPosition();
             *//*?} else {*/
             lastBuildPos = player.getBlockPos();
             /*?}*/
+            consecutiveShulkerUnloads++;
             if (statusMessages) {
                 ChatHelper.info("§aNeeded items found in inventory shulkers — unloading.");
             }
@@ -8135,7 +8269,6 @@ public class SchematicPrinter {
             autoState = AutoState.UNLOADING_SHULKER;
             return;
         }
-
         /*? if >=26.1 {*//*
         Minecraft mc = Minecraft.getInstance();
         *//*?} else {*/
@@ -8520,7 +8653,8 @@ public class SchematicPrinter {
         record Candidate(SchematicBlockRef ref, double distSq) {}
         List<Candidate> renderedCandidates = new ArrayList<>();
         List<Candidate> fallbackCandidates = new ArrayList<>();
-        int activeBandTopY = getBottomUpActiveBandTopY(world, renderWindow);
+        BuildPlanFrontier buildFrontier = getBuildPlanFrontier(world, renderWindow);
+        int activeBandTopY = buildFrontier.activeBandTopY();
         Integer frontierY = null;
 
         long tick = getWorldTick();
@@ -8543,6 +8677,7 @@ public class SchematicPrinter {
                 }
                 if (!isCurrentlyUnresolved(ref, world)) continue;
                 if (ref.pos().getY() > activeBandTopY) continue;
+                if (!isInActiveBuildPlanRow(ref.pos(), buildFrontier)) continue;
                 if (isBuildTargetCoolingDown(ref.pos())) continue;
                 if (!printInAir && !PlacementEngine.hasAdjacentSolid(world, ref.pos())) continue;
                 if (!BlockDependency.isReadyToPlace(world, ref.pos(), ref.target())) continue;
@@ -8576,6 +8711,7 @@ public class SchematicPrinter {
                 }
                 if (!isCurrentlyUnresolved(ref, world)) continue;
                 if (ref.pos().getY() > activeBandTopY) continue;
+                if (!isInActiveBuildPlanRow(ref.pos(), buildFrontier)) continue;
                 if (isBuildTargetCoolingDown(ref.pos())) continue;
                 if (!isWithinActiveBuildFrontier(ref.pos().getY(), frontierY, activeBandTopY)) continue;
                 if (!printInAir && !PlacementEngine.hasAdjacentSolid(world, ref.pos())) continue;
@@ -9358,10 +9494,7 @@ public class SchematicPrinter {
             return cachedActiveBandTopY;
         }
 
-        Integer lowestActionableY = scanBottomUpActionableY(world, renderWindow, true);
-        if (lowestActionableY == null) {
-            lowestActionableY = scanBottomUpActionableY(world, renderWindow, false);
-        }
+        Integer lowestActionableY = scanBottomUpActionableY(world);
 
         int result = lowestActionableY == null
                 ? Integer.MAX_VALUE
@@ -9376,24 +9509,16 @@ public class SchematicPrinter {
     }
 
     /*? if >=26.1 {*//*
-    private Integer scanBottomUpActionableY(Level world, RenderWindow renderWindow,
-                                            boolean localOnly) {
+    private Integer scanBottomUpActionableY(Level world) {
     *//*?} else {*/
-    private Integer scanBottomUpActionableY(World world, RenderWindow renderWindow,
-                                            boolean localOnly) {
+    private Integer scanBottomUpActionableY(World world) {
     /*?}*/
         Integer lowestActionableY = null;
         long tick = getWorldTick();
+        // Select rows from all loaded schematic chunks.
         for (long key : schematicBlocksByChunk.keySet()) {
             int chunkX = chunkXFromKey(key);
             int chunkZ = chunkZFromKey(key);
-            boolean inWindow = renderWindow != null
-                    && chunkX >= renderWindow.minChunkX()
-                    && chunkX <= renderWindow.maxChunkX()
-                    && chunkZ >= renderWindow.minChunkZ()
-                    && chunkZ <= renderWindow.maxChunkZ();
-            if (localOnly && !inWindow) continue;
-            if (!localOnly && renderWindow != null && inWindow) continue;
             /*? if >=26.1 {*//*
             if (!world.hasChunk(chunkX, chunkZ)) continue;
             *//*?} else {*/
@@ -9404,19 +9529,153 @@ public class SchematicPrinter {
                 if (!matchesCurrentBuildPass(ref)) continue;
                 if (!isCurrentlyUnresolved(ref, world)) continue;
                 BlockPos worldPos = ref.pos();
-                if (isBuildTargetCoolingDown(worldPos)) continue;
-                if (isNearFailedZone(worldPos)) continue;
-                if (!printInAir && !PlacementEngine.hasAdjacentSolid(world, worldPos)) continue;
-                if (!BlockDependency.isReadyToPlace(world, worldPos, ref.target())) continue;
-                if (!hasBuildPlacementFrontierSupport(worldPos, ref.target(), world)) continue;
 
                 int y = worldPos.getY();
+                if (isBuildLayerCoolingDown(y)) continue;
+                if (isPlacementTargetCoolingDown(worldPos)) continue;
+
+                // Skip cooled pockets for now.
                 if (lowestActionableY == null || y < lowestActionableY) {
                     lowestActionableY = y;
                 }
             }
         }
         return lowestActionableY;
+    }
+
+    /*? if >=26.1 {*//*
+    private BuildPlanFrontier getBuildPlanFrontier(Level world, RenderWindow renderWindow) {
+    *//*?} else {*/
+    private BuildPlanFrontier getBuildPlanFrontier(World world, RenderWindow renderWindow) {
+    /*?}*/
+        int activeBandTopY = getBottomUpActiveBandTopY(world, renderWindow);
+        if (sortMode != SortMode.BOTTOM_UP || activeBandTopY == Integer.MAX_VALUE || world == null) {
+            return new BuildPlanFrontier(activeBandTopY, Integer.MIN_VALUE);
+        }
+
+        long tick = getWorldTick();
+        int minChunkX = renderWindow != null ? renderWindow.minChunkX() : Integer.MIN_VALUE;
+        int maxChunkX = renderWindow != null ? renderWindow.maxChunkX() : Integer.MAX_VALUE;
+        int minChunkZ = renderWindow != null ? renderWindow.minChunkZ() : Integer.MIN_VALUE;
+        int maxChunkZ = renderWindow != null ? renderWindow.maxChunkZ() : Integer.MAX_VALUE;
+        if (cachedBuildPlanFrontierTick == tick
+                && cachedBuildPlanFrontierMinChunkX == minChunkX
+                && cachedBuildPlanFrontierMaxChunkX == maxChunkX
+                && cachedBuildPlanFrontierMinChunkZ == minChunkZ
+                && cachedBuildPlanFrontierMaxChunkZ == maxChunkZ) {
+            return cachedBuildPlanFrontier;
+        }
+
+        Integer activeRow = scanBuildPlanFrontierRow(world, activeBandTopY);
+
+        BuildPlanFrontier result = new BuildPlanFrontier(
+                activeBandTopY,
+                activeRow == null ? Integer.MIN_VALUE : activeRow);
+        cachedBuildPlanFrontierTick = tick;
+        cachedBuildPlanFrontierMinChunkX = minChunkX;
+        cachedBuildPlanFrontierMaxChunkX = maxChunkX;
+        cachedBuildPlanFrontierMinChunkZ = minChunkZ;
+        cachedBuildPlanFrontierMaxChunkZ = maxChunkZ;
+        cachedBuildPlanFrontier = result;
+        return result;
+    }
+
+    /*? if >=26.1 {*//*
+    private Integer scanBuildPlanFrontierRow(Level world, int activeBandTopY) {
+    *//*?} else {*/
+    private Integer scanBuildPlanFrontierRow(World world, int activeBandTopY) {
+    /*?}*/
+        Integer activeRow = null;
+        long tick = getWorldTick();
+        // Pick the first actionable row.
+        for (long key : schematicBlocksByChunk.keySet()) {
+            int chunkX = chunkXFromKey(key);
+            int chunkZ = chunkZFromKey(key);
+            /*? if >=26.1 {*//*
+            if (!world.hasChunk(chunkX, chunkZ)) continue;
+            *//*?} else {*/
+            if (!world.isChunkLoaded(chunkX, chunkZ)) continue;
+            /*?}*/
+
+            for (SchematicBlockRef ref : getUnresolvedChunkEntries(world, tick, key)) {
+                if (!matchesCurrentBuildPass(ref)) continue;
+                if (!isCurrentlyUnresolved(ref, world)) continue;
+                BlockPos worldPos = ref.pos();
+                if (!isWithinActiveBuildFrontier(
+                        worldPos.getY(), activeBandTopY, activeBandTopY)) continue;
+                if (isBuildLayerCoolingDown(worldPos.getY())) continue;
+                if (isPlacementTargetCoolingDown(worldPos)) continue;
+
+                int row = getBuildPlanRow(worldPos);
+                if (activeRow == null || row < activeRow) {
+                    activeRow = row;
+                }
+            }
+        }
+        return activeRow;
+    }
+
+    private boolean isInActiveBuildPlanRow(BlockPos worldPos, BuildPlanFrontier frontier) {
+        if (worldPos == null || frontier == null || sortMode != SortMode.BOTTOM_UP) {
+            return true;
+        }
+        if (!frontier.rowConstrained()) {
+            return true;
+        }
+        return isWithinActiveBuildFrontier(
+                worldPos.getY(), frontier.activeBandTopY(), frontier.activeBandTopY())
+                && getBuildPlanRow(worldPos) == frontier.activeRow();
+    }
+
+    private int compareBuildPlanOrder(BlockPos left, BlockPos right) {
+        if (left == null || right == null || schematic == null || anchor == null) {
+            return 0;
+        }
+        int comparison = Integer.compare(getBuildPlanSection(left), getBuildPlanSection(right));
+        if (comparison != 0) return comparison;
+        comparison = Integer.compare(left.getY(), right.getY());
+        if (comparison != 0) return comparison;
+        comparison = Integer.compare(getBuildPlanRow(left), getBuildPlanRow(right));
+        if (comparison != 0) return comparison;
+        return Integer.compare(getBuildPlanColumnOrder(left), getBuildPlanColumnOrder(right));
+    }
+
+    private int getBuildPlanSection(BlockPos worldPos) {
+        if (worldPos == null || anchor == null) return 0;
+        return Math.floorDiv(worldPos.getY() - anchor.getY(), BUILD_PLAN_SECTION_HEIGHT);
+    }
+
+    private int getBuildPlanRow(BlockPos worldPos) {
+        if (worldPos == null || anchor == null || schematic == null) {
+            return 0;
+        }
+        int sx = worldPos.getX() - anchor.getX();
+        int sz = worldPos.getZ() - anchor.getZ();
+        return buildPlanRowsAlongZ() ? sz : sx;
+    }
+
+    private int getBuildPlanColumn(BlockPos worldPos) {
+        if (worldPos == null || anchor == null || schematic == null) {
+            return 0;
+        }
+        int sx = worldPos.getX() - anchor.getX();
+        int sz = worldPos.getZ() - anchor.getZ();
+        return buildPlanRowsAlongZ() ? sx : sz;
+    }
+
+    private int getBuildPlanColumnOrder(BlockPos worldPos) {
+        if (schematic == null) {
+            return 0;
+        }
+        int row = getBuildPlanRow(worldPos);
+        int column = getBuildPlanColumn(worldPos);
+        int maxColumn = Math.max(0,
+                buildPlanRowsAlongZ() ? schematic.getSizeX() - 1 : schematic.getSizeZ() - 1);
+        return (row & 1) == 0 ? column : maxColumn - column;
+    }
+
+    private boolean buildPlanRowsAlongZ() {
+        return schematic == null || schematic.getSizeX() >= schematic.getSizeZ();
     }
 
     private boolean prefersHigherBuildLayers() {
@@ -9462,7 +9721,8 @@ public class SchematicPrinter {
             return cachedBuildStagingPlan;
         }
         RenderWindow renderWindow = getRenderWindow(playerBlockPos);
-        int activeBandTopY = getBottomUpActiveBandTopY(world, renderWindow);
+        BuildPlanFrontier buildFrontier = getBuildPlanFrontier(world, renderWindow);
+        int activeBandTopY = buildFrontier.activeBandTopY();
         boolean preferExterior = shouldPreferExteriorBuildTargets(playerBlockPos);
         List<StagingTargetCandidate> repairVisibleExteriorCandidates = new ArrayList<>(STAGING_PLAN_MAX_CANDIDATES);
         List<StagingTargetCandidate> repairVisibleInteriorCandidates = new ArrayList<>(STAGING_PLAN_MAX_CANDIDATES);
@@ -9488,6 +9748,7 @@ public class SchematicPrinter {
 
                 BlockPos worldPos = ref.pos();
                 if (worldPos.getY() > activeBandTopY) continue;
+                if (!isInActiveBuildPlanRow(worldPos, buildFrontier)) continue;
                 if (isBuildTargetCoolingDown(worldPos)) continue;
                 if (!printInAir && !PlacementEngine.hasAdjacentSolid(world, worldPos)) continue;
                 if (!BlockDependency.isReadyToPlace(world, worldPos, ref.target())) continue;
@@ -9678,6 +9939,12 @@ public class SchematicPrinter {
 
     private int compareStagingCandidates(BlockPos candidatePos, double candidateDist,
                                          BlockPos existingPos, double existingDist) {
+        if (sortMode == SortMode.BOTTOM_UP && candidatePos != null && existingPos != null) {
+            int planComparison = compareBuildPlanOrder(candidatePos, existingPos);
+            if (planComparison != 0) {
+                return planComparison;
+            }
+        }
         if (candidatePos != null && existingPos != null && candidatePos.getY() != existingPos.getY()) {
             if (isBetterBuildLayer(candidatePos.getY(), existingPos.getY())) {
                 return -1;
@@ -10224,6 +10491,7 @@ public class SchematicPrinter {
         /*?}*/
 	        RenderWindow renderWindow =
 	                getRenderWindow(/*? if >=26.1 {*//* player.blockPosition() *//*?} else {*/player.getBlockPos()/*?}*/);
+	        BuildPlanFrontier buildFrontier = getBuildPlanFrontier(world, renderWindow);
 	        boolean preferExterior =
 	                shouldPreferExteriorBuildTargets(/*? if >=26.1 {*//* player.blockPosition() *//*?} else {*/player.getBlockPos()/*?}*/);
 	        BlockPos bestRepairVisibleExterior = null;
@@ -10242,7 +10510,7 @@ public class SchematicPrinter {
 	        double bestFallbackExteriorDist = Double.MAX_VALUE;
 	        BlockPos bestFallbackInterior = null;
 	        double bestFallbackInteriorDist = Double.MAX_VALUE;
-	        int activeBandTopY = getBottomUpActiveBandTopY(world, renderWindow);
+	        int activeBandTopY = buildFrontier.activeBandTopY();
 
         long tick = getWorldTick();
         for (long key : schematicBlocksByChunk.keySet()) {
@@ -10260,6 +10528,7 @@ public class SchematicPrinter {
 
                 BlockPos worldPos = ref.pos();
                 if (worldPos.getY() > activeBandTopY) continue;
+                if (!isInActiveBuildPlanRow(worldPos, buildFrontier)) continue;
                 if (isBuildTargetCoolingDown(worldPos)) continue;
 
                 // Prefer blocks at the lowest or highest unbuilt Y-level
@@ -11706,7 +11975,11 @@ public class SchematicPrinter {
         *//*?} else {*/
         BlockPos playerPos = player.getBlockPos();
         /*?}*/
-        int activeBandTopY = getBottomUpActiveBandTopY(world, getRenderWindow(playerPos));
+        RenderWindow renderWindow = getRenderWindow(playerPos);
+        BuildPlanFrontier buildFrontier = autoBuild
+                ? getBuildPlanFrontier(world, renderWindow)
+                : new BuildPlanFrontier(Integer.MAX_VALUE, Integer.MIN_VALUE);
+        int activeBandTopY = buildFrontier.activeBandTopY();
         /*? if >=26.1 {*//*
         Vec3 eyePos = player.getEyePosition();
         *//*?} else {*/
@@ -11760,6 +12033,7 @@ public class SchematicPrinter {
                     if (isAutoCreatedPart(target)) continue;
                     if (!matchesCurrentBuildPass(target)) continue;
                     if (worldPos.getY() > activeBandTopY) continue;
+                    if (!isInActiveBuildPlanRow(worldPos, buildFrontier)) continue;
 
                     // This block needs placing — count it for debug
                     dbgTotal++;
@@ -11838,6 +12112,10 @@ public class SchematicPrinter {
             }
         }
 
+        if (candidates.isEmpty() && !fallbackCandidates.isEmpty() && !autoBuild) {
+            // Manual mode places reachable relaxed candidates.
+            candidates.addAll(fallbackCandidates);
+        }
         if (candidates.isEmpty() && !fallbackCandidates.isEmpty()) {
             String probeFailure = PlacementEngine.consumeLastProbeFailure();
             PacketTelemetry.mark("place blocked relaxed=" + fallbackCandidates.size()
@@ -11845,16 +12123,7 @@ public class SchematicPrinter {
                     + " occluded=" + dbgOccluded
                     + (probeFailure != null ? " probe=" + probeFailure : ""));
             boolean pureOcclusion = dbgOccluded > 0 && dbgUnstable == 0;
-            if (pureOcclusion && !deferredPlacementReposition && !PathWalker.isActive()) {
-                // fix28: pocket is reachable but our own body occludes the
-                // down-face probe. Try one in-pocket stance reposition before
-                // abandoning the pocket — finishing it locally is far cheaper
-                // than walking to a fresh zone and back.
-                schedulePlacementAccessReposition(
-                        fallbackCandidates.get(0),
-                        "occluded local stance — repositioning in pocket",
-                        PLACEMENT_START_FAILURE_PAUSE_TICKS);
-            } else if (pureOcclusion) {
+            if (pureOcclusion) {
                 recordBuildLayerAccessFailure(fallbackCandidates.get(0), "occluded local stance");
                 coolDownPlacementTargets(
                         fallbackCandidates,
@@ -11894,6 +12163,7 @@ public class SchematicPrinter {
                         + " player=" + posLabel(playerPos)
                         + " lastZone=" + posLabel(lastWalkTargetZone)
                         + " activeTop=" + activeBandTopY
+                        + " activeRow=" + buildFrontier.activeRow()
                         + (dbgFirstFiltered != null
                         ? " first=" + posLabel(dbgFirstFiltered) + ":" + dbgFirstReason
                         : ""));
@@ -11968,6 +12238,8 @@ public class SchematicPrinter {
         Comparator<BlockPos> comparator;
         if (sortMode == SortMode.BOTTOM_UP) {
             comparator = Comparator.<BlockPos>comparingInt(BlockPos::getY)
+                .thenComparingInt(this::getBuildPlanRow)
+                .thenComparingInt(this::getBuildPlanColumnOrder)
                 .thenComparingInt((BlockPos p) -> {
                         int sx2 = p.getX() - anchor.getX();
                         int sy2 = p.getY() - anchor.getY();
@@ -12014,6 +12286,7 @@ public class SchematicPrinter {
         candidates.sort(comparator);
 
         Set<Item> missing = new HashSet<>();
+        Set<Item> deferredInventorySwapItems = new HashSet<>();
         int dbgDepSkip = 0, dbgPlaceFail = 0, dbgScaffold = 0;
         int deferredInventorySwapCandidates = 0;
         BlockPos dbgFirstPlaceFail = null;
@@ -12078,6 +12351,7 @@ public class SchematicPrinter {
                     if (missing.contains(bucketItem)) continue;
                     if (!fastLaneOnly && !liveInventorySwapAllowed) {
                         deferredInventorySwapCandidates++;
+                        deferredInventorySwapItems.add(bucketItem);
                         continue;
                     }
 
@@ -12106,6 +12380,7 @@ public class SchematicPrinter {
                 }
                 if (!fastLaneOnly && !liveInventorySwapAllowed) {
                     deferredInventorySwapCandidates++;
+                    deferredInventorySwapItems.add(requiredItem);
                     continue;
                 }
 
@@ -12218,11 +12493,43 @@ public class SchematicPrinter {
         if (placeDebugCooldown > 0) placeDebugCooldown--;
 
         if (deferredInventorySwapCandidates > 0) {
+            SetbackMonitor monitor = SetbackMonitor.get();
+            boolean swapsSuspended = PlacementEngine.areSwapsSuspended();
             PacketTelemetry.mark("build wait inventory-swap candidates=" + deferredInventorySwapCandidates
                     + " fastLaneSeen=" + sawFastLaneCandidate
-                    + " calm=" + SetbackMonitor.get().isCalm()
+                    + " calm=" + monitor.isCalm()
+                    + " stationary=" + monitor.isStationaryFor(3)
+                    + " suspended=" + swapsSuspended
+                    + " wait=" + inventorySwapWaitTicks
+                    + " override=" + forceLiveInventorySwapOnce
                     + " failures=" + PlacementEngine.getConsecutiveFailures()
                     + " rejections=" + PlacementEngine.getConsecutiveRejections());
+            if (swapsSuspended && !deferredInventorySwapItems.isEmpty()) {
+                Set<Item> unavailableItems = new HashSet<>(missing);
+                unavailableItems.addAll(deferredInventorySwapItems);
+                lastMissingItems = unavailableItems;
+                inventorySwapWaitTicks = 0;
+                forceLiveInventorySwapOnce = false;
+                PacketTelemetry.mark("build inventory-swap suspended items="
+                        + unavailableItems.size());
+                return false;
+            }
+            boolean stableForSwap = monitor.isCalm()
+                    && monitor.recentSetbackCount(BUILD_SWAP_RECENT_SETBACK_WINDOW) == 0
+                    && PlacementEngine.getConsecutiveRejections() == 0;
+            if (stableForSwap) {
+                inventorySwapWaitTicks += PLACEMENT_START_FAILURE_PAUSE_TICKS;
+            } else {
+                inventorySwapWaitTicks = 0;
+                forceLiveInventorySwapOnce = false;
+            }
+            if (!forceLiveInventorySwapOnce
+                    && inventorySwapWaitTicks >= INVENTORY_SWAP_WAIT_ESCALATION_TICKS) {
+                forceLiveInventorySwapOnce = true;
+                PacketTelemetry.mark("build inventory-swap armed candidates="
+                        + deferredInventorySwapCandidates
+                        + " items=" + deferredInventorySwapItems.size());
+            }
             placementFailurePauseTicks = Math.max(
                     placementFailurePauseTicks, PLACEMENT_START_FAILURE_PAUSE_TICKS);
             walkAttemptCooldown = Math.max(
@@ -12346,7 +12653,7 @@ public class SchematicPrinter {
         // of whether the schematic happens to want a different block at
         // that position. Previously this method also required the live
         // block to match the schematic's expected state when the support
-        // was inside the schematic footprint — that turned the hologram
+        // Keep support checks anchored to the exact target.
         // into a click-reference rather than a goal description, and
         // rejected nearly every candidate (including natural terrain and
         // already-placed wrong-color blocks) as occluded. Cleared blocks
@@ -12449,7 +12756,9 @@ public class SchematicPrinter {
         BlockPos playerPos = player.getBlockPos();
         Vec3d eyePos = player.getEyePos();
         /*?}*/
-        int activeBandTopY = getBottomUpActiveBandTopY(world, getRenderWindow(playerPos));
+        RenderWindow renderWindow = getRenderWindow(playerPos);
+        BuildPlanFrontier buildFrontier = getBuildPlanFrontier(world, renderWindow);
+        int activeBandTopY = buildFrontier.activeBandTopY();
         boolean relaxedOpportunity = false;
 
         for (int dy = -maxReach; dy <= maxReach; dy++) {
@@ -12476,6 +12785,7 @@ public class SchematicPrinter {
                     if (isAutoCreatedPart(target)) continue;
                     if (!matchesCurrentBuildPass(target)) continue;
                     if (worldPos.getY() > activeBandTopY) continue;
+                    if (!isInActiveBuildPlanRow(worldPos, buildFrontier)) continue;
                     if (isEffectivelyPlaced(world.getBlockState(worldPos), target)) continue;
 
                     if (isBuildTargetCoolingDown(worldPos)) continue;
@@ -12530,7 +12840,9 @@ public class SchematicPrinter {
         BlockPos playerPos = player.getBlockPos();
         Vec3d eyePos = player.getEyePos();
         /*?}*/
-        int activeBandTopY = getBottomUpActiveBandTopY(world, getRenderWindow(playerPos));
+        RenderWindow renderWindow = getRenderWindow(playerPos);
+        BuildPlanFrontier buildFrontier = getBuildPlanFrontier(world, renderWindow);
+        int activeBandTopY = buildFrontier.activeBandTopY();
 
         for (int dy = -maxReach; dy <= maxReach; dy++) {
             for (int dx = -maxReach; dx <= maxReach; dx++) {
@@ -12556,6 +12868,7 @@ public class SchematicPrinter {
                     if (isAutoCreatedPart(target)) continue;
                     if (!matchesCurrentBuildPass(target)) continue;
                     if (worldPos.getY() > activeBandTopY) continue;
+                    if (!isInActiveBuildPlanRow(worldPos, buildFrontier)) continue;
                     if (isEffectivelyPlaced(world.getBlockState(worldPos), target)) continue;
                     if (isBuildTargetCoolingDown(worldPos)) continue;
                     if (!printInAir && !PlacementEngine.hasAdjacentSolid(world, worldPos)) continue;

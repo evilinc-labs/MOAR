@@ -3,6 +3,7 @@ package dev.moar.stash;
 import dev.moar.MoarMod;
 import dev.moar.chest.ChestManager;
 import dev.moar.util.ChatHelper;
+import dev.moar.util.ItemIdentifier;
 import dev.moar.util.MoarNetworkManager;
 import dev.moar.util.PathWalker;
 /*? if >=26.1 {*//*
@@ -719,11 +720,7 @@ public final class StashManager {
             /*?}*/
             if (stack.isEmpty()) continue;
 
-            /*? if >=26.1 {*//*
-            String itemId = BuiltInRegistries.ITEM.getKey(stack.getItem()).toString();
-            *//*?} else {*/
-            String itemId = Registries.ITEM.getId(stack.getItem()).toString();
-            /*?}*/
+            String itemId = ItemIdentifier.getItemId(stack);
 
             if (ChestManager.isShulkerBox(stack)) {
                 shulkerCount++;
