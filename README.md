@@ -4,7 +4,7 @@
 
 A client-side Fabric mod that automates schematic building, spawn-proofing, and container management. Load a `.litematic`, point it at some supply chests, and let it build, restock, recover from disconnects, and keep working across long multi-container runs.
 
-## 3.0 Highlights
+## Highlights
 
 - **Highway travel system** : automatically plans and executes nether highway runs — detects the nearest highway, bounces to the exit, detours around grief, and resumes after obstacles
 - **Bounce flight** : elytra bounce engine with geometric ground/air detection, lateral knockback recovery, and a 10-tick yaw-settle window before each bounce restart
@@ -75,8 +75,22 @@ Scan, index, and organize containers across large areas.
 - **Waypoint walking** : navigates between zones for areas beyond render distance
 - **CSV export** : exports the full inventory index to file
 - **Dump chests** : designate chests for depositing mined items during area clearing
+- **Storage lanes** : dedicate chest lanes to specific items and auto-sort inventory into them (see below)
 - **REST API** : embedded HTTP server with Prometheus metrics for Grafana dashboards
 - **Webhook** : POST JSON to n8n or other services on scan completion
+
+### Storage Lanes
+Assign specific items to dedicated chest lanes and auto-sort your inventory into them.
+
+- **Lane scanning** : scans a region and infers candidate lanes from chest groupings
+- **Manual lanes** : create named lanes by hand and add chests/hoppers to them one at a time
+- **Deposit modes** : `direct_fill` (walk to the first open chest in the lane), `input_only` (deposit only through hopper/input positions), `hybrid` (try inputs first, fall back to direct fill)
+- **Auto-sort** : walks your inventory and deposits each item into its assigned lane
+- **Preview-first workflow** : scan → preview → accept, and sort → preview → run, so nothing moves until you confirm it
+- **Labeling** : preview item-frame label positions for lanes (placement flow is a stub for now)
+
+### In-Game GUI
+Run `/moar gui` to open a control screen with tabs for **Kits**, **Index**, **Regions**, **Retrieve**, **Printer**, **Spawnproof**, and **API** settings — a mouse-driven alternative to typing commands for kit management, stash retrieval, and API/webhook configuration.
 
 ## Supported Versions
 
@@ -116,6 +130,18 @@ All versions require [Fabric Loader](https://fabricmc.net/use/) ≥ 0.18.4.
 
 ## Commands
 
+### MOAR (Core)
+
+| Command | What it does |
+|---------|--------------|
+| `/moar gui` | Open the MOAR control screen (Kits, Index, Regions, Retrieve, Printer, Spawnproof, API tabs) |
+| `/moar packetlog on` | Start recording placement/interaction packet telemetry |
+| `/moar packetlog off` | Stop recording telemetry |
+| `/moar packetlog status` | Show whether telemetry is enabled and how many events are buffered |
+| `/moar packetlog clear` | Clear the telemetry buffer |
+| `/moar packetlog mark` | Insert a manual marker into the trace |
+| `/moar packetlog dump` | Write the telemetry trace to a file for diagnostics |
+
 ### Printer
 
 | Command | What it does |
@@ -132,6 +158,8 @@ All versions require [Fabric Loader](https://fabricmc.net/use/) ≥ 0.18.4.
 | `/printer status` | Show progress and completion percentage |
 | `/printer materials` | Show required materials vs. supply inventory |
 | `/printer resume` | Resume from last checkpoint |
+| `/printer holes` | List abandoned build targets (sealed positions the printer gave up on), with a bounding box to help you find them |
+| `/printer holes retry` | Clear the abandoned list so those positions are re-attempted on the next scan |
 | `/printer speed [1–20]` | Get/set placement speed (default: 13 blocks/sec) |
 | `/printer sort [mode]` | Set build order: `bottom_up`, `top_down`, `nearest` |
 | `/printer air` | Toggle air placement (floating blocks) |
@@ -213,6 +241,31 @@ All versions require [Fabric Loader](https://fabricmc.net/use/) ≥ 0.18.4.
 | `/stash dump remove` | Unmark the nearest dump chest |
 | `/stash dump list` | List all dump chests |
 | `/stash dump clear` | Remove all dump chests |
+
+### Storage Lanes
+
+| Command | What it does |
+|---------|--------------|
+| `/stash lanes` | Show lane subcommand help |
+| `/stash lanes region pos1 [x y z]` | Set lane region corner 1 (default: player position) |
+| `/stash lanes region pos2 [x y z]` | Set lane region corner 2 |
+| `/stash lanes scan` | Scan the region for candidate lanes |
+| `/stash lanes preview` | Preview pending (unsaved) lanes from the last scan |
+| `/stash lanes accept` | Save pending lanes to the database |
+| `/stash lanes list` | List accepted lanes |
+| `/stash lanes clear` | Delete all accepted lanes |
+| `/stash lanes create <name> [item]` | Create a manual lane, optionally pre-assigned to an item |
+| `/stash lanes addchest <name>` | Add the chest/barrel/shulker you're looking at to a lane |
+| `/stash lanes addinput <name>` | Add the hopper/container you're looking at as a lane input |
+| `/stash lanes setmode <name> <mode>` | Set deposit mode: `direct_fill`, `input_only`, or `hybrid` |
+| `/stash lanes setface <name> <direction>` | Set the lane's front-facing direction |
+| `/stash lanes remove <name>` | Remove a lane |
+| `/stash lanes assign <item>` | Assign an item to the chest/barrel you're looking at |
+| `/stash lanes sort` | Sort your inventory into accepted lanes |
+| `/stash lanes sort preview` | Preview inventory moves without executing them |
+| `/stash lanes sort stop` | Stop an in-progress sort |
+| `/stash lanes label preview` | Preview label-frame positions for lanes |
+| `/stash lanes label run` | Run the labeling flow (placeholder — placement not yet implemented) |
 
 ### API & Monitoring
 
@@ -342,10 +395,10 @@ when explicitly requested.
 ./gradlew build                  # Build targets supported by the current JDK
 ./gradlew :1.21.8:build          # Build one version
 ./gradlew -Pmoar.includeJava25Targets=true build  # Include 26.1.1 on JDK 25+
-./gradlew buildAndCollect        # Collect all JARs -> build/libs/3.0.0/
+./gradlew buildAndCollect        # Collect all JARs -> build/libs/<mod.version>/
 ```
 
-Output: `versions/<mc>/build/libs/moar-3.0.0+<mc>.jar`
+Output: `versions/<mc>/build/libs/moar-<mod.version>+<mc>.jar` (current version: see `mod.version` in [gradle.properties](gradle.properties))
 
 ### Build Stack
 
