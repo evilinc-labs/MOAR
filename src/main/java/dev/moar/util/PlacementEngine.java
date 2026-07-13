@@ -95,6 +95,13 @@ import net.minecraft.network.protocol.game.ServerboundMovePlayerPacket;
 import net.minecraft.network.packet.c2s.play.PlayerMoveC2SPacket;
 /*?}*/
 /*? if >=26.1 {*//*
+import net.minecraft.network.protocol.game.ClientboundBlockUpdatePacket;
+import net.minecraft.network.protocol.game.ClientboundSectionBlocksUpdatePacket;
+*//*?} else {*/
+import net.minecraft.network.packet.s2c.play.BlockUpdateS2CPacket;
+import net.minecraft.network.packet.s2c.play.ChunkDeltaUpdateS2CPacket;
+/*?}*/
+/*? if >=26.1 {*//*
 import net.minecraft.world.inventory.ContainerInput;
 *//*?} else {*/
 import net.minecraft.screen.slot.SlotActionType;
@@ -156,6 +163,7 @@ import net.minecraft.entity.attribute.EntityAttributes;
 
 import java.util.ArrayList;
 import java.util.ArrayDeque;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -225,12 +233,17 @@ public final class PlacementEngine {
     private static final int  HOTBAR_SELECT_VALIDATE_FAILURE_COOLDOWN_TICKS = 100;
     private static final int  HOTBAR_SELECT_SETTLE_TICKS = 2;
     private static final int  HOTBAR_SELECT_PACKET_SETTLE_TICKS = 3;
+    // One settle tick between aim and interact so the look packet precedes the
+    // place on the wire, without throttling throughput.
     private static final int  PRE_PLACE_LOOK_SYNC_TICKS = 1;
     private static final int  INVENTORY_SWAP_SETTLE_TICKS = 7;
     private static final int  INVENTORY_SWAP_ITEM_VARIETY_SETTLE_TICKS = 4;
     private static final float ORIENTATION_LOOK_MAX_YAW_DIFF = 18.0f;
     private static final float ORIENTATION_LOOK_MAX_PITCH_DIFF = 18.0f;
     private static final double FACE_PROBE_OFFSET = 0.22;
+    // Extend the ray this far into the support so a top-face entry hit
+    // registers; the placement packet still uses the exact on-face position.
+    private static final double FACE_PROBE_RAY_DEPTH = 0.002;
     private static int        inventorySwapSettleTicks;
     private static Item       lastPlacementItem;
     private static int        itemVarietyCooldownTicks;
@@ -239,10 +252,16 @@ public final class PlacementEngine {
     private static final double SAFE_PLACE_REACH_BLOCKS = 3.85;
     // Tolerance subtracted from block_interaction_range when computing reach;
     // absorbs minor client/server eye desync. Stationary printer needs little.
-    private static final double REACH_AC_SAFETY_MARGIN = 0.15;
+    // Grim measures reach from its lagged player position, so ~3.87 client-side
+    // reads as 4.0+ and gets dropped. 0.9 margin => ~3.6 effective; relocate
+    // closer past that.
+    private static final double REACH_AC_SAFETY_MARGIN = 0.8;
     // Sane upper bound that prevents runaway in case of a misconfigured attribute.
     private static final double REACH_HARD_CEILING = 6.0;
-    private static final double PLACEMENT_ENTITY_MARGIN = 0.20;
+    // Small margin over the 0.6 hitbox for Grim's padded player box. 0.35 was
+    // too aggressive once reach pulled in - head-height cells looped body-
+    // clearance forever.
+    private static final double PLACEMENT_ENTITY_MARGIN = 0.24;
     private static final Direction[] NORMAL_PLACE_FACE_ORDER = {
             Direction.DOWN,
             Direction.NORTH,
@@ -274,9 +293,12 @@ public final class PlacementEngine {
         }
     };
     private static final int MAX_CORRECTION_ATTEMPTS = 2;
+    // Turn budget to face the block before placing. Fast snap at MAX_TURN_SPEED
+    // reaches any aim in 1-2 ticks; 4 ticks covers a 180 swing. Placing mid-turn
+    // was the main ghost source.
     private static final int  MAX_ROTATE_TICKS = 4;
     private static final float CONVERGE_THRESHOLD = 1.0f;
-    private static final float MAX_TURN_SPEED = 30.0f;
+    private static final float MAX_TURN_SPEED = 90.0f;
 
     private static boolean silentRotation = false;
 
@@ -315,14 +337,88 @@ public final class PlacementEngine {
         return false;
     }
 
+    // Decoupled camera (/printer camera off): never turns the real camera.
+    // Publishes the aim; the movement-packet mixin swaps it into vanilla's flying
+    // packet and restores the view. Server gets real rotation, our screen doesn't.
+    private static volatile boolean decoupledCamera = false;
+    private static volatile boolean hasServerAim = false;
+    private static volatile float serverAimYaw = 0f;
+    private static volatile float serverAimPitch = 0f;
+
+    public static void setDecoupledCamera(boolean v) {
+        decoupledCamera = v;
+        if (!v) hasServerAim = false;
+    }
+    public static boolean isDecoupledCamera() { return decoupledCamera; }
+
+    private static void publishServerAim(float yaw, float pitch) {
+        serverAimYaw = wrapDegrees180(yaw);
+        serverAimPitch = Math.max(-90f, Math.min(90f, pitch));
+        hasServerAim = true;
+    }
+    private static void clearServerAim() { hasServerAim = false; }
+
+    // Called by PlacementMovementSuppressMixin around vanilla's sendMovementPackets.
+    // Only inject during the aim→click window; outside it, vanilla's packets must
+    // carry the player's real view again (so movement/look stay normal).
+    public static boolean hasServerAimOverride() {
+        // Inject during the sync tick only. The placing tick suppresses vanilla's
+        // flying packet, so the aim from here is the last rotation before the click.
+        return decoupledCamera && hasServerAim && phase == PlacePhase.SYNCING_LOOK;
+    }
+    // Tiny per-packet jitter so that if PLACING ever spans more than one tick the
+    // injected rotations aren't byte-identical (AimDuplicateLook). Sub-0.02° - the
+    // placement ray still hits the same block.
+    public static float getServerAimYaw() {
+        return wrapDegrees180(serverAimYaw
+                + (ThreadLocalRandom.current().nextFloat() * 0.02f - 0.01f));
+    }
+    public static float getServerAimPitch() {
+        return Math.max(-90f, Math.min(90f, serverAimPitch
+                + (ThreadLocalRandom.current().nextFloat() * 0.02f - 0.01f)));
+    }
+
     private static final double TICKS_PER_SECOND = 20.0;
     private static final double MAX_PLACE_CREDITS = 1.0;
 
-    // Minimum gap (ns) between consecutive placements, derived from the BPS setting.
+    // User-set ceiling (blocks/sec). The ACTUAL rate is congestion-controlled
+    // (effectiveBps) and never exceeds this.
     private static int    bps               = 19;
     private static long   lastPlacementTick = Long.MIN_VALUE;
     private static long   throttleTick      = Long.MIN_VALUE;
     private static double placeCredits      = MAX_PLACE_CREDITS;
+
+    // AIMD congestion control on the placement rate (TCP-style): additive-
+    // increase on each confirmed place, multiplicative-decrease on any failure.
+    // Self-settles just under Grim's tolerance.
+    private static final double AIMD_MIN_BPS      = 4.0;   // always trickle
+    private static final double AIMD_START_BPS    = 8.0;   // start at the user's target rate
+    private static final double AIMD_INCREASE     = 0.8;   // ramp back to ceiling fast when accepting
+    private static final double AIMD_DECREASE     = 0.6;   // back off on failure (gentler than halving)
+    private static double effectiveBps            = AIMD_START_BPS;
+
+    // Set by the printer's per-tick scan: use a single center ray instead of the
+    // 9-point sweep (hundreds of cells/tick). The precise sweep still runs at
+    // actual placement.
+    private static final double[][] CHEAP_PROBES = { {0.0, 0.0} };
+    private static boolean cheapProbeScan = false;
+    public static void setCheapProbeScan(boolean value) { cheapProbeScan = value; }
+
+    private static double activeBps() {
+        return Math.max(AIMD_MIN_BPS, Math.min(bps, effectiveBps));
+    }
+
+    // Confirmed placement: nudge the rate up toward the user's ceiling.
+    private static void aimdOnSuccess() {
+        effectiveBps = Math.min(bps, effectiveBps + AIMD_INCREASE);
+    }
+
+    // Failed placement (timeout/ghost/reject): back off hard. Repeated
+    // failures compound the halving, so a real Grim spell drops the rate to
+    // the floor within a few events and stops flooding it.
+    private static void aimdOnFailure() {
+        effectiveBps = Math.max(AIMD_MIN_BPS, effectiveBps * AIMD_DECREASE);
+    }
 
     // Server-side placement verification — detect strict server validation rollbacks.
     private static final int VERIFY_DELAY_TICKS = 3;
@@ -330,7 +426,35 @@ public final class PlacementEngine {
     // Trace showed late-accept totalElapsed=109 — server intake processes UseItemOn
     // at ~109 client-ticks under heavy load. 120 ticks (6s) gives headroom and covers
     // down to ~0.17 TPS (one server tick every 6 client seconds).
-    private static final int VERIFY_TIMEOUT_TICKS = 120;
+    // Base window; the effective one is adaptive (adaptiveEchoTimeout) so a
+    // laggy server's slow echoes are never falsely timed out.
+    private static final int VERIFY_TIMEOUT_TICKS = 55;
+    // A block that renders correctly but hasn't echoed yet has NOT ghosted -
+    // it is a slow accept. Wait up to this long (only real, un-rendered
+    // failures should ever hit it) before reverting.
+    private static final int ECHO_TIMEOUT_CEILING = 160;
+    // A block that never even appeared client-side (still the original after
+    // the predict delay) didn't take - retry fast instead of waiting out the
+    // full echo window. Drives the "faster burst" the user asked for.
+    private static final int NEVER_PLACED_TIMEOUT_TICKS = 12;
+    // Rolling worst-case observed echo latency (ticks); adaptiveEchoTimeout is
+    // a generous multiple of it so the window tracks the actual server.
+    private static long maxRecentEchoLatency = 10;
+
+    private static int adaptiveEchoTimeout() {
+        return (int) Math.max(VERIFY_TIMEOUT_TICKS,
+                Math.min(ECHO_TIMEOUT_CEILING, maxRecentEchoLatency * 3));
+    }
+
+    private static void recordEchoLatency(long ticks) {
+        // Fast rise, slow decay: react immediately to a lag spike, relax
+        // gradually so a single quick echo doesn't shrink the window.
+        if (ticks > maxRecentEchoLatency) {
+            maxRecentEchoLatency = ticks;
+        } else {
+            maxRecentEchoLatency = Math.max(10, (maxRecentEchoLatency * 15 + ticks) / 16);
+        }
+    }
     private static final int MAX_VERIFY_QUEUE = 32;
     // Fix #22: window size 1 — only one UseItemOn in-flight at a time.
     // Test #13/#14 traced the timeout pattern to the server's per-player
@@ -357,12 +481,12 @@ public final class PlacementEngine {
             java.util.function.Predicate<BlockPos> supportFilter) {}
     private static final ArrayDeque<QueuedPlacement> placementQueue = new ArrayDeque<>();
     private static final int PLACEMENT_QUEUE_CAPACITY = 8;
-    // Freshly placed supports ACK in ~3 ticks, so 8 ticks is enough to let the
-    // server register a support before we build against it without abandoning
-    // the local pocket and walking away.
-    private static final int RECENT_SUPPORT_SETTLE_TICKS = 8;
+    // Ticks to keep deferring a build against a just-ACCEPTED support. The timer
+    // starts at the ACK (block already registered), so keep it tiny - 8 was dead
+    // time that crawled contiguous walls. Bump up if fresh supports ghost.
+    private static final int RECENT_SUPPORT_SETTLE_TICKS = 2;
     private static final int MAX_RECENT_ACCEPTED_SUPPORTS = 128;
-    private static final int POST_PLACE_SETTLE_TICKS = 2;
+    private static final int POST_PLACE_SETTLE_TICKS = 1;
     private static final int PLACE_ROTATION_PRESERVE_TICKS = 1;
     private static int lastSentSelectedSlot = -1;
     private static boolean suppressVanillaMoveOnce = false;
@@ -370,6 +494,9 @@ public final class PlacementEngine {
     private static int totalTimeouts = 0;
     private static int consecutiveRejections = 0;
     private static int totalRejections = 0;
+    private static int totalAccepted = 0;
+    private static int totalGhosts = 0;
+    private static long lastEchoLatencyTicks = 0;
     // Timeout breakers: first suspend inventory swaps, then only hard-pause
     // AutoBuild if the timeout streak includes swap-dependent placements.
     private static final int TIMEOUT_SUSPEND_THRESHOLD = 2;
@@ -391,6 +518,27 @@ public final class PlacementEngine {
     private static int swapsSuspendedRecoveryTicks = 0;
     private static boolean autoBuildKillSwitch = false;
     private static boolean autoBuildKillSwitchNoticePending = false;
+    // Placement-wide quiet period: when the server shadow-cancels several places
+    // in a row, back off entirely for a window then resume with fresh counters.
+    private static final int PLACEMENT_QUIET_THRESHOLD = 4;
+    private static final int PLACEMENT_QUIET_TICKS = 600; // 30s base
+    private static final int PLACEMENT_QUIET_MAX_TICKS = 2400; // 120s cap
+    private static int placementQuietTicks = 0;
+    // Consecutive quiet periods without a healthy stretch between them. Each
+    // repeat doubles the pause so a real Grim violation spell gets long enough
+    // to fully decay instead of resuming into another instant rejection.
+    private static int placementQuietStreak = 0;
+    private static long placementQuietLastEndTick = Long.MIN_VALUE;
+    private static boolean placementQuietNoticePending = false;
+    private static boolean placementQuietResumedNoticePending = false;
+    // Positions that ghosted repeatedly - stop re-placing them from the same
+    // stance; the printer's target-cooldown machinery relocates instead.
+    private static final int MAX_GHOSTS_PER_POSITION = 2;
+    private static final Map<BlockPos, Integer> ghostStreak = new LinkedHashMap<>(32, 0.75f, false) {
+        @Override protected boolean removeEldestEntry(Map.Entry<BlockPos, Integer> eldest) {
+            return size() > 128;
+        }
+    };
     // True while an INVENTORY_SWAP-staged placement is in flight, so the
     // verification entry can record swap dependency; cleared once enqueued.
     private static boolean placementUsedInventorySwap = false;
@@ -407,6 +555,19 @@ public final class PlacementEngine {
     private static BlockPos lastVerificationSupportPos;
     private static BlockPos lastNoVisiblePlacementHitTarget;
     private static BlockPos lastBodyClearancePlacementTarget;
+    private static BlockPos lastRayFragileTarget;
+    // Ticks to wait for the game's crosshair to settle on the target before
+    // giving up (mc.crosshairTarget updates in the render loop, lagging rotation).
+    private static final int CROSSHAIR_SETTLE_LIMIT_TICKS = 4;
+    private static int crosshairSettleTicks = 0;
+
+    // Drains the most recent send-time ray-fragile abort target (once), so the
+    // printer can cool it down and relocate instead of re-selecting it.
+    public static BlockPos consumeRayFragileTarget() {
+        BlockPos t = lastRayFragileTarget;
+        lastRayFragileTarget = null;
+        return t;
+    }
 
     public enum VerificationStatus {
         NONE,
@@ -461,6 +622,18 @@ public final class PlacementEngine {
     public static int getConsecutiveFailures() { return consecutiveFailures; }
     // Total placements that timed out since last reset.
     public static int getTotalTimeouts() { return totalTimeouts; }
+    // Total server-confirmed placements since last reset.
+    public static int getTotalAccepted() { return totalAccepted; }
+    // Total detected ghosts (rendered client-side, never confirmed) since reset.
+    public static int getTotalGhosts() { return totalGhosts; }
+    // Most recent server echo latency (ticks between place and confirm).
+    public static long getLastEchoLatencyTicks() { return lastEchoLatencyTicks; }
+    // Adaptive echo timeout the verifier is currently using (ticks).
+    public static int getAdaptiveEchoTimeout() { return adaptiveEchoTimeout(); }
+    // In-flight placements awaiting server confirmation.
+    public static int getInFlightVerifications() { return verifyQueue.size(); }
+    // Seconds left in a placement-quiet backoff (0 = not backing off).
+    public static boolean isInPlacementQuiet() { return placementQuietTicks > 0; }
     // Number of consecutive placements that were rejected by the server.
     public static int getConsecutiveRejections() { return consecutiveRejections; }
     // Total placements rejected since last reset.
@@ -479,6 +652,41 @@ public final class PlacementEngine {
         swapsResumedNoticePending = false;
         return true;
     }
+
+    public static boolean consumePlacementQuietNotice() {
+        if (!placementQuietNoticePending) return false;
+        placementQuietNoticePending = false;
+        return true;
+    }
+
+    public static boolean consumePlacementQuietResumedNotice() {
+        if (!placementQuietResumedNoticePending) return false;
+        placementQuietResumedNoticePending = false;
+        return true;
+    }
+
+    public static int getPlacementQuietSecondsRemaining() {
+        return placementQuietTicks / 20;
+    }
+
+    private static void maybeEnterPlacementQuiet() {
+        if (placementQuietTicks > 0) return;
+        if (consecutiveTimeouts < PLACEMENT_QUIET_THRESHOLD) return;
+        // Escalate if we're re-tripping soon after a previous quiet ended
+        // (Grim still in its violation state); otherwise reset to the base.
+        long now = getCurrentWorldTick();
+        if (now >= 0 && placementQuietLastEndTick >= 0
+                && now - placementQuietLastEndTick > PLACEMENT_QUIET_MAX_TICKS) {
+            placementQuietStreak = 0;
+        }
+        placementQuietStreak++;
+        placementQuietTicks = (int) Math.min(PLACEMENT_QUIET_MAX_TICKS,
+                (long) PLACEMENT_QUIET_TICKS << Math.min(3, placementQuietStreak - 1));
+        placementQuietNoticePending = true;
+        PacketTelemetry.mark("breaker placement-quiet consecutiveTimeouts=" + consecutiveTimeouts
+                + " streak=" + placementQuietStreak
+                + " ticks=" + placementQuietTicks);
+    }
     // True once the AutoBuild kill switch has tripped (server stopped acking placements).
     public static boolean isAutoBuildKillSwitchTripped() { return autoBuildKillSwitch; }
     // Returns true exactly once after the AutoBuild kill switch trips.
@@ -493,6 +701,17 @@ public final class PlacementEngine {
         if (consecutiveTimeouts <= 0) return 0;
         return Math.min(12, consecutiveTimeouts * 4);
     }
+    // Resets the session stat counters shown by /moar debug stats, and the
+    // AIMD rate back to its start so a fresh test measures from a clean rate.
+    public static void resetStats() {
+        totalAccepted = 0;
+        totalGhosts = 0;
+        totalTimeouts = 0;
+        totalRejections = 0;
+        lastEchoLatencyTicks = 0;
+        effectiveBps = AIMD_START_BPS;
+    }
+
     public static void resetRejectionCounters() {
         verifyQueue.clear();
         verificationStates.clear();
@@ -524,6 +743,13 @@ public final class PlacementEngine {
         swapsSuspendedRecoveryTicks = 0;
         autoBuildKillSwitch = false;
         autoBuildKillSwitchNoticePending = false;
+        placementQuietTicks = 0;
+        placementQuietStreak = 0;
+        placementQuietLastEndTick = Long.MIN_VALUE;
+        placementQuietNoticePending = false;
+        placementQuietResumedNoticePending = false;
+        effectiveBps = AIMD_START_BPS;
+        ghostStreak.clear();
         // Fix #20: late-watch entries from a prior session are no longer
         // meaningful; drop them so the new session starts clean.
         lateAcceptWatch.clear();
@@ -601,6 +827,111 @@ public final class PlacementEngine {
     }
 
     // Tick the verification queue. Call once per game tick.
+    // Server block-echo ledger - ground truth for verification, fed from
+    // PacketTelemetryMixin. A place counts ACCEPTED only once the server echoes
+    // the block; a client-correct cell may be a swallowed prediction (ghost).
+    private static final int MAX_SERVER_BLOCK_ECHOES = 4096;
+    private static final Map<Long, Block> serverBlockEchoes =
+            Collections.synchronizedMap(new LinkedHashMap<>(256, 0.75f, false) {
+                @Override protected boolean removeEldestEntry(Map.Entry<Long, Block> eldest) {
+                    return size() > MAX_SERVER_BLOCK_ECHOES;
+                }
+            });
+
+    // Last rotation put on the wire (ours or vanilla's), so we never send an
+    // identical one twice - Grim's AimDuplicateLook (from.equals(to)). Fed from
+    // the packet mixin.
+    private static volatile float lastSentLookYaw = Float.NaN;
+    private static volatile float lastSentLookPitch = Float.NaN;
+
+    public static void onOutgoingPacket(Object packet) {
+        /*? if >=26.1 {*//*
+        if (packet instanceof net.minecraft.network.protocol.game.ServerboundMovePlayerPacket move
+                && move.hasRotation()) {
+            lastSentLookYaw = move.getYRot(lastSentLookYaw);
+            lastSentLookPitch = move.getXRot(lastSentLookPitch);
+        }
+        *//*?} else {*/
+        if (packet instanceof net.minecraft.network.packet.c2s.play.PlayerMoveC2SPacket move
+                && move.changesLook()) {
+            lastSentLookYaw = move.getYaw(lastSentLookYaw);
+            lastSentLookPitch = move.getPitch(lastSentLookPitch);
+        }
+        /*?}*/
+    }
+
+    // True if sending (yaw,pitch) would be byte-identical to the last look we
+    // put on the wire - which AimDuplicateLook flags. Records the value as the
+    // new last-look when it's NOT a duplicate (so back-to-back callers dedup).
+    private static boolean wouldDuplicateLook(float yaw, float pitch) {
+        return yaw == lastSentLookYaw && pitch == lastSentLookPitch;
+    }
+
+    // Called from the network thread for every inbound packet.
+    public static void onIncomingPacket(Object packet) {
+        /*? if >=26.1 {*//*
+        if (packet instanceof ClientboundBlockUpdatePacket update) {
+            long key = update.getPos().asLong();
+            serverBlockEchoes.put(key, update.getBlockState().getBlock());
+            recordBlockChange(key);
+        } else if (packet instanceof ClientboundSectionBlocksUpdatePacket delta) {
+            delta.runUpdates((pos, state) -> {
+                long key = pos.asLong();
+                serverBlockEchoes.put(key, state.getBlock());
+                recordBlockChange(key);
+            });
+        }
+        *//*?} else {*/
+        if (packet instanceof BlockUpdateS2CPacket update) {
+            long key = update.getPos().asLong();
+            serverBlockEchoes.put(key, update.getState().getBlock());
+            recordBlockChange(key);
+        } else if (packet instanceof ChunkDeltaUpdateS2CPacket delta) {
+            delta.visitUpdates((pos, state) -> {
+                long key = pos.asLong();
+                serverBlockEchoes.put(key, state.getBlock());
+                recordBlockChange(key);
+            });
+        }
+        /*?}*/
+    }
+
+    private static boolean serverEchoedBlock(BlockPos pos, BlockState expected) {
+        Block echoed = serverBlockEchoes.get(pos.asLong());
+        return echoed != null && echoed == expected.getBlock();
+    }
+
+    // Positions whose state keeps changing (redstone machines, farms). Not grief -
+    // breaking loops forever and placements get overwritten, so selectors skip
+    // them while the churn lasts.
+    private static final long VOLATILE_WINDOW_MS = 10_000;
+    private static final int VOLATILE_CHANGE_THRESHOLD = 6;
+    private static final Map<Long, long[]> blockChangeRates =
+            Collections.synchronizedMap(new LinkedHashMap<>(256, 0.75f, false) {
+                @Override protected boolean removeEldestEntry(Map.Entry<Long, long[]> eldest) {
+                    return size() > 2048;
+                }
+            });
+
+    private static void recordBlockChange(long posKey) {
+        long now = System.currentTimeMillis();
+        blockChangeRates.compute(posKey, (k, v) -> {
+            if (v == null || now - v[0] > VOLATILE_WINDOW_MS) {
+                return new long[]{now, 1};
+            }
+            v[1]++;
+            return v;
+        });
+    }
+
+    public static boolean isVolatilePosition(BlockPos pos) {
+        if (pos == null) return false;
+        long[] v = blockChangeRates.get(pos.asLong());
+        return v != null
+                && System.currentTimeMillis() - v[0] <= VOLATILE_WINDOW_MS
+                && v[1] >= VOLATILE_CHANGE_THRESHOLD;
+    }
+
     public static void tickVerification() {
         /*? if >=26.1 {*//*
         Minecraft mc = Minecraft.getInstance();
@@ -612,6 +943,7 @@ public final class PlacementEngine {
         *//*?} else {*/
         if (mc.world == null) return;
         /*?}*/
+        updatePlacementStillness();
         if (inventorySwapSettleTicks > 0) inventorySwapSettleTicks--;
         if (itemVarietyCooldownTicks > 0) itemVarietyCooldownTicks--;
         if (postPlaceSettleTicks > 0) postPlaceSettleTicks--;
@@ -624,6 +956,16 @@ public final class PlacementEngine {
                 consecutiveTimeouts = 0;
                 consecutiveSwapTimeouts = 0;
                 PacketTelemetry.mark("breaker swaps-resumed after stable recovery window");
+            }
+        }
+        if (placementQuietTicks > 0) {
+            placementQuietTicks--;
+            if (placementQuietTicks == 0) {
+                consecutiveTimeouts = 0;
+                consecutiveFailures = 0;
+                placementQuietLastEndTick = getCurrentWorldTick();
+                placementQuietResumedNoticePending = true;
+                PacketTelemetry.mark("breaker placement-quiet ended");
             }
         }
         /*? if >=26.1 {*//*
@@ -643,7 +985,52 @@ public final class PlacementEngine {
             BlockState actual = mc.world.getBlockState(pv.pos);
             /*?}*/
             if (actual.getBlock() == pv.expected.getBlock()) {
-                // Confirmed — server accepted the placement
+                if (!serverEchoedBlock(pv.pos, pv.expected)) {
+                    if (elapsedTicks < adaptiveEchoTimeout()) {
+                        // Rendered but not echoed yet - a slow accept far more
+                        // often than a ghost, so wait; the adaptive window tracks
+                        // real echo latency.
+                        verificationStates.put(pv.pos,
+                                new VerificationSnapshot(
+                                        pv.expected, VerificationStatus.PENDING, pv.supportPos));
+                        break;
+                    }
+                    // Ghost: server swallowed the interact and never echoed the
+                    // block (2b2t), so it renders forever over server air. Revert
+                    // the client cell and let the retry re-place it.
+                    verifyQueue.poll();
+                    /*? if >=26.1 {*//*
+                    mc.level.setBlockAndUpdate(pv.pos, pv.original);
+                    *//*?} else {*/
+                    mc.world.setBlockState(pv.pos, pv.original);
+                    /*?}*/
+                    verificationStates.put(pv.pos,
+                            new VerificationSnapshot(
+                                    pv.expected, VerificationStatus.TIMEOUT, pv.supportPos));
+                    int streak = ghostStreak.merge(pv.pos, 1, Integer::sum);
+                    PacketTelemetry.mark("verify ghost pos=" + pv.pos
+                            + " expected=" + pv.expected.getBlock()
+                            + " lane=" + pv.lane
+                            + " elapsed=" + elapsedTicks
+                            + " streak=" + streak);
+                    consecutiveFailures++;
+                    totalTimeouts++;
+                    totalGhosts++;
+                    consecutiveTimeouts++;
+                    aimdOnFailure();
+                    if (streak < MAX_GHOSTS_PER_POSITION) {
+                        scheduleVanillaRetry(pv.pos);
+                    }
+                    maybeEnterPlacementQuiet();
+                    continue;
+                }
+                // Confirmed - server echoed the placement
+                aimdOnSuccess();
+                totalAccepted++;
+                lastEchoLatencyTicks = elapsedTicks;
+                recordEchoLatency(elapsedTicks);
+                serverBlockEchoes.remove(pv.pos.asLong());
+                ghostStreak.remove(pv.pos);
                 verifyQueue.poll();
                 verificationStates.put(pv.pos,
                         new VerificationSnapshot(
@@ -673,13 +1060,16 @@ public final class PlacementEngine {
                 consecutiveFailures++;
                 consecutiveRejections++;
                 totalRejections++;
+                aimdOnFailure();
                 if (pv.lane == PlacementLane.DIRECT) {
                     scheduleVanillaRetry(pv.pos);
                 } else {
                     clearVanillaRetry(pv.pos);
                 }
-            } else if (elapsedTicks >= VERIFY_TIMEOUT_TICKS) {
-                // The server never reflected the placement or a rollback packet.
+            } else if (elapsedTicks >= NEVER_PLACED_TIMEOUT_TICKS) {
+                // Never appeared client-side, so nothing to wait for. Fail fast
+                // and let the burst retry immediately instead of holding the echo
+                // window.
                 verifyQueue.poll();
                 verificationStates.put(pv.pos,
                         new VerificationSnapshot(
@@ -704,6 +1094,7 @@ public final class PlacementEngine {
                 consecutiveFailures++;
                 totalTimeouts++;
                 consecutiveTimeouts++;
+                aimdOnFailure();
                 if (pv.usedSwap) {
                     consecutiveSwapTimeouts++;
                 }
@@ -725,21 +1116,15 @@ public final class PlacementEngine {
                     // recovery window, so push the auto-clear back out.
                     swapsSuspendedRecoveryTicks = SWAPS_SUSPENDED_RECOVERY_TICKS;
                 }
-                if (!autoBuildKillSwitch
-                        && consecutiveSwapTimeouts > 0
-                        && consecutiveTimeouts >= TIMEOUT_DISABLE_THRESHOLD) {
-                    autoBuildKillSwitch = true;
-                    autoBuildKillSwitchNoticePending = true;
-                    PacketTelemetry.mark("breaker autobuild-disabled"
-                            + " consecutiveTimeouts=" + consecutiveTimeouts
-                            + " consecutiveSwapTimeouts=" + consecutiveSwapTimeouts
-                            + " threshold=" + TIMEOUT_DISABLE_THRESHOLD);
-                }
+                // Sustained failure no longer permanently kills the printer; the
+                // placement-quiet breaker below pauses and auto-resumes with fresh
+                // counters, escalating the quiet for repeat streaks.
                 if (pv.lane == PlacementLane.DIRECT) {
                     scheduleVanillaRetry(pv.pos);
                 } else {
                     clearVanillaRetry(pv.pos);
                 }
+                maybeEnterPlacementQuiet();
             } else {
                 verificationStates.put(pv.pos,
                         new VerificationSnapshot(
@@ -786,6 +1171,9 @@ public final class PlacementEngine {
         *//*?} else {*/
         if (mc.world == null) return;
         /*?}*/
+        // Drop any stale echo from an earlier change at this position so it
+        // can't falsely confirm THIS placement.
+        serverBlockEchoes.remove(pos.asLong());
         if (verifyQueue.size() >= MAX_VERIFY_QUEUE) {
             PendingVerification dropped = verifyQueue.poll();
             if (dropped != null) {
@@ -871,9 +1259,12 @@ public final class PlacementEngine {
     }
 
     public static int getBps() { return bps; }
+    // Live congestion-controlled rate (blocks/sec), for status display.
+    public static int getEffectiveBps() { return (int) Math.round(activeBps()); }
 
     public static boolean canPlace() {
         if (phase != PlacePhase.IDLE) return false;
+        if (placementQuietTicks > 0) return false;
         if (!isPlacementWindowSafe()) return false;
         if (inventorySwapSettleTicks > 0 || itemVarietyCooldownTicks > 0 || postPlaceSettleTicks > 0) return false;
         if (verifyQueue.size() >= maxInflightPlacementVerifications()) {
@@ -1043,7 +1434,7 @@ public final class PlacementEngine {
         long elapsedTicks = currentTick - throttleTick;
         throttleTick = currentTick;
         placeCredits = Math.min(MAX_PLACE_CREDITS,
-                placeCredits + elapsedTicks * (bps / TICKS_PER_SECOND));
+                placeCredits + elapsedTicks * (activeBps() / TICKS_PER_SECOND));
     }
 
     private static long getCurrentWorldTick() {
@@ -1115,6 +1506,7 @@ public final class PlacementEngine {
         lastPlacementTick = Long.MIN_VALUE;
         throttleTick = Long.MIN_VALUE;
         placeCredits = MAX_PLACE_CREDITS;
+        hasServerAim = false;
         resetRejectionCounters();
         recentAcceptedSupports.clear();
         placementQueue.clear();
@@ -1131,6 +1523,9 @@ public final class PlacementEngine {
         pendingSelectionKind = ItemSelectionKind.NONE;
         pendingSelectionStep = ItemSelectionStep.NONE;
         pendingSelectionSettleTicks = 0;
+        pendingSwapClickStage = 0;
+        pendingSwapClickDelayTicks = 0;
+        pendingSwapStillnessWaitTicks = 0;
     }
 
     public static void clearCorrectionHistory() {
@@ -1283,6 +1678,15 @@ public final class PlacementEngine {
         }
     }
 
+    // Multi-tick inventory-swap clicks: 2b2t drops same-tick click bursts and
+    // clicks while moving. One click per interval, only once the player is still,
+    // mirrors human inventory handling.
+    private static final int SWAP_CLICK_INTERVAL_TICKS = 2;
+    private static final int SWAP_STILLNESS_WAIT_CAP_TICKS = 40;
+    private static int pendingSwapClickStage = 0;
+    private static int pendingSwapClickDelayTicks = 0;
+    private static int pendingSwapStillnessWaitTicks = 0;
+
     /*? if >=26.1 {*//*
     private static void applyPendingSelection(LocalPlayer player, Minecraft mc) {
     *//*?} else {*/
@@ -1293,19 +1697,47 @@ public final class PlacementEngine {
                 failPendingSelection();
                 return;
             }
-            if (!PrinterNetworkCoordinator.tryAcquire(
-                    PrinterNetworkCoordinator.Lane.INVENTORY, NETWORK_OWNER, 3, INVENTORY_SWAP_SETTLE_TICKS)) {
+            if (pendingSwapClickDelayTicks > 0) {
+                pendingSwapClickDelayTicks--;
                 return;
             }
+            if (pendingSwapClickStage == 0) {
+                // Wait (bounded) for stillness before the first click.
+                if (!isStillEnoughForContainerClicks(player)
+                        && pendingSwapStillnessWaitTicks++ < SWAP_STILLNESS_WAIT_CAP_TICKS) {
+                    return;
+                }
+                if (!PrinterNetworkCoordinator.tryAcquire(
+                        PrinterNetworkCoordinator.Lane.INVENTORY, NETWORK_OWNER, 3, INVENTORY_SWAP_SETTLE_TICKS)) {
+                    return;
+                }
+                PacketTelemetry.mark("select inventory-swap begin slot=" + pendingInventorySwapSlot
+                        + " hotbar=" + pendingInventorySwapHotbarSlot
+                        + " waitedStill=" + pendingSwapStillnessWaitTicks);
+                clickContainerSlot(player, mc, inventorySlotToContainerSlot(pendingInventorySwapSlot));
+                pendingSwapClickStage = 1;
+                pendingSwapClickDelayTicks = SWAP_CLICK_INTERVAL_TICKS;
+                return;
+            }
+            if (pendingSwapClickStage == 1) {
+                clickContainerSlot(player, mc, inventorySlotToContainerSlot(pendingInventorySwapHotbarSlot));
+                pendingSwapClickStage = 2;
+                pendingSwapClickDelayTicks = SWAP_CLICK_INTERVAL_TICKS;
+                return;
+            }
+            // Final click returns the displaced hotbar item to the inventory.
             int swapSlot = pendingInventorySwapSlot;
             int hotbarSlot = pendingInventorySwapHotbarSlot;
             boolean needsSlotSync = getSelectedHotbarSlot(player) != hotbarSlot;
             pendingInventorySwapSlot = -1;
             pendingInventorySwapHotbarSlot = -1;
+            pendingSwapClickStage = 0;
+            pendingSwapStillnessWaitTicks = 0;
             PacketTelemetry.mark("select inventory-swap slot=" + swapSlot
                     + " hotbar=" + hotbarSlot
                     + " sync=" + needsSlotSync);
-            swapInventorySlotIntoHotbarSlot(player, mc, swapSlot, hotbarSlot);
+            clickContainerSlot(player, mc, inventorySlotToContainerSlot(swapSlot));
+            inventorySwapSettleTicks = Math.max(inventorySwapSettleTicks, INVENTORY_SWAP_SETTLE_TICKS);
             selectHotbarSlot(player, hotbarSlot);
             pendingInventorySwapNeedsSlotSync = needsSlotSync;
             placementUsedInventorySwap = true;
@@ -1361,6 +1793,7 @@ public final class PlacementEngine {
         pendingSupportFilter = null;
         pendingItem = null;
         lookSyncedForPendingPlacement = false;
+        crosshairSettleTicks = 0;
         clearPendingSelectionState();
     }
 
@@ -1418,6 +1851,21 @@ public final class PlacementEngine {
             return false;
         }
 
+        // Decoupled camera: publish the aim, inject it on the sync tick, then
+        // suppress vanilla's flying on the placing tick so the click isn't
+        // preceded by a rotation (Grim's Post check). Keeps the aim as the
+        // server's last rotation, like the camera-turn path does naturally.
+        if (decoupledCamera) {
+            publishServerAim(targetYaw, targetPitch);
+            if (pendingNeedsSneak) {
+                pressSneakPacket(mc.player);
+            }
+            lookSyncedForPendingPlacement = false;
+            lookSyncTicks = Math.max(1, PRE_PLACE_LOOK_SYNC_TICKS);
+            phase = PlacePhase.SYNCING_LOOK;
+            return false;
+        }
+
         /*? if >=26.1 {*//*
         float currentYaw = mc.player.getYRot();
         *//*?} else {*/
@@ -1436,19 +1884,16 @@ public final class PlacementEngine {
         /*?}*/
         float pitchDiff = targetPitch - currentPitch;
 
+        // Fast snap: turn up to MAX_TURN_SPEED/tick (1-2 ticks to any aim). Wrap
+        // to [-180,180] so adding the shortest-path delta doesn't grow raw yaw
+        // unbounded (saw 2069deg, Grim-flaggable).
         /*? if >=26.1 {*//*
-        float newYaw = currentYaw + Mth.clamp(yawDiff, -MAX_TURN_SPEED, MAX_TURN_SPEED);
-        *//*?} else {*/
-        float newYaw = currentYaw + MathHelper.clamp(yawDiff, -MAX_TURN_SPEED, MAX_TURN_SPEED);
-        /*?}*/
-        /*? if >=26.1 {*//*
+        float newYaw = Mth_wrap(currentYaw + Mth.clamp(yawDiff, -MAX_TURN_SPEED, MAX_TURN_SPEED));
         float newPitch = currentPitch + Mth.clamp(pitchDiff, -MAX_TURN_SPEED, MAX_TURN_SPEED);
-        *//*?} else {*/
-        float newPitch = currentPitch + MathHelper.clamp(pitchDiff, -MAX_TURN_SPEED, MAX_TURN_SPEED);
-        /*?}*/
-        /*? if >=26.1 {*//*
         newPitch = Mth.clamp(newPitch, -90.0f, 90.0f);
         *//*?} else {*/
+        float newYaw = Mth_wrap(currentYaw + MathHelper.clamp(yawDiff, -MAX_TURN_SPEED, MAX_TURN_SPEED));
+        float newPitch = currentPitch + MathHelper.clamp(pitchDiff, -MAX_TURN_SPEED, MAX_TURN_SPEED);
         newPitch = MathHelper.clamp(newPitch, -90.0f, 90.0f);
         /*?}*/
 
@@ -1470,19 +1915,17 @@ public final class PlacementEngine {
         /*?}*/
                          && Math.abs(targetPitch - newPitch) < CONVERGE_THRESHOLD;
 
-        if (converged || rotateTicks >= MAX_ROTATE_TICKS) {
-            if (converged) {
-                /*? if >=26.1 {*//*
-                mc.player.setYRot(targetYaw);
-                *//*?} else {*/
-                mc.player.setYaw(targetYaw);
-                /*?}*/
-                /*? if >=26.1 {*//*
-                mc.player.setXRot(targetPitch);
-                *//*?} else {*/
-                mc.player.setPitch(targetPitch);
-                /*?}*/
-            }
+        // Only place once the camera actually faces the block - placing mid-turn
+        // ghosted it. Any angle converges with the raised turn speed; if one
+        // doesn't, abort and re-aim rather than place blind.
+        if (converged) {
+            /*? if >=26.1 {*//*
+            mc.player.setYRot(targetYaw);
+            mc.player.setXRot(targetPitch);
+            *//*?} else {*/
+            mc.player.setYaw(targetYaw);
+            mc.player.setPitch(targetPitch);
+            /*?}*/
 
             if (pendingNeedsSneak) {
                 pressSneakPacket(mc.player);
@@ -1491,9 +1934,22 @@ public final class PlacementEngine {
             lookSyncedForPendingPlacement = false;
             lookSyncTicks = PRE_PLACE_LOOK_SYNC_TICKS;
             phase = PlacePhase.SYNCING_LOOK;
+        } else if (rotateTicks >= MAX_ROTATE_TICKS) {
+            PacketTelemetry.mark("place abort rotate-unconverged target=" + pendingTarget
+                    + " dYaw=" + String.format("%.1f", Mth_wrap(targetYaw - newYaw))
+                    + " dPitch=" + String.format("%.1f", targetPitch - newPitch));
+            abortPendingPlacementAttempt();
         }
 
         return false;
+    }
+
+    private static float Mth_wrap(float deg) {
+        /*? if >=26.1 {*//*
+        return Mth.wrapDegrees(deg);
+        *//*?} else {*/
+        return MathHelper.wrapDegrees(deg);
+        /*?}*/
     }
 
     private static boolean tickLookSync() {
@@ -1508,24 +1964,23 @@ public final class PlacementEngine {
             return false;
         }
 
-        if (lookSyncTicks == PRE_PLACE_LOOK_SYNC_TICKS) {
-            if (!PrinterNetworkCoordinator.tryAcquire(
-                    PrinterNetworkCoordinator.Lane.LOOK, NETWORK_OWNER, 1, PRE_PLACE_LOOK_SYNC_TICKS)) {
-                return false;
-            }
-            /*? if >=26.1 {*//*
-            sendImmediateLookSync(mc.player, mc.player.getYRot(), mc.player.getXRot());
-            *//*?} else {*/
-            sendImmediateLookSync(mc.player, mc.player.getYaw(), mc.player.getPitch());
-            /*?}*/
-            lookSyncedForPendingPlacement = true;
-        }
+        // Don't send our own look packet: ROTATING already set the rotation and
+        // vanilla's movement packet streamed it. A duplicate is Grim's
+        // AimDuplicateLook. Wait the settle tick, then place.
+        lookSyncedForPendingPlacement = true;
 
         if (lookSyncTicks > 0) {
             lookSyncTicks--;
             if (lookSyncTicks > 0) {
                 return false;
             }
+        }
+
+        // Decoupled camera: the aim went out on the sync tick. Suppress vanilla's
+        // flying on the placing tick so the click isn't preceded by a rotation
+        // (Grim Post) and the aim stays the server's last rotation.
+        if (decoupledCamera && hasServerAim) {
+            suppressVanillaMoveOnce = true;
         }
 
         phase = PlacePhase.PLACING;
@@ -1627,9 +2082,10 @@ public final class PlacementEngine {
         float placePitch  = silentRotation ? targetPitch : player.getPitch();
         /*?}*/
 
-        BlockHitResult hitResult;
-        BlockPos hitBlockPos;
-        Direction hitSide;
+        BlockHitResult hitResult = null;
+        BlockPos hitBlockPos = null;
+        Direction hitSide = null;
+        boolean usedVanillaCrosshair = false;
         if (pendingAirPlace) {
             Direction airFace = Direction.UP;
             /*? if >=26.1 {*//*
@@ -1657,14 +2113,36 @@ public final class PlacementEngine {
             hitBlockPos = pendingTarget;
             hitSide = airFace;
         } else {
-            /*? if >=26.1 {*//*
-            VisiblePlacementHit visibleHit = findBestVisiblePlacementHit(
-                    player, mc.level, pendingTarget, pendingDesired, pendingSupportFilter);
-            *//*?} else {*/
-            VisiblePlacementHit visibleHit = findBestVisiblePlacementHit(
-                    player, mc.world, pendingTarget, pendingDesired, pendingSupportFilter);
-            /*?}*/
-            if (visibleHit != null) {
+            // Prefer the game's own crosshair hit when the camera is on the
+            // surface, but don't wait/abort for it - fall through to the synthetic
+            // hit (proven correct) and place now. Stalling dropped it to ~1/min.
+            BlockHitResult crosshair = vanillaCrosshairPlacement(mc, player,
+                    pendingTarget, pendingSupportFilter);
+            if (crosshair != null) {
+                hitResult = crosshair;
+                hitBlockPos = crosshair.getBlockPos();
+                /*? if >=26.1 {*//*
+                hitSide = crosshair.getDirection();
+                *//*?} else {*/
+                hitSide = crosshair.getSide();
+                /*?}*/
+                pendingFace = hitSide.getOpposite();
+                usedVanillaCrosshair = true;
+            } else {
+                /*? if >=26.1 {*//*
+                VisiblePlacementHit visibleHit = findBestVisiblePlacementHit(
+                        player, mc.level, pendingTarget, pendingDesired, pendingSupportFilter);
+                *//*?} else {*/
+                VisiblePlacementHit visibleHit = findBestVisiblePlacementHit(
+                        player, mc.world, pendingTarget, pendingDesired, pendingSupportFilter);
+                /*?}*/
+                if (visibleHit == null) {
+                    PacketTelemetry.mark("place abort no-visible-hit target=" + pendingTarget
+                            + " desired=" + pendingDesired.getBlock()
+                            + " face=" + pendingFace);
+                    abortPendingPlacementAttempt();
+                    return false;
+                }
                 hitResult = visibleHit.hit;
                 pendingFace = visibleHit.face;
                 hitBlockPos = visibleHit.hit.getBlockPos();
@@ -1673,12 +2151,6 @@ public final class PlacementEngine {
                 *//*?} else {*/
                 hitSide = visibleHit.hit.getSide();
                 /*?}*/
-            } else {
-                PacketTelemetry.mark("place abort no-visible-hit target=" + pendingTarget
-                        + " desired=" + pendingDesired.getBlock()
-                        + " face=" + pendingFace);
-                abortPendingPlacementAttempt();
-                return false;
             }
         }
 
@@ -1787,17 +2259,9 @@ public final class PlacementEngine {
             lookSyncedForPendingPlacement = true;
         }
 
-        // On the normal printer path we already rotated locally in ROTATING.
-        // Let vanilla carry that state instead of forcing an extra move packet
-        // right before every block use.
-        if (usesDirectLookPackets() && !lookSyncedForPendingPlacement) {
-            if (!PrinterNetworkCoordinator.tryAcquire(
-                    PrinterNetworkCoordinator.Lane.LOOK, NETWORK_OWNER, 1, PRE_PLACE_LOOK_SYNC_TICKS)) {
-                return false;
-            }
-            sendImmediateLookSync(player, placeYaw, placePitch);
-            lookSyncedForPendingPlacement = true;
-        }
+        // Rotation is already on the server (vanilla streamed it during the aim
+        // hold). Another look packet here would be a second rotation in the same
+        // tick, a bot signature - so we don't.
 
         PacketTelemetry.mark("place hand=" + getSelectedItem(player).toString()
                 + " target=" + pendingTarget
@@ -1867,40 +2331,46 @@ public final class PlacementEngine {
                 placed = false;
             }
         } else {
-            // Keep normal building on one explicit packet lane.
+            // Vanilla-first: one MAIN_HAND interactBlock with sequence
+            // prediction, like a real client. The old offhand-swap sandwich is a
+            // bot signature 2b2t silently rolls back.
             boolean vanillaRetry = consumeVanillaRetry(pendingTarget);
-            if (!vanillaRetry && trySequencedBlockPlacement(player, hitResult)) {
-                sendPlacementSwing(player);
-                PacketTelemetry.mark("place lane=direct target=" + pendingTarget
-                        + " seq=" + lastSentBlockUseSequence);
-                enqueueVerification(pendingTarget, pendingDesired, targetState, hitBlockPos, PlacementLane.DIRECT);
-                placed = true;
-            } else {
-                PacketTelemetry.mark("place lane=vanilla target=" + pendingTarget
-                        + " retry=" + vanillaRetry);
+            PacketTelemetry.mark("place lane=vanilla target=" + pendingTarget
+                    + " retry=" + vanillaRetry);
             /*? if >=26.1 {*//*
             InteractionResult result = mc.gameMode.useItemOn(player, InteractionHand.MAIN_HAND, hitResult);
-            if (result.consumesAction()) {
+            boolean vanillaAccepted = result.consumesAction();
+            if (vanillaAccepted) {
                 if (shouldClientSwing(result)) {
                     player.swing(InteractionHand.MAIN_HAND);
                 }
                 enqueueVerification(pendingTarget, pendingDesired, targetState, hitBlockPos, PlacementLane.VANILLA);
                 placed = true;
-            } else {
-                placed = false;
             }
             *//*?} else {*/
             ActionResult result = mc.interactionManager.interactBlock(player, Hand.MAIN_HAND, hitResult);
-            if (result.isAccepted()) {
+            boolean vanillaAccepted = result.isAccepted();
+            if (vanillaAccepted) {
                 if (shouldClientSwing(result)) {
                     player.swingHand(Hand.MAIN_HAND);
                 }
                 enqueueVerification(pendingTarget, pendingDesired, targetState, hitBlockPos, PlacementLane.VANILLA);
                 placed = true;
-            } else {
-                placed = false;
             }
             /*?}*/
+            placed = vanillaAccepted;
+            if (!vanillaAccepted) {
+                // Client-side interactBlock refused (stale prediction state,
+                // cooldown edge) - fall back to the raw packet lane.
+                if (trySequencedBlockPlacement(player, hitResult)) {
+                    sendPlacementSwing(player);
+                    PacketTelemetry.mark("place lane=direct target=" + pendingTarget
+                            + " seq=" + lastSentBlockUseSequence);
+                    enqueueVerification(pendingTarget, pendingDesired, targetState, hitBlockPos, PlacementLane.DIRECT);
+                    placed = true;
+                } else {
+                    placed = false;
+                }
             }
         }
 
@@ -2354,6 +2824,9 @@ public final class PlacementEngine {
             Block neighborBlock = world.getBlockState(neighbor).getBlock();
             needsSneak = isInteractive(neighborBlock);
 
+            // Aim the real camera at the surface point we'll click so rotation
+            // and cursor stay coupled like a human looking at a face - the game's
+            // crosshair raycast then lands there for genuine vanilla placement.
             /*? if >=26.1 {*//*
             Vec3 hitPos = placementHit.getLocation();
             *//*?} else {*/
@@ -2820,6 +3293,52 @@ public final class PlacementEngine {
         return true;
     }
 
+    // A cursor counts as clickable only if the ray still hits the same face after
+    // small eye perturbations - Grim ray-traces from its own eye position, off by
+    // a movement epsilon. 0.02 filters only true knife-edge grazes (Grim's is
+    // ~0.03; 0.06 rejected most normal cursors).
+    private static final double PROBE_JITTER = 0.02;
+    private static final double[][] PROBE_JITTER_OFFSETS = {
+            { PROBE_JITTER, 0.0, 0.0}, {-PROBE_JITTER, 0.0, 0.0},
+            {0.0, 0.0,  PROBE_JITTER}, {0.0, 0.0, -PROBE_JITTER},
+            {0.0,  PROBE_JITTER, 0.0}, {0.0, -PROBE_JITTER, 0.0}
+    };
+
+    /*? if >=26.1 {*//*
+    private static boolean isProbeHitRobust(Level world, LocalPlayer player, Vec3 eyePos,
+                                            Vec3 rayEnd, BlockPos wantBlock, Direction wantSide) {
+        for (double[] offset : PROBE_JITTER_OFFSETS) {
+            Vec3 jitterEye = eyePos.add(offset[0], offset[1], offset[2]);
+            HitResult jitterRay = world.clip(new ClipContext(
+                    jitterEye, rayEnd, ClipContext.Block.COLLIDER, ClipContext.Fluid.NONE, player));
+            if (!(jitterRay instanceof BlockHitResult jbhr)
+                    || jitterRay.getType() != HitResult.Type.BLOCK
+                    || !jbhr.getBlockPos().equals(wantBlock)
+                    || jbhr.getDirection() != wantSide) {
+                return false;
+            }
+        }
+        return true;
+    }
+    *//*?} else {*/
+    private static boolean isProbeHitRobust(World world, ClientPlayerEntity player, Vec3d eyePos,
+                                            Vec3d rayEnd, BlockPos wantBlock, Direction wantSide) {
+        for (double[] offset : PROBE_JITTER_OFFSETS) {
+            Vec3d jitterEye = eyePos.add(offset[0], offset[1], offset[2]);
+            HitResult jitterRay = world.raycast(new RaycastContext(
+                    jitterEye, rayEnd, RaycastContext.ShapeType.COLLIDER,
+                    RaycastContext.FluidHandling.NONE, player));
+            if (!(jitterRay instanceof BlockHitResult jbhr)
+                    || jitterRay.getType() != HitResult.Type.BLOCK
+                    || !jbhr.getBlockPos().equals(wantBlock)
+                    || jbhr.getSide() != wantSide) {
+                return false;
+            }
+        }
+        return true;
+    }
+    /*?}*/
+
     // Computes a hit position on the given face via ray cast, falling back to face center.
     /*? if >=26.1 {*//*
     private static Vec3 getFaceCenterHit(BlockPos neighbor, Direction face) {
@@ -2830,6 +3349,50 @@ public final class PlacementEngine {
     private static Vec3d getFaceCenterHit(BlockPos neighbor, Direction face) {
         return Vec3d.ofCenter(neighbor)
                 .add(Vec3d.of(face.getVector()).multiply(0.5));
+    }
+    /*?}*/
+
+    // Does the ray from eyePos along (yaw,pitch) for `reach` hit block `pos`'s box?
+    // Mirrors Grim's RotationPlace (slab-method ray/AABB test).
+    /*? if >=26.1 {*//*
+    private static boolean rotationHitsBox(Vec3 eyePos, float yaw, float pitch, BlockPos pos, double reach) {
+        Vec3 dir = lookDirFromRotation(yaw, pitch);
+        double ox = eyePos.x, oy = eyePos.y, oz = eyePos.z;
+        double dx = dir.x, dy = dir.y, dz = dir.z;
+    *//*?} else {*/
+    private static boolean rotationHitsBox(Vec3d eyePos, float yaw, float pitch, BlockPos pos, double reach) {
+        Vec3d dir = lookDirFromRotation(yaw, pitch);
+        double ox = eyePos.x, oy = eyePos.y, oz = eyePos.z;
+        double dx = dir.x, dy = dir.y, dz = dir.z;
+    /*?}*/
+        double minX = pos.getX(), minY = pos.getY(), minZ = pos.getZ();
+        double maxX = minX + 1.0, maxY = minY + 1.0, maxZ = minZ + 1.0;
+        double tmin = 0.0, tmax = reach;
+        double[][] axes = {{ox, dx, minX, maxX}, {oy, dy, minY, maxY}, {oz, dz, minZ, maxZ}};
+        for (double[] a : axes) {
+            double o = a[0], d = a[1], lo = a[2], hi = a[3];
+            if (Math.abs(d) < 1e-9) {
+                if (o < lo || o > hi) return false;
+            } else {
+                double t1 = (lo - o) / d, t2 = (hi - o) / d;
+                if (t1 > t2) { double tmp = t1; t1 = t2; t2 = tmp; }
+                tmin = Math.max(tmin, t1);
+                tmax = Math.min(tmax, t2);
+                if (tmin > tmax) return false;
+            }
+        }
+        return true;
+    }
+
+    // Unit look vector for yaw/pitch, using vanilla's own conversion so a world
+    // raycast matches what the server reproduces from our rotation packets.
+    /*? if >=26.1 {*//*
+    private static Vec3 lookDirFromRotation(float yaw, float pitch) {
+        return Vec3.directionFromRotation(pitch, yaw);
+    }
+    *//*?} else {*/
+    private static Vec3d lookDirFromRotation(float yaw, float pitch) {
+        return Vec3d.fromPolar(pitch, yaw);
     }
     /*?}*/
 
@@ -2844,35 +3407,12 @@ public final class PlacementEngine {
                                             *//*?} else {*/
                                             BlockPos neighbor, Direction face, World world) {
                                             /*?}*/
-        // Ray direction from yaw/pitch
-        float yawRad  = (float) Math.toRadians(-yaw - 180.0f);
-        float pitchRad = (float) Math.toRadians(-pitch);
+        // Ray direction from yaw/pitch (vanilla convention).
         /*? if >=26.1 {*//*
-        float cosP = Mth.cos(pitchRad);
+        Vec3 lookDir = lookDirFromRotation(yaw, pitch);
         *//*?} else {*/
-        float cosP = MathHelper.cos(pitchRad);
+        Vec3d lookDir = lookDirFromRotation(yaw, pitch);
         /*?}*/
-        /*? if >=26.1 {*//*
-        Vec3 lookDir = new Vec3(
-        *//*?} else {*/
-        Vec3d lookDir = new Vec3d(
-        /*?}*/
-                /*? if >=26.1 {*//*
-                Mth.sin(yawRad) * cosP,
-                *//*?} else {*/
-                MathHelper.sin(yawRad) * cosP,
-                /*?}*/
-                /*? if >=26.1 {*//*
-                Mth.sin(pitchRad),
-                *//*?} else {*/
-                MathHelper.sin(pitchRad),
-                /*?}*/
-                /*? if >=26.1 {*//*
-                Mth.cos(yawRad) * cosP
-                *//*?} else {*/
-                MathHelper.cos(yawRad) * cosP
-                /*?}*/
-        );
 
         // Face plane: the face of the neighbor block
         // The face is on the surface of the neighbor block at `face` direction
@@ -3063,18 +3603,11 @@ public final class PlacementEngine {
             if (sequence instanceof Integer value) {
                 lastSequenceFailure = "";
                 lastSentBlockUseSequence = value;
-                // Swap item to offhand, place from offhand, swap back — keeps strict server validation happy.
-                player.networkHandler.sendPacket(
-                        new net.minecraft.network.packet.c2s.play.PlayerActionC2SPacket(
-                                net.minecraft.network.packet.c2s.play.PlayerActionC2SPacket.Action.SWAP_ITEM_WITH_OFFHAND,
-                                net.minecraft.util.math.BlockPos.ORIGIN, net.minecraft.util.math.Direction.DOWN));
+                // Single MAIN_HAND interact, like vanilla. The old offhand
+                // sandwich is a bot signature 2b2t rolls back.
                 player.networkHandler.sendPacket(
                         new net.minecraft.network.packet.c2s.play.PlayerInteractBlockC2SPacket(
-                                Hand.OFF_HAND, hitResult, value));
-                player.networkHandler.sendPacket(
-                        new net.minecraft.network.packet.c2s.play.PlayerActionC2SPacket(
-                                net.minecraft.network.packet.c2s.play.PlayerActionC2SPacket.Action.SWAP_ITEM_WITH_OFFHAND,
-                                net.minecraft.util.math.BlockPos.ORIGIN, net.minecraft.util.math.Direction.DOWN));
+                                Hand.MAIN_HAND, hitResult, value));
                 return true;
             }
             lastSequenceFailure = "no-current-sequence handle=" + sequenceHandle.getClass().getName();
@@ -3096,18 +3629,15 @@ public final class PlacementEngine {
     }
     /*?}*/
 
+    // Don't send a slot packet ourselves: vanilla already auto-sends
+    // UpdateSelectedSlot once when the slot changes. A second identical one is
+    // Grim's BadPacketsA (duplicate slot), which desyncs the held item. We only
+    // sync the local interaction-manager mirror.
     /*? if >=26.1 {*//*
     private static void syncSelectedSlotPacket(LocalPlayer player) {
         int selectedSlot = player.getInventory().getSelectedSlot();
-        if (selectedSlot == lastSentSelectedSlot) {
-            PacketTelemetry.mark("slot sync skip selected=" + selectedSlot);
-            updateInteractionManagerSelectedSlot(selectedSlot);
-            return;
-        }
         lastSentSelectedSlot = selectedSlot;
         updateInteractionManagerSelectedSlot(selectedSlot);
-        PacketTelemetry.mark("slot sync sent selected=" + selectedSlot);
-        player.connection.send(new ServerboundSetCarriedItemPacket(selectedSlot));
     }
     *//*?} else {*/
     private static void syncSelectedSlotPacket(ClientPlayerEntity player) {
@@ -3116,15 +3646,8 @@ public final class PlacementEngine {
         *//*?} else {*/
         int selectedSlot = player.getInventory().selectedSlot;
         /*?}*/
-        if (selectedSlot == lastSentSelectedSlot) {
-            PacketTelemetry.mark("slot sync skip selected=" + selectedSlot);
-            updateInteractionManagerSelectedSlot(selectedSlot);
-            return;
-        }
         lastSentSelectedSlot = selectedSlot;
         updateInteractionManagerSelectedSlot(selectedSlot);
-        PacketTelemetry.mark("slot sync sent selected=" + selectedSlot);
-        player.networkHandler.sendPacket(new UpdateSelectedSlotC2SPacket(selectedSlot));
     }
     /*?}*/
 
@@ -3343,6 +3866,7 @@ public final class PlacementEngine {
         *//*?} else {*/
         pitch = MathHelper.clamp(pitch, -90.0f, 90.0f);
         /*?}*/
+        if (wouldDuplicateLook(yaw, pitch)) return; // AimDuplicateLook
         /*? if >=26.1 {*//*
         player.connection.send(
                 new ServerboundMovePlayerPacket.Rot(yaw, pitch,
@@ -3358,6 +3882,7 @@ public final class PlacementEngine {
     private static void sendImmediateLookSync(LocalPlayer player, float yaw, float pitch) {
         yaw = wrapDegrees180(yaw);
         pitch = Mth.clamp(pitch, -90.0f, 90.0f);
+        if (wouldDuplicateLook(yaw, pitch)) return; // AimDuplicateLook
         player.connection.send(
                 new ServerboundMovePlayerPacket.Rot(yaw, pitch,
                         player.onGround(), player.horizontalCollision));
@@ -3366,6 +3891,7 @@ public final class PlacementEngine {
     private static void sendImmediateLookSync(ClientPlayerEntity player, float yaw, float pitch) {
         yaw = wrapDegrees180(yaw);
         pitch = MathHelper.clamp(pitch, -90.0f, 90.0f);
+        if (wouldDuplicateLook(yaw, pitch)) return; // AimDuplicateLook
         player.networkHandler.sendPacket(
                 new PlayerMoveC2SPacket.LookAndOnGround(
                         yaw, pitch,
@@ -3492,6 +4018,11 @@ public final class PlacementEngine {
         };
     }
 
+    // Tracks the last sneak status we sent, so we never send a duplicate
+    // START/STOP - Grim's BadPacketsG cancels a repeated sneak status and
+    // cascades into rejects.
+    private static boolean sneakPacketPressed = false;
+
     /*? if >=26.1 {*//*
     private static void pressSneakPacket(LocalPlayer player) {
         // Newer versions rely on the local sneak override and vanilla movement packets.
@@ -3501,6 +4032,8 @@ public final class PlacementEngine {
         /*? if >=1.21.5 {*//*
         // Newer versions rely on the local sneak override and vanilla movement packets.
         *//*?} else {*/
+        if (sneakPacketPressed) return; // already sneaking - a repeat is BadPacketsG
+        sneakPacketPressed = true;
         player.networkHandler.sendPacket(
                 new ClientCommandC2SPacket(player, ClientCommandC2SPacket.Mode.PRESS_SHIFT_KEY));
         /*?}*/
@@ -3516,6 +4049,8 @@ public final class PlacementEngine {
         /*? if >=1.21.5 {*//*
         // Newer versions rely on the local sneak override and vanilla movement packets.
         *//*?} else {*/
+        if (!sneakPacketPressed) return; // already not sneaking - a repeat is BadPacketsG
+        sneakPacketPressed = false;
         MinecraftClient mc = MinecraftClient.getInstance();
         if (mc.player == null) return;
         mc.player.networkHandler.sendPacket(
@@ -3800,6 +4335,71 @@ public final class PlacementEngine {
     }
     /*?}*/
 
+    /*? if >=26.1 {*//*
+    private static void clickContainerSlot(LocalPlayer player, Minecraft mc, int containerSlot) {
+        mc.gameMode.handleContainerInput(player.containerMenu.containerId, containerSlot, 0, ContainerInput.PICKUP, player);
+    }
+
+    private static boolean isStillEnoughForContainerClicks(LocalPlayer player) {
+        Vec3 velocity = player.getDeltaMovement();
+        double horizontalSq = velocity.x * velocity.x + velocity.z * velocity.z;
+        return player.onGround() && !player.isSprinting() && horizontalSq < 0.0016;
+    }
+    *//*?} else {*/
+    private static void clickContainerSlot(ClientPlayerEntity player, MinecraftClient mc, int containerSlot) {
+        mc.interactionManager.clickSlot(player.currentScreenHandler.syncId, containerSlot, 0, SlotActionType.PICKUP, player);
+    }
+
+    private static boolean isStillEnoughForContainerClicks(ClientPlayerEntity player) {
+        Vec3d velocity = player.getVelocity();
+        double horizontalSq = velocity.x * velocity.x + velocity.z * velocity.z;
+        return player.isOnGround() && !player.isSprinting() && horizontalSq < 0.0016;
+    }
+    /*?}*/
+
+    // Consecutive grounded+still ticks required before placing. A single-frame
+    // onGround check let placement fire during a jump arc's ground-touch, which
+    // setbacks the position desync.
+    private static final int PLACEMENT_STILL_TICKS_REQUIRED = 3;
+    // Horizontal speed only: a grounded player has constant gravity Y-velocity,
+    // so including Y would make "still" unreachable and stall the build. The
+    // vertical bounce is caught by requiring N consecutive grounded ticks.
+    private static final double PLACEMENT_STILL_HSPEED_SQ = 0.015 * 0.015;
+    private static int consecutiveStillTicks = 0;
+
+    // Manual mode (user drives movement) vs AutoBuild (bot stops to place). A
+    // human walking and placing is normal to Grim, so manual drops the near-zero
+    // speed clause (only there to stop the bot firing mid-path) that otherwise
+    // caused a "loading" pause and left holes. The grounded-ticks guard stays.
+    private static volatile boolean manualPlacementMode = false;
+    public static void setManualPlacementMode(boolean v) { manualPlacementMode = v; }
+
+    private static void updatePlacementStillness() {
+        /*? if >=26.1 {*//*
+        Minecraft mc = Minecraft.getInstance();
+        LocalPlayer player = mc.player;
+        if (player == null) { consecutiveStillTicks = 0; return; }
+        Vec3 v = player.getDeltaMovement();
+        boolean grounded = player.onGround();
+        *//*?} else {*/
+        MinecraftClient mc = MinecraftClient.getInstance();
+        ClientPlayerEntity player = mc.player;
+        if (player == null) { consecutiveStillTicks = 0; return; }
+        Vec3d v = player.getVelocity();
+        boolean grounded = player.isOnGround();
+        /*?}*/
+        double hSpeedSq = v.x * v.x + v.z * v.z;
+        // Manual: grounded is enough (walk-and-place like vanilla). AutoBuild:
+        // also require near-stationary so the bot never fires mid-path.
+        boolean stillEnough = grounded
+                && (manualPlacementMode || hSpeedSq < PLACEMENT_STILL_HSPEED_SQ);
+        if (stillEnough) {
+            if (consecutiveStillTicks < PLACEMENT_STILL_TICKS_REQUIRED) consecutiveStillTicks++;
+        } else {
+            consecutiveStillTicks = 0;
+        }
+    }
+
     private static boolean isPlacementWindowSafe() {
         SetbackMonitor monitor = SetbackMonitor.get();
         // `isCalm()` already means we've gone a full quiet window since the
@@ -3809,15 +4409,10 @@ public final class PlacementEngine {
         if (!monitor.isCalm()) {
             return false;
         }
-        /*? if >=26.1 {*//*
-        Minecraft mc = Minecraft.getInstance();
-        if (mc.player == null) return false;
-        return mc.player.onGround();
-        *//*?} else {*/
-        MinecraftClient mc = MinecraftClient.getInstance();
-        if (mc.player == null) return false;
-        return mc.player.isOnGround();
-        /*?}*/
+        // The player must be settled - grounded and near-stationary for a few
+        // ticks - not merely touching ground this frame. Placing mid-bounce
+        // is the confirmed setback source.
+        return consecutiveStillTicks >= PLACEMENT_STILL_TICKS_REQUIRED;
     }
 
     /*? if >=26.1 {*//*
@@ -5385,6 +5980,39 @@ public final class PlacementEngine {
         return findBestVisiblePlacementHit(player, world, target, desired, eyePos, supportFilter) != null;
     }
 
+    // The game's own crosshair hit if it targets a face that places into `target`,
+    // else null (caller falls back to the synthetic probe). Most faithful vanilla
+    // imitation - same origin, reach, rounding as a human click.
+    /*? if >=26.1 {*//*
+    private static BlockHitResult vanillaCrosshairPlacement(Minecraft mc, LocalPlayer player,
+                                                            BlockPos target, Predicate<BlockPos> supportFilter) {
+        if (!(mc.hitResult instanceof BlockHitResult bhr) || bhr.getType() != HitResult.Type.BLOCK) {
+            return null;
+        }
+        BlockPos support = bhr.getBlockPos();
+        Direction side = bhr.getDirection();
+        if (!support.relative(side).equals(target)) return null;
+        if (!isSupportAllowed(supportFilter, support)) return null;
+        double reachSq = effectivePlaceReach(player) * effectivePlaceReach(player);
+        if (player.getEyePosition().distanceToSqr(bhr.getLocation()) > reachSq) return null;
+        return bhr;
+    }
+    *//*?} else {*/
+    private static BlockHitResult vanillaCrosshairPlacement(MinecraftClient mc, ClientPlayerEntity player,
+                                                            BlockPos target, Predicate<BlockPos> supportFilter) {
+        if (!(mc.crosshairTarget instanceof BlockHitResult bhr) || bhr.getType() != HitResult.Type.BLOCK) {
+            return null;
+        }
+        BlockPos support = bhr.getBlockPos();
+        Direction side = bhr.getSide();
+        if (!support.offset(side).equals(target)) return null;
+        if (!isSupportAllowed(supportFilter, support)) return null;
+        double reachSq = effectivePlaceReach(player) * effectivePlaceReach(player);
+        if (player.getEyePos().squaredDistanceTo(bhr.getPos()) > reachSq) return null;
+        return bhr;
+    }
+    /*?}*/
+
     /*? if >=26.1 {*//*
     private static VisiblePlacementHit findBestVisiblePlacementHit(LocalPlayer player, Level world,
                                                                    BlockPos target, BlockState desired) {
@@ -5661,7 +6289,12 @@ public final class PlacementEngine {
         BlockPos firstHitPos = null;
         Direction firstHitSide = null;
         BlockState firstHitState = null;
-        double[][] probes = {
+        // Full 9-point sweep finds the exact clickable spot at placement time.
+        // The per-tick scan only needs "roughly reachable", so cheapProbeScan uses
+        // the single center ray (the scan was ~54 raycasts/cell, the FPS cost).
+        double[][] probes = cheapProbeScan
+                ? CHEAP_PROBES
+                : new double[][] {
                 {0.0, 0.0},
                 { FACE_PROBE_OFFSET, 0.0},
                 {-FACE_PROBE_OFFSET, 0.0},
@@ -5686,9 +6319,11 @@ public final class PlacementEngine {
                 probesTooFar++;
                 continue;
             }
+            Vec3 rayEnd = hitPos.subtract(
+                    Vec3.atLowerCornerOf(clickSide.getUnitVec3i()).scale(FACE_PROBE_RAY_DEPTH));
             HitResult sight = world.clip(new ClipContext(
                     eyePos,
-                    hitPos,
+                    rayEnd,
                     ClipContext.Block.COLLIDER,
                     ClipContext.Fluid.NONE,
                     player));
@@ -5698,13 +6333,21 @@ public final class PlacementEngine {
             }
             BlockHitResult blockSight = (BlockHitResult) sight;
             if (blockSight.getBlockPos().equals(neighbor)
-                    && blockSight.getDirection() == clickSide) {
+                    && blockSight.getDirection() == clickSide
+                    && isProbeHitRobust(world, player, eyePos, rayEnd, neighbor, clickSide)) {
                 return new BlockHitResult(hitPos, clickSide, neighbor, false);
             }
             if (!requireExactFace
                     && blockSight.getBlockPos().equals(neighbor)
-                    && canProbeAlternateSupportFaces(desired)) {
-                return new BlockHitResult(hitPos, clickSide, neighbor, false);
+                    && canProbeAlternateSupportFaces(desired)
+                    && blockSight.getBlockPos().relative(blockSight.getDirection()).equals(target)
+                    && isProbeHitRobust(world, player, eyePos, rayEnd,
+                            blockSight.getBlockPos(), blockSight.getDirection())) {
+                // Return the real ray hit. Fabricating the intended face produced
+                // packets whose face/cursor the sight ray never touched - Grim's
+                // ray-trace check desyncs those, and it looped aborting.
+                return new BlockHitResult(blockSight.getLocation(),
+                        blockSight.getDirection(), blockSight.getBlockPos().immutable(), false);
             }
             probesHitOther++;
             if (firstHitPos == null) {
@@ -5721,9 +6364,11 @@ public final class PlacementEngine {
                 probesTooFar++;
                 continue;
             }
+            Vec3d rayEnd = hitPos.subtract(
+                    Vec3d.of(clickSide.getVector()).multiply(FACE_PROBE_RAY_DEPTH));
             HitResult sight = world.raycast(new RaycastContext(
                     eyePos,
-                    hitPos,
+                    rayEnd,
                     RaycastContext.ShapeType.COLLIDER,
                     RaycastContext.FluidHandling.NONE,
                     player));
@@ -5733,13 +6378,21 @@ public final class PlacementEngine {
             }
             BlockHitResult blockSight = (BlockHitResult) sight;
             if (blockSight.getBlockPos().equals(neighbor)
-                    && blockSight.getSide() == clickSide) {
+                    && blockSight.getSide() == clickSide
+                    && isProbeHitRobust(world, player, eyePos, rayEnd, neighbor, clickSide)) {
                 return new BlockHitResult(hitPos, clickSide, neighbor, false);
             }
             if (!requireExactFace
                     && blockSight.getBlockPos().equals(neighbor)
-                    && canProbeAlternateSupportFaces(desired)) {
-                return new BlockHitResult(hitPos, clickSide, neighbor, false);
+                    && canProbeAlternateSupportFaces(desired)
+                    && blockSight.getBlockPos().offset(blockSight.getSide()).equals(target)
+                    && isProbeHitRobust(world, player, eyePos, rayEnd,
+                            blockSight.getBlockPos(), blockSight.getSide())) {
+                // Return the real ray hit. Fabricating the intended face produced
+                // packets whose face/cursor the sight ray never touched - Grim's
+                // ray-trace check desyncs those, and it looped aborting.
+                return new BlockHitResult(blockSight.getPos(),
+                        blockSight.getSide(), blockSight.getBlockPos().toImmutable(), false);
             }
             // Fix #12: capture WHAT got in the way so we can tell the
             // difference between (a) raycast hits a different block (wall

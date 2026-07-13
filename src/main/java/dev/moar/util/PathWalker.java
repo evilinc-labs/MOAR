@@ -162,6 +162,13 @@ public final class PathWalker {
     private static boolean placementEnabled;
     // Use calmer printer-style movement instead of sprint/hop logic on vanilla fallback.
     private static boolean conservativeVanillaMovement;
+    // Printer sets this: forces every walk conservative (no sprint), since
+    // sprint desyncs Grim's rotation check and the setback wipes placements.
+    private static boolean forceConservative;
+
+    public static void setForceConservative(boolean value) {
+        forceConservative = value;
+    }
     // GoalNear radius for arrival checks; 0 means use the tight ARRIVAL_DIST_SQ.
     private static int goalRadius = 0;
     // Optional tighter arrival distance override for exact approaches.
@@ -1344,10 +1351,7 @@ public final class PathWalker {
                     LOGGER.info("PathWalker: Baritone settings reflection ready "
                             + "(allowPlace/allowParkour control available)");
 
-                    // Always enable allowParkour — gap-jumping is safe
-                    // (no block placement, no mining, just movement)
-                    // and required for builds with gaps (iron bars,
-                    // fences, walls, bridges with 1-block openings).
+                    // Enable parkour - needed to cross 1-block gaps in builds.
                     try {
                         settingValueField.set(allowParkourSetting, true);
                         LOGGER.debug("PathWalker: enabled Baritone allowParkour globally");
@@ -1916,8 +1920,11 @@ public final class PathWalker {
         /*?}*/
 
         boolean facingTarget = Math.abs(yawDiff) < 30.0f;
-        double sprintThreshold = conservativeVanillaMovement ? 36.0 : 9.0;
-        boolean allowSprint = facingTarget && dxz2 > sprintThreshold;
+        // No sprint on conservative walks: Grim's sprint-direction check hits
+        // the placement engine's silent server yaw and the setback wipes
+        // in-flight placements. Short build hops don't need sprint anyway.
+        boolean conservative = conservativeVanillaMovement || forceConservative;
+        boolean allowSprint = !conservative && facingTarget && dxz2 > 9.0;
         /*? if >=26.1 {*//*
         options.keySprint.setDown(allowSprint);
         *//*?} else {*/
@@ -1927,18 +1934,30 @@ public final class PathWalker {
         // Keep printer-controlled fallback calmer near the build, but
         // still let it climb basic terrain so it can actually reach a
         // placeable stance instead of freezing below the structure.
+        // Don't hop when bumping the build at/below our level (the bounce
+        // setbacks on 2b2t), but allow it when the target is above us so we
+        // can climb out of a pit instead of pacing in it.
+        /*? if >=26.1 {*//*
+        boolean targetAbove = target.getY() > player.blockPosition().getY();
+        *//*?} else {*/
+        boolean targetAbove = target.getY() > player.getBlockPos().getY();
+        /*?}*/
+        boolean nearBuildConservative = conservative && dxz2 <= 9.0 && !targetAbove;
         /*? if >=26.1 {*//*
         if (player.onGround()) {
         *//*?} else {*/
         if (player.isOnGround()) {
         /*?}*/
+            if (nearBuildConservative) {
+                return;
+            }
             if (player.horizontalCollision) {
                 /*? if >=26.1 {*//*
                 player.jumpFromGround();
                 *//*?} else {*/
                 player.jump();
                 /*?}*/
-            } else if (!conservativeVanillaMovement
+            } else if (!conservative
                     /*? if >=26.1 {*//*
                     && shouldJumpAhead(player, mc.level, targetYaw)) {
                     *//*?} else {*/
@@ -1949,8 +1968,10 @@ public final class PathWalker {
                 *//*?} else {*/
                 player.jump();
                 /*?}*/
-            } else if (conservativeVanillaMovement && facingTarget && dxz2 <= 9.0) {
-                // Near the build, stay grounded unless a real collision forces a hop.
+            } else if (conservative && facingTarget && dxz2 <= 9.0 && !targetAbove) {
+                // Near the build and at/above target level: stay grounded
+                // (a hop here would be a setback-causing bounce). When the
+                // target is above, fall through so the climb logic can hop.
                 return;
             /*? if >=26.1 {*//*
             } else if (shouldJumpAhead(player, mc.level, targetYaw)) {
