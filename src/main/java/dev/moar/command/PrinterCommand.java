@@ -11,6 +11,7 @@ import dev.moar.schematic.LitematicaDetector;
 import dev.moar.schematic.PrinterCheckpoint;
 import dev.moar.schematic.PrinterResourceManager;
 import dev.moar.util.ChatHelper;
+import dev.moar.util.PathWalker;
 /*? if >=26.1 {*//*
 import net.fabricmc.fabric.api.client.command.v2.ClientCommands;
 *//*?} else {*/
@@ -225,45 +226,17 @@ public final class PrinterCommand {
                     )
             );
 
-            // /printer status
+            // /printer status (aliases: info, information) - the verbose details
+            // that /printer start deliberately no longer spams into chat.
             /*? if >=26.1 {*//*
-            root.then(ClientCommands.literal("status")
+            root.then(ClientCommands.literal("status").executes(ctx -> showInfo()));
+            root.then(ClientCommands.literal("info").executes(ctx -> showInfo()));
+            root.then(ClientCommands.literal("information").executes(ctx -> showInfo()));
             *//*?} else {*/
-            root.then(ClientCommandManager.literal("status")
+            root.then(ClientCommandManager.literal("status").executes(ctx -> showInfo()));
+            root.then(ClientCommandManager.literal("info").executes(ctx -> showInfo()));
+            root.then(ClientCommandManager.literal("information").executes(ctx -> showInfo()));
             /*?}*/
-                    .executes(ctx -> {
-                        SchematicPrinter printer = getPrinter();
-                        if (!printer.isLoaded()) {
-                            ChatHelper.info("No schematic loaded.");
-                            return 1;
-                        }
-
-                        ChatHelper.info("§lSchematic Printer Status");
-                        ChatHelper.info("File: §b" + printer.getSchematic().getName());
-                        ChatHelper.info("Author: §7" + printer.getSchematic().getAuthor());
-                        ChatHelper.info("Size: §e"
-                                + printer.getSchematic().getSizeX() + "x"
-                                + printer.getSchematic().getSizeY() + "x"
-                                + printer.getSchematic().getSizeZ());
-                        ChatHelper.info("Total blocks: §e" + printer.getSchematic().getTotalNonAir());
-
-                        BlockPos anchor = printer.getAnchor();
-                        ChatHelper.info("Anchor: §e" + anchor.getX() + " " + anchor.getY() + " " + anchor.getZ());
-                        ChatHelper.info("Placed (session): §a" + printer.getBlocksPlaced());
-                        ChatHelper.info("Printing: " + (printer.isEnabled() ? "§aON" : "§cOFF"));
-
-                        int remaining = printer.countRemaining();
-                        if (remaining >= 0) {
-                            int total = printer.getSchematic().getTotalNonAir();
-                            int done = total - remaining;
-                            int pct = total > 0 ? (done * 100 / total) : 100;
-                            ChatHelper.info("Progress: §e" + done + "/" + total
-                                    + " §7(§a" + pct + "%§7)");
-                        }
-
-                        return 1;
-                    })
-            );
 
             // /printer holes — list positions fix53 has permanently given up on
             // (sealed by already-built structure) and /printer holes retry to
@@ -400,7 +373,7 @@ public final class PrinterCommand {
                                     printer.setAnchor(pos);
                                     ChatHelper.info("§eNo active placement list found, but hologram blocks were detected.");
                                     ChatHelper.info("§aAnchor aligned from hologram blocks.");
-                                    ChatHelper.info("§7Use §f/printer toggle §7to start printing.");
+                                    ChatHelper.info("§7Use §f/printer start §7to start building.");
                                     return 1;
                                 }
                             }
@@ -425,7 +398,7 @@ public final class PrinterCommand {
                                     + " §7(" + printer.getSchematic().getTotalNonAir() + " blocks)");
                             BlockPos a = printer.getAnchor();
                             ChatHelper.info("Anchored at §e" + a.getX() + " " + a.getY() + " " + a.getZ());
-                            ChatHelper.info("§7Use §f/printer toggle §7to start printing.");
+                            ChatHelper.info("§7Use §f/printer start §7to start building.");
                         }
 
                         return 1;
@@ -465,7 +438,7 @@ public final class PrinterCommand {
                             ChatHelper.info("Anchor: §e" + data.anchorX + " " + data.anchorY + " " + data.anchorZ);
                             ChatHelper.info("Previously placed: §e" + data.blocksPlaced + " §7blocks");
                             ChatHelper.info("Checkpoint saved: §7" + data.timeSince());
-                            ChatHelper.info("§7Use §f/printer toggle §7to continue.");
+                            printer.setEnabled(true);
                             return 1;
                         } catch (IOException e) {
                             ChatHelper.info("§cFailed to resume: " + e.getMessage());
@@ -566,6 +539,75 @@ public final class PrinterCommand {
                     })
             );
 
+            // /printer start - detect placement and begin in one command
+            /*? if >=26.1 {*//*
+            root.then(ClientCommands.literal("start")
+            *//*?} else {*/
+            root.then(ClientCommandManager.literal("start")
+            /*?}*/
+                    .executes(ctx -> {
+                        SchematicPrinter printer = getPrinter();
+                        SchematicQueueManager qm = MoarMod.getQueueManager();
+
+                        if (printer.isEnabled()) {
+                            ChatHelper.info("§ePrinter is already running §7- §f"
+                                    + printer.getBlocksPlaced() + "§7 placed this session, §f"
+                                    + printer.countRemaining() + "§7 to go.");
+                            ChatHelper.info("§7Use §f/printer status §7for details or §f/printer stop §7to stop.");
+                            return 0;
+                        }
+
+                        // AutoBuild stays opt-in; enable() prints the hint.
+                        // Supply/walker notes only matter when it is on.
+                        if (printer.isAutoBuild()) {
+                            if (PrinterResourceManager.getSupplyChests().isEmpty()) {
+                                ChatHelper.info("§eNo supply chests marked - building from your inventory only.");
+                                ChatHelper.info("§7Look at a chest and run §f/printer supply add §7to enable restocking.");
+                            }
+                            if (!PathWalker.isBaritoneAvailable()) {
+                                ChatHelper.info("§eBaritone not installed §7- using the basic straight-line walker."
+                                        + " Large builds path much better with Baritone.");
+                            }
+                        }
+
+                        if (qm.hasActiveTask()) {
+                            printer.toggle();
+                            return 1;
+                        }
+
+                        if (qm.hasQueuedTasks() && qm.startNextIfIdle()) {
+                            return 1;
+                        }
+
+                        printer.toggle();
+                        return 1;
+                    })
+            );
+
+            // /printer stop
+            /*? if >=26.1 {*//*
+            root.then(ClientCommands.literal("stop")
+            *//*?} else {*/
+            root.then(ClientCommandManager.literal("stop")
+            /*?}*/
+                    .executes(ctx -> {
+                        SchematicPrinter printer = getPrinter();
+                        SchematicQueueManager qm = MoarMod.getQueueManager();
+
+                        if (!printer.isEnabled()) {
+                            ChatHelper.info("§7Printer is not running.");
+                            return 0;
+                        }
+
+                        if (qm.hasActiveTask()) {
+                            qm.pauseActiveTask();
+                        } else {
+                            printer.toggle();
+                        }
+                        return 1;
+                    })
+            );
+
             // /printer autobuild
             /*? if >=26.1 {*//*
             root.then(ClientCommands.literal("autobuild")
@@ -631,6 +673,42 @@ public final class PrinterCommand {
                         return 1;
                     })
             );
+
+            // /printer camera [on|off] - on turns your view to each block
+            // (Grim-clean); off aims silently so the view never moves.
+            /*? if >=26.1 {*//*
+            root.then(ClientCommands.literal("camera")
+            *//*?} else {*/
+            root.then(ClientCommandManager.literal("camera")
+            /*?}*/
+                    .executes(ctx -> {
+                        SchematicPrinter printer = getPrinter();
+                        boolean newValue = !printer.isMoveCamera();
+                        printer.setMoveCamera(newValue);
+                        ChatHelper.info("Camera: " + (newValue
+                                ? "§amoves §7(turns to each block - safest on strict anticheat)"
+                                : "§esilent §7(view stays put - uses server-side aim)"));
+                        return 1;
+                    })
+                    /*? if >=26.1 {*//*
+                    .then(ClientCommands.literal("on").executes(ctx -> {
+                    *//*?} else {*/
+                    .then(ClientCommandManager.literal("on").executes(ctx -> {
+                    /*?}*/
+                        getPrinter().setMoveCamera(true);
+                        ChatHelper.info("Camera: §amoves §7(turns to each block - safest on strict anticheat)");
+                        return 1;
+                    }))
+                    /*? if >=26.1 {*//*
+                    .then(ClientCommands.literal("off").executes(ctx -> {
+                    *//*?} else {*/
+                    .then(ClientCommandManager.literal("off").executes(ctx -> {
+                    /*?}*/
+                        getPrinter().setMoveCamera(false);
+                        ChatHelper.info("Camera: §esilent §7(view stays put - uses server-side aim)");
+                        return 1;
+                    }))
+            );
             // /printer speed [1-20] -- set placement speed (blocks per second)
             /*? if >=26.1 {*//*
             root.then(ClientCommands.literal("speed")
@@ -656,7 +734,7 @@ public final class PrinterCommand {
                             })
                     )
             );
-            // /printer sort [mode] — set build order (bottom_up, top_down, nearest)
+            // /printer sort [mode] - set build order (auto, bottom_up, top_down, nearest)
             /*? if >=26.1 {*//*
             root.then(ClientCommands.literal("sort")
             *//*?} else {*/
@@ -667,12 +745,13 @@ public final class PrinterCommand {
                         SchematicPrinter printer = getPrinter();
                         SchematicPrinter.SortMode current = printer.getSortMode();
                         SchematicPrinter.SortMode next = switch (current) {
+                            case AUTO      -> SchematicPrinter.SortMode.BOTTOM_UP;
                             case BOTTOM_UP -> SchematicPrinter.SortMode.TOP_DOWN;
                             case TOP_DOWN  -> SchematicPrinter.SortMode.NEAREST;
-                            case NEAREST   -> SchematicPrinter.SortMode.BOTTOM_UP;
+                            case NEAREST   -> SchematicPrinter.SortMode.AUTO;
                         };
                         printer.setSortMode(next);
-                        ChatHelper.info("Sort mode: §e" + next.name());
+                        ChatHelper.info("Sort mode: §e" + describeSortMode(printer));
                         return 1;
                     })
                     /*? if >=26.1 {*//*
@@ -681,6 +760,7 @@ public final class PrinterCommand {
                     .then(ClientCommandManager.argument("mode", StringArgumentType.word())
                     /*?}*/
                             .suggests((ctx, builder) -> {
+                                builder.suggest("auto");
                                 builder.suggest("bottom_up");
                                 builder.suggest("top_down");
                                 builder.suggest("nearest");
@@ -692,11 +772,11 @@ public final class PrinterCommand {
                                 try {
                                     SchematicPrinter.SortMode sm = SchematicPrinter.SortMode.valueOf(mode);
                                     printer.setSortMode(sm);
-                                    ChatHelper.info("Sort mode: §e" + sm.name());
+                                    ChatHelper.info("Sort mode: §e" + describeSortMode(printer));
                                     return 1;
                                 } catch (IllegalArgumentException e) {
                                     ChatHelper.info("§cUnknown sort mode: §7" + mode
-                                            + " §c(use bottom_up, top_down, or nearest)");
+                                            + " §c(use auto, bottom_up, top_down, or nearest)");
                                     return 0;
                                 }
                             })
@@ -1468,13 +1548,74 @@ public final class PrinterCommand {
                 }
             }
 
-            ChatHelper.info("§7Use §f/printer toggle §7to start printing.");
+            ChatHelper.info("§7Use §f/printer start §7to start building.");
 
             return 1;
         } catch (IOException e) {
             ChatHelper.info("§cFailed to load: " + e.getMessage());
             return 0;
         }
+    }
+
+    private static String describeSortMode(SchematicPrinter printer) {
+        SchematicPrinter.SortMode set = printer.getSortMode();
+        if (set != SchematicPrinter.SortMode.AUTO) {
+            return set.name();
+        }
+        return "AUTO §7(currently → §e" + printer.getEffectiveSortMode().name() + "§7)";
+    }
+
+    private static int showInfo() {
+        SchematicPrinter printer = getPrinter();
+        if (!printer.isLoaded()) {
+            ChatHelper.info("No schematic loaded.");
+            return 1;
+        }
+
+        ChatHelper.info("§lSchematic Printer Status");
+        ChatHelper.info("File: §b" + printer.getSchematic().getName());
+        ChatHelper.info("Author: §7" + printer.getSchematic().getAuthor());
+        ChatHelper.info("Size: §e"
+                + printer.getSchematic().getSizeX() + "x"
+                + printer.getSchematic().getSizeY() + "x"
+                + printer.getSchematic().getSizeZ());
+        ChatHelper.info("Total blocks: §e" + printer.getSchematic().getTotalNonAir());
+
+        BlockPos anchor = printer.getAnchor();
+        ChatHelper.info("Anchor: §e" + anchor.getX() + " " + anchor.getY() + " " + anchor.getZ());
+        int x2 = anchor.getX() + printer.getSchematic().getSizeX() - 1;
+        int y2 = anchor.getY() + printer.getSchematic().getSizeY() - 1;
+        int z2 = anchor.getZ() + printer.getSchematic().getSizeZ() - 1;
+        ChatHelper.info("Region: §7("
+                + anchor.getX() + ", " + anchor.getY() + ", " + anchor.getZ()
+                + ") → (" + x2 + ", " + y2 + ", " + z2 + ")");
+        ChatHelper.info("Printing: " + (printer.isEnabled() ? "§aON" : "§cOFF")
+                + " §7| AutoBuild: " + (printer.isAutoBuild() ? "§aON" : "§cOFF"));
+        ChatHelper.info("Camera: " + (printer.isMoveCamera()
+                ? "§amoves §7(turns to each block)"
+                : "§esilent §7(view stays put)"));
+        ChatHelper.info("Placed (session): §a" + printer.getBlocksPlaced());
+
+        int remaining = printer.countRemaining();
+        if (remaining >= 0) {
+            int total = printer.getSchematic().getTotalNonAir();
+            int done = total - remaining;
+            int pct = total > 0 ? (done * 100 / total) : 100;
+            ChatHelper.info("Progress: §e" + done + "/" + total
+                    + " §7(§a" + pct + "%§7)");
+        }
+
+        ChatHelper.info("Sort: §e" + describeSortMode(printer));
+        ChatHelper.info("Supply chests: §e" + PrinterResourceManager.getSupplyChests().size()
+                + " §7| Dump chests: §e" + MoarMod.getChestManager().dumpChestCount());
+        ChatHelper.info("Pathfinding: " + (PathWalker.isBaritoneAvailable()
+                ? "§aBaritone"
+                : "§eBasic walker §7(install Baritone for large builds)"));
+        ChatHelper.info("Rate: §e" + dev.moar.util.PlacementEngine.getEffectiveBps()
+                + "§7/§e" + dev.moar.util.PlacementEngine.getBps()
+                + " §7blocks/s (auto-tuned / ceiling)");
+
+        return 1;
     }
 
     private static SchematicPrinter getPrinter() {

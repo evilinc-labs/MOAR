@@ -89,11 +89,11 @@ How do I...
 <details>
 <summary><strong>... build a schematic?</strong></summary>
 
-> 1. Place or load a schematic in Litematica, then run `/printer detect` or `/printer load mybase.litematic`
-> 2. If you loaded manually, stand where the build origin should be and run `/printer here`
-> 3. Mark your supply chests with `/printer supply add` while looking at each container
-> 4. Use `/printer autobuild` for full automation, then `/printer toggle` to start
-> 5. If you disconnect mid-build, return and use `/printer resume`
+> 1. Place a schematic in Litematica
+> 2. Mark your supply chests with `/printer supply add` while looking at each container
+> 3. Run `/printer start` — it detects the placement and starts building
+> 4. Want it to walk, restock, and build on its own? `/printer autobuild on`
+> 5. If you disconnect mid-build, return and run `/printer resume` — it continues automatically
 
 </details>
 
@@ -103,7 +103,7 @@ How do I...
 > 1. Place multiple schematic placements in Litematica
 > 2. Run `/printer queue detect` to auto-detect and queue all placements
 > 3. Mark your supply chests with `/printer supply add`
-> 4. Use `/printer autobuild`, then `/printer toggle` — each schematic completes and auto-advances to the next
+> 4. Run `/printer autobuild on`, then `/printer start` — each schematic completes and auto-advances to the next
 > 5. Check progress with `/printer queue status`
 
 </details>
@@ -130,12 +130,6 @@ How do I...
 | Command | What it does |
 |---------|--------------|
 | `/moar gui` | Open the MOAR control screen (Kits, Index, Regions, Retrieve, Printer, Spawnproof, API tabs) |
-| `/moar packetlog on` | Start recording placement/interaction packet telemetry |
-| `/moar packetlog off` | Stop recording telemetry |
-| `/moar packetlog status` | Show whether telemetry is enabled and how many events are buffered |
-| `/moar packetlog clear` | Clear the telemetry buffer |
-| `/moar packetlog mark` | Insert a manual marker into the trace |
-| `/moar packetlog dump` | Write the telemetry trace to a file for diagnostics |
 
 </details>
 
@@ -144,23 +138,26 @@ How do I...
 
 | Command | What it does |
 |---------|--------------|
-| `/printer toggle` | Start/stop the printer |
-| `/printer autobuild` | Enable fully automated building |
-| `/printer autobuild on\|off\|toggle` | Explicitly control AutoBuild mode |
+| `/printer start` | Start building — detects your Litematica placement automatically |
+| `/printer stop` | Stop building |
+| `/printer info` | Show the details: progress, region, AutoBuild, supplies, pathfinding |
+| `/printer toggle` | Start/stop the printer in its current mode (manual or AutoBuild) |
+| `/printer autobuild on\|off\|toggle` | Control AutoBuild mode explicitly |
 | `/printer load <file>` | Load a `.litematic` schematic |
 | `/printer unload` | Unload the current schematic |
 | `/printer detect` | Auto-detect active Litematica placements, with hologram-anchor fallback |
 | `/printer list` | List available schematic files |
 | `/printer here` | Anchor schematic to current position |
 | `/printer pos <x> <y> <z>` | Anchor schematic to specific coordinates |
-| `/printer status` | Show progress and completion percentage |
+| `/printer status` | Alias of `/printer info` |
 | `/printer materials` | Show required materials vs. supply inventory |
-| `/printer resume` | Resume from last checkpoint |
+| `/printer resume` | Resume from last checkpoint and continue building |
 | `/printer holes` | List abandoned build targets, with a bounding box to help you find them |
 | `/printer holes retry` | Clear the abandoned list so those positions are re-attempted on the next scan |
-| `/printer speed [1–20]` | Get/set placement speed (default: 13 blocks/sec) |
-| `/printer sort [mode]` | Set build order: `bottom_up`, `top_down`, `nearest` |
+| `/printer speed [1–20]` | Get/set placement speed (default: 19 blocks/sec) |
+| `/printer sort [mode]` | Set build order: `auto` (default — picks the best strategy for the build), `bottom_up`, `top_down`, `nearest` |
 | `/printer air` | Toggle air placement (floating blocks) |
+| `/printer camera [on\|off]` | `on` (default) turns your view to each block — the anticheat-safe path; `off` aims silently so your view stays put |
 | `/printer supply add [x y z]` | Mark a container as a supply source |
 | `/printer supply remove` | Unmark the nearest supply chest |
 | `/printer supply list` | List all supply chests |
@@ -284,8 +281,6 @@ How do I...
 | `/stash lanes sort` | Sort your inventory into accepted lanes |
 | `/stash lanes sort preview` | Preview inventory moves without executing them |
 | `/stash lanes sort stop` | Stop an in-progress sort |
-| `/stash lanes label preview` | Preview label-frame positions for lanes |
-| `/stash lanes label run` | Run the labeling flow (placeholder — placement not yet implemented) |
 
 </details>
 

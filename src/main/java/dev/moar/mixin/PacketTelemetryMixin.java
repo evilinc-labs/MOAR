@@ -1,6 +1,7 @@
 package dev.moar.mixin;
 
 import dev.moar.util.PacketTelemetry;
+import dev.moar.util.PlacementEngine;
 import io.netty.channel.ChannelHandlerContext;
 /*? if >=26.1 {*//*
 import net.minecraft.network.Connection;
@@ -14,7 +15,7 @@ import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 
-// Records placement-relevant packets while /moar packetlog is enabled.
+// Records placement-relevant packets while packet telemetry is enabled.
 /*? if >=26.1 {*//*
 @Mixin(Connection.class)
 *//*?} else {*/
@@ -26,21 +27,29 @@ public abstract class PacketTelemetryMixin {
     @Inject(method = "send(Lnet/minecraft/network/protocol/Packet;)V", at = @At("HEAD"), require = 0)
     private void moar$recordOutgoingPacket(Packet<?> packet, CallbackInfo ci) {
         PacketTelemetry.recordOutgoing(packet);
+        PlacementEngine.onOutgoingPacket(packet);
     }
 
     @Inject(method = "channelRead0(Lio/netty/channel/ChannelHandlerContext;Lnet/minecraft/network/protocol/Packet;)V", at = @At("HEAD"), require = 0)
     private void moar$recordIncomingPacket(ChannelHandlerContext ctx, Packet<?> packet, CallbackInfo ci) {
         PacketTelemetry.recordIncoming(packet);
+        // Always-on: feeds the server block-echo ledger used to verify
+        // placements against protocol ground truth (ghost-block detection).
+        PlacementEngine.onIncomingPacket(packet);
     }
     *//*?} else {*/
     @Inject(method = "send(Lnet/minecraft/network/packet/Packet;)V", at = @At("HEAD"), require = 0)
     private void moar$recordOutgoingPacket(Packet<?> packet, CallbackInfo ci) {
         PacketTelemetry.recordOutgoing(packet);
+        PlacementEngine.onOutgoingPacket(packet);
     }
 
     @Inject(method = "channelRead0(Lio/netty/channel/ChannelHandlerContext;Lnet/minecraft/network/packet/Packet;)V", at = @At("HEAD"), require = 0)
     private void moar$recordIncomingPacket(ChannelHandlerContext ctx, Packet<?> packet, CallbackInfo ci) {
         PacketTelemetry.recordIncoming(packet);
+        // Always-on: feeds the server block-echo ledger used to verify
+        // placements against protocol ground truth (ghost-block detection).
+        PlacementEngine.onIncomingPacket(packet);
     }
     /*?}*/
 }

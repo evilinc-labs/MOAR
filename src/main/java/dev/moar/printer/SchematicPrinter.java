@@ -185,6 +185,7 @@ public class SchematicPrinter {
     // enums
 
     public enum SortMode {
+        AUTO,
         NEAREST,
         BOTTOM_UP,
         TOP_DOWN
@@ -223,12 +224,19 @@ public class SchematicPrinter {
     // settings
 
     private int bps = 19;
-    private double range = 4.2;
+    // Kept under the placement engine's effective reach (~3.7) so scanned
+    // candidates' cursors stay comfortably inside Grim's lagged reach check
+    // after face adjustments; the bot relocates closer for farther cells.
+    private double range = 3.5;
     private boolean swapItems = true;
     private boolean printInAir = true;
-    private SortMode sortMode = SortMode.BOTTOM_UP;
+    private SortMode sortMode = SortMode.AUTO;
     private boolean statusMessages = true;
     private boolean autoBuild = false;
+    // When false (/printer camera off), placements aim silently (decoupled
+    // camera) so the view never turns. Default true = physically turn the
+    // camera, which is the Grim-clean path.
+    private boolean moveCamera = true;
     private static final int BUILD_SWAP_RECENT_SETBACK_WINDOW = 40;
     private static final int BOTTOM_UP_ACTIVE_BAND_HEIGHT = 1;
     private static final int BUILD_PLAN_SECTION_HEIGHT = 16;
@@ -412,6 +420,9 @@ public class SchematicPrinter {
     private static final int SETBACK_STORM_WINDOW_TICKS = 60;
     private static final int SETBACK_STORM_THRESHOLD = 3;
     private static final int SETBACK_STORM_PAUSE_TICKS = 200; // ~10s settle
+    // Re-hold length when the storm timer elapsed but the player still isn't
+    // grounded+calm (kept short so it re-checks frequently until stable).
+    private static final int SETBACK_STORM_REHOLD_TICKS = 20;
     private int inventorySwapWaitTicks;
     private boolean forceLiveInventorySwapOnce;
     private static final int INVENTORY_SWAP_WAIT_ESCALATION_TICKS = 40;
@@ -424,6 +435,22 @@ public class SchematicPrinter {
     private static final double STANDING_BELOW_TARGET_PENALTY = 28.0;
     private static final double STANDING_LOW_HEADROOM_PENALTY = 14.0;
     private static final double STANDING_ENCLOSURE_PENALTY = 8.0;
+    // Penalty for stances standing inside the unbuilt structure. Bottom-up solid
+    // volumes on void platforms offer only these, so we penalise rather than
+    // hard-reject (that starved the placer); off-structure stances still win.
+    private static final double STANDING_ON_STRUCTURE_PENALTY = 3000.0;
+    private static final double BUILD_ACCESS_ON_STRUCTURE_PENALTY = 400.0;
+    // Remaining work spanning at most this many extra layers counts as flat
+    // for SortMode.AUTO (span 0 = one layer, 1 = two layers).
+    private static final int AUTO_SORT_FLAT_MAX_SPAN = 2;
+    private long cachedAutoSortTick = Long.MIN_VALUE;
+    private SortMode cachedAutoSortResolved = SortMode.BOTTOM_UP;
+    private long cachedFlatCenterTick = Long.MIN_VALUE;
+    private BlockPos cachedFlatCenter = null;
+    // Periodic AutoBuild progress reports (percentage, rate, ETA).
+    private static final long PROGRESS_REPORT_INTERVAL_MS = 5 * 60 * 1000;
+    private long lastProgressReportMs;
+    private int blocksPlacedAtLastReport;
     // Penalty applied when an access feet/head cell contains a fluid (water).
     // Sized smaller than the Y-difference cost (18 per block) so a same-Y wet
     // stance beats an above-Y dry stance. This is critical for sea-level
@@ -858,6 +885,9 @@ public class SchematicPrinter {
     private void enable() {
         enabled = true;
         clearBuildResult();
+        // No build walk should ever sprint (sprint desyncs Grim's
+        // sprint-direction check against the placement engine's silent yaw).
+        PathWalker.setForceConservative(true);
 
         // Sync with Litematica: full re-detect only when nothing is loaded.
         // Once a placement is loaded, keep that selection stable across
@@ -865,8 +895,6 @@ public class SchematicPrinter {
         boolean litematicaSynced = false;
         if (schematic == null || anchor == null) {
             if (tryAutoDetect()) {
-                ChatHelper.labelled("Printer", "§aLoaded §f" + schematic.getName()
-                        + " §7(" + schematic.getTotalNonAir() + " blocks)");
                 litematicaSynced = true;
             } else if (schematic == null || anchor == null) {
                 ChatHelper.info("§cNo schematic loaded. Use /printer load <file> or load one in Litematica.");
@@ -875,31 +903,26 @@ public class SchematicPrinter {
             // Already loaded — re-sync anchor only (avoid replacing schematic).
             if (trySyncAnchor()) {
                 litematicaSynced = true;
-            } else if (!autoDetected) {
-                ChatHelper.info("§7Anchor unchanged — SchematicWorld correlation "
-                        + "will auto-align on next tick.");
             }
         }
 
         // SchematicWorld correlation will auto-align on next tick if needed.
 
         if (schematic != null && anchor != null) {
-            ChatHelper.info("Printing §a" + schematic.getName()
-                    + "§f (" + schematic.getTotalNonAir() + " blocks)");
-            ChatHelper.info("Anchor: §e" + anchor.getX() + " " + anchor.getY() + " " + anchor.getZ());
-            int x2 = anchor.getX() + schematic.getSizeX() - 1;
-            int y2 = anchor.getY() + schematic.getSizeY() - 1;
-            int z2 = anchor.getZ() + schematic.getSizeZ() - 1;
-            ChatHelper.info("Region: §7("
-                    + anchor.getX() + ", " + anchor.getY() + ", " + anchor.getZ()
-                    + ") → (" + x2 + ", " + y2 + ", " + z2 + ")");
+            // One line only - the verbose details (anchor, region, size, %)
+            // live in /printer info so start doesn't spam chat.
+            ChatHelper.info("§aPrinter started §7- §f" + schematic.getName()
+                    + " §7(" + schematic.getTotalNonAir() + " blocks)");
             warnIfAnchorSuspicious();
-            if (autoBuild) { 
-                ChatHelper.info("§bAutoBuild §aenabled §7— clearing illegal blocks, then building.");
+            if (!autoBuild) {
+                ChatHelper.info("§7AutoBuild is §coff §7- §f/printer autobuild on §7makes it"
+                        + " walk, restock, and build on its own.");
             }
         }
 
         blocksPlaced = 0;
+        lastProgressReportMs = System.currentTimeMillis();
+        blocksPlacedAtLastReport = 0;
         clearBlocksBroken = 0;
         clearingDone = false;
         clearBreakTarget = null;
@@ -972,6 +995,11 @@ public class SchematicPrinter {
 
         PlacementEngine.clearCorrectionHistory();
         PlacementEngine.reset();
+        // Start clean and at full speed. reset() clears per-placement state but
+        // not the session backoff, so a leftover quiet window would make the first
+        // placement wait (the "starts a few seconds late" bug) and a throttled
+        // rate would carry over. clearSessionBreakerState() zeroes both.
+        PlacementEngine.clearSessionBreakerState();
 
         // If the build site is far away (unloaded chunks), start
         // walking there immediately instead of waiting for the
@@ -1026,6 +1054,7 @@ public class SchematicPrinter {
     private void disable(boolean announce) {
         enabled = false;
         clearBuildResult();
+        PathWalker.setForceConservative(false);
         PrinterDatabase.flushScaffoldIfDirty(); // persist any pending scaffold data
         saveCheckpoint();
         PlacementEngine.reset();
@@ -2123,6 +2152,22 @@ public class SchematicPrinter {
             if (totalSetbacks != observedPlacementSetbacks) {
                 observedPlacementSetbacks = totalSetbacks;
             }
+            // Don't resume just because the timer elapsed - a fixed pause ended
+            // while the player was still falling through a ghosted block and
+            // stormed again. Hold until grounded on solid AND calm.
+            /*? if >=26.1 {*//*
+            boolean grounded = mc.player != null && mc.player.onGround();
+            *//*?} else {*/
+            boolean grounded = mc.player != null && mc.player.isOnGround();
+            /*?}*/
+            if (setbackStormPauseTicks == 0 && (!grounded || !setbackMonitor.isCalm())) {
+                setbackStormPauseTicks = SETBACK_STORM_REHOLD_TICKS;
+            }
+            if (setbackStormPauseTicks == 0) {
+                PathWalker.stop();
+                PlacementEngine.reset();
+                refreshPlacementPlannerState();
+            }
             return true;
         }
         if (totalSetbacks != observedPlacementSetbacks) {
@@ -2268,8 +2313,13 @@ public class SchematicPrinter {
     }
 
     private boolean isBuildTargetCoolingDown(BlockPos pos) {
+        // Volatile positions (running redstone machines - pistons, clocks)
+        // count as permanently cooling down: anything we place there gets
+        // overwritten within ticks, and every selector consults this check.
         return pos != null
-                && (isBuildLayerCoolingDown(pos.getY()) || isPlacementTargetCoolingDown(pos));
+                && (isBuildLayerCoolingDown(pos.getY())
+                || isPlacementTargetCoolingDown(pos)
+                || PlacementEngine.isVolatilePosition(pos));
     }
 
     // Fix #56: guards against the recurring "vertical shaft entombment"
@@ -2644,6 +2694,17 @@ public class SchematicPrinter {
                                                boolean forceReposition,
                                                int recentSetbacks) {
     /*?}*/
+        // A TIMEOUT means the server ate the interact (no place, no reject). One
+        // quick re-aim retry, like a human re-clicking once. Beyond that,
+        // re-clicking the same cell is bot-spam Grim penalises, so cool it down,
+        // place other cells, and come back later from a different stance.
+        if (status == PlacementEngine.VerificationStatus.TIMEOUT && failureCount <= 1) {
+            PlacementEngine.reset();
+            placementFailurePauseTicks = Math.max(placementFailurePauseTicks, 2);
+            PacketTelemetry.mark("build recovery re-aim-retry failures=" + failureCount
+                    + " target=" + pos);
+            return;
+        }
         boolean softTimeout = status == PlacementEngine.VerificationStatus.TIMEOUT
                 && !forceReposition;
         int targetCooldown;
@@ -2800,9 +2861,120 @@ public class SchematicPrinter {
     public void setPrintInAir(boolean v){ this.printInAir = v; }
     public SortMode getSortMode()      { return sortMode; }
     public void setSortMode(SortMode m){ this.sortMode = m; }
+    public SortMode getEffectiveSortMode() { return effectiveSortMode(); }
+
+    // AUTO picks per-moment: when the remaining work is effectively flat (spans
+    // <= AUTO_SORT_FLAT_MAX_SPAN) place radially outward from the player; anything
+    // with vertical depth left uses the bottom-up band/row plan for support order.
+    // Measured on unresolved cells, not the bbox. Cached per world tick.
+    private SortMode effectiveSortMode() {
+        if (sortMode != SortMode.AUTO) {
+            return sortMode;
+        }
+        if (schematic == null || anchor == null) {
+            return SortMode.BOTTOM_UP;
+        }
+        if (schematic.getSizeY() <= AUTO_SORT_FLAT_MAX_SPAN) {
+            return SortMode.NEAREST;
+        }
+        /*? if >=26.1 {*//*
+        Level world = Minecraft.getInstance().level;
+        *//*?} else {*/
+        World world = MinecraftClient.getInstance().world;
+        /*?}*/
+        if (world == null) {
+            return SortMode.BOTTOM_UP;
+        }
+        long tick = getWorldTick();
+        if (cachedAutoSortTick == tick) {
+            return cachedAutoSortResolved;
+        }
+        // Mark the cache BEFORE computing: if anything below consults the
+        // sort mode again, it gets last tick's answer instead of recursing.
+        cachedAutoSortTick = tick;
+        cachedAutoSortResolved = computeAutoSortMode(world, tick);
+        return cachedAutoSortResolved;
+    }
+
+    /*? if >=26.1 {*//*
+    private SortMode computeAutoSortMode(Level world, long tick) {
+    *//*?} else {*/
+    private SortMode computeAutoSortMode(World world, long tick) {
+    /*?}*/
+        int minY = Integer.MAX_VALUE;
+        int maxY = Integer.MIN_VALUE;
+        for (long key : schematicBlocksByChunk.keySet()) {
+            int chunkX = chunkXFromKey(key);
+            int chunkZ = chunkZFromKey(key);
+            /*? if >=26.1 {*//*
+            if (!world.hasChunk(chunkX, chunkZ)) continue;
+            *//*?} else {*/
+            if (!world.isChunkLoaded(chunkX, chunkZ)) continue;
+            /*?}*/
+            for (SchematicBlockRef ref : getUnresolvedChunkEntries(world, tick, key)) {
+                if (!matchesCurrentBuildPass(ref)) continue;
+                if (!isCurrentlyUnresolved(ref, world)) continue;
+                int y = ref.pos().getY();
+                if (y < minY) minY = y;
+                if (y > maxY) maxY = y;
+                // Early exit: remaining work already spans more layers than
+                // "flat" allows - no need to finish the scan.
+                if (maxY - minY >= AUTO_SORT_FLAT_MAX_SPAN) {
+                    return SortMode.BOTTOM_UP;
+                }
+            }
+        }
+        if (minY == Integer.MAX_VALUE) {
+            // Nothing unresolved in loaded chunks - keep the conservative plan.
+            return SortMode.BOTTOM_UP;
+        }
+        return SortMode.NEAREST;
+    }
+
+    // Spiral anchor for radial (NEAREST) mode: X/Z is the schematic center (fixed
+    // for the whole build), Y is the lowest unbuilt layer. Radial never places
+    // above this layer; the cap moves up once the layer completes. Cached/tick.
+    /*? if >=26.1 {*//*
+    private BlockPos getFlatWorkCenter(Level world) {
+    *//*?} else {*/
+    private BlockPos getFlatWorkCenter(World world) {
+    /*?}*/
+        if (schematic == null || anchor == null) {
+            return null;
+        }
+        long tick = getWorldTick();
+        if (cachedFlatCenterTick == tick) {
+            return cachedFlatCenter;
+        }
+        cachedFlatCenterTick = tick;
+        int minY = Integer.MAX_VALUE;
+        for (long key : schematicBlocksByChunk.keySet()) {
+            int chunkX = chunkXFromKey(key);
+            int chunkZ = chunkZFromKey(key);
+            /*? if >=26.1 {*//*
+            if (!world.hasChunk(chunkX, chunkZ)) continue;
+            *//*?} else {*/
+            if (!world.isChunkLoaded(chunkX, chunkZ)) continue;
+            /*?}*/
+            for (SchematicBlockRef ref : getUnresolvedChunkEntries(world, tick, key)) {
+                if (!matchesCurrentBuildPass(ref)) continue;
+                if (!isCurrentlyUnresolved(ref, world)) continue;
+                int y = ref.pos().getY();
+                if (isBuildLayerCoolingDown(y)) continue;
+                if (y < minY) minY = y;
+            }
+        }
+        cachedFlatCenter = minY == Integer.MAX_VALUE ? null : new BlockPos(
+                anchor.getX() + (schematic.getSizeX() - 1) / 2,
+                minY,
+                anchor.getZ() + (schematic.getSizeZ() - 1) / 2);
+        return cachedFlatCenter;
+    }
     public boolean isStatusMessages()  { return statusMessages; }
     public void setStatusMessages(boolean v){ this.statusMessages = v; }
     public boolean isAutoBuild()       { return autoBuild; }
+    public boolean isMoveCamera()      { return moveCamera; }
+    public void setMoveCamera(boolean v) { this.moveCamera = v; }
     public String getAutoStateName()   { return autoState.name(); }
     public void setAutoBuild(boolean v){
         if (this.autoBuild == v) {
@@ -2869,6 +3041,14 @@ public class SchematicPrinter {
             ChatHelper.info("§aInventory swaps resumed§f — placements have been stable for a while,"
                     + " so swap-required blocks will be attempted again.");
         }
+        if (statusMessages && PlacementEngine.consumePlacementQuietNotice()) {
+            ChatHelper.info("§eServer is silently rejecting placements§f - backing off for §e"
+                    + Math.max(1, PlacementEngine.getPlacementQuietSecondsRemaining())
+                    + "s§f so it cools down, then resuming automatically.");
+        }
+        if (statusMessages && PlacementEngine.consumePlacementQuietResumedNotice()) {
+            ChatHelper.info("§aResuming placements§f after the back-off window.");
+        }
         if (PlacementEngine.consumeAutoBuildKillSwitchNotice()) {
             // Server has stopped acknowledging placements entirely (UseItemOn drops).
             // Stop the whole printer loop; falling back to manual placement would
@@ -2927,6 +3107,11 @@ public class SchematicPrinter {
         } else {
             PlacementEngine.setSilentRotation(true);
         }
+        // Manual mode lets the user walk and place; AutoBuild stops to place.
+        PlacementEngine.setManualPlacementMode(!autoBuild);
+        // /printer camera off → decoupled camera: aim via the real rotation in
+        // the packet (Grim-clean), but don't turn our view.
+        PlacementEngine.setDecoupledCamera(!moveCamera);
 
         // Flush maintenance every ~10 s.
         /*? if >=26.1 {*//*
@@ -3043,6 +3228,14 @@ public class SchematicPrinter {
             }
         }
 
+        // A send-time ray-fragile abort means this cell can't be clicked
+        // robustly from the current stance; cool it down so the planner
+        // serves other cells and relocates, instead of re-picking it.
+        BlockPos fragile = PlacementEngine.consumeRayFragileTarget();
+        if (fragile != null) {
+            recordNoVisibleHitPlacementBlock(fragile, getDesiredBuildStateAt(fragile));
+        }
+
         if (autoBuild) {
             tickAutoBuild(mc);
         } else {
@@ -3096,6 +3289,8 @@ public class SchematicPrinter {
             return;
         }
 
+        maybeReportProgress();
+
         switch (autoState) {
             case CLEARING_AREA       -> tickClearingArea(mc);
             case WALKING_TO_CLEAR    -> tickWalkingToClear(mc);
@@ -3110,6 +3305,41 @@ public class SchematicPrinter {
             case CLEANING_SCAFFOLD   -> tickCleaningScaffold(mc);
             case IDLE                -> tickIdle(mc);
         }
+    }
+
+    // Every PROGRESS_REPORT_INTERVAL_MS of active AutoBuild, post one line with
+    // %, rate, and ETA so long builds show signs of life. Silent when nothing was
+    // placed in the window (stall paths have their own messages).
+    private void maybeReportProgress() {
+        if (!statusMessages || schematic == null) return;
+        long now = System.currentTimeMillis();
+        if (lastProgressReportMs == 0) {
+            lastProgressReportMs = now;
+            blocksPlacedAtLastReport = blocksPlaced;
+            return;
+        }
+        if (now - lastProgressReportMs < PROGRESS_REPORT_INTERVAL_MS) return;
+        int placedSince = blocksPlaced - blocksPlacedAtLastReport;
+        lastProgressReportMs = now;
+        blocksPlacedAtLastReport = blocksPlaced;
+        if (placedSince <= 0) return;
+        int remaining = countRemaining();
+        if (remaining < 0) return;
+        int total = schematic.getTotalNonAir();
+        int done = total - remaining;
+        int pct = total > 0 ? (int) ((done * 100L) / total) : 100;
+        int perHour = (int) (placedSince * (3_600_000.0 / PROGRESS_REPORT_INTERVAL_MS));
+        String eta;
+        if (perHour > 0) {
+            long etaSeconds = (long) remaining * 3600L / perHour;
+            long h = etaSeconds / 3600;
+            long m = (etaSeconds % 3600) / 60;
+            eta = h > 0 ? h + "h " + m + "m" : m + "m";
+        } else {
+            eta = "unknown";
+        }
+        ChatHelper.info("§7Progress: §a" + pct + "%§7 (§f" + done + "§7/§f" + total
+                + "§7) - §f" + perHour + "§7 blocks/h, ETA §f" + eta);
     }
 
     /*? if >=26.1 {*//*
@@ -3421,6 +3651,31 @@ public class SchematicPrinter {
         noProgressTicks = 0;
         stuckCycles++;
 
+        // First stall: tell the user what the printer is doing instead of
+        // silently cycling walk attempts for minutes (looks like a hang).
+        if (statusMessages && stuckCycles == 1) {
+            /*? if >=26.1 {*//*
+            BlockPos stallZone = findNextBuildZone(mc.player, mc.level);
+            int stallPlayerY = mc.player.blockPosition().getY();
+            *//*?} else {*/
+            BlockPos stallZone = findNextBuildZone(mc.player, mc.world);
+            int stallPlayerY = mc.player.getBlockPos().getY();
+            /*?}*/
+            String where = "";
+            if (stallZone != null) {
+                int dy = stallZone.getY() - stallPlayerY;
+                String vertical = dy < -2 ? Math.abs(dy) + " blocks below you"
+                        : dy > 2 ? dy + " blocks above you" : "near your level";
+                where = " Next unbuilt area: §e" + stallZone.getX() + " " + stallZone.getY()
+                        + " " + stallZone.getZ() + " §7(" + vertical + ").";
+            }
+            ChatHelper.info("§eNothing placeable in reach - walking to the next build area."
+                    + where
+                    + (PathWalker.isBaritoneAvailable() ? ""
+                    : "\n§7Baritone is not installed - the basic walker can't dig or bridge,"
+                    + " so buried or far-away areas may be unreachable."));
+        }
+
         // If all remaining blocks need skipped (missing) items, don't
         // waste 10 stuck cycles walking around — stop immediately and
         // tell the user which items are needed.
@@ -3436,7 +3691,7 @@ public class SchematicPrinter {
                     ChatHelper.info("§eBuild paused — all §f" + totalRemaining
                             + "§e remaining blocks need missing materials:"
                             + "\n§7" + formatMissingItems(skippedItems)
-                            + "\n§7Get these items and run §f/printer auto§7 to resume.");
+                            + "\n§7Get these items and run §f/printer start§7 to resume.");
                 }
                 stuckCycles = 0;
                 failedZones.clear();
@@ -3727,7 +3982,7 @@ public class SchematicPrinter {
                                     /*?}*/
                                     + "§c blocks not placed):"
                                     + "\n§7" + formatMissingItems(skippedItems)
-                                    + "\n§7Get these items and run §f/printer auto§7 to resume.");
+                                    + "\n§7Get these items and run §f/printer start§7 to resume.");
                         }
                     }
                 }
@@ -5132,6 +5387,12 @@ public class SchematicPrinter {
         if (pos == null || target == null || existing == null) {
             return false;
         }
+        // Never clear a running redstone machine's blocks: they change state
+        // constantly, are effectively unbreakable, and one near the schematic
+        // kept the clearing pass walking at it forever.
+        if (PlacementEngine.isVolatilePosition(pos)) {
+            return false;
+        }
         // Do not treat every air cell inside a huge schematic as demolition work.
         // Air-space blockers are only cleared by explicit access-mining.
         if (target.isAir()) {
@@ -5553,13 +5814,11 @@ public class SchematicPrinter {
         if (target == null) {
             clearingDone = true;
             lastClearTargetBlock = null;
-            if (statusMessages) {
-                if (clearBlocksBroken > 0) {
-                    ChatHelper.info("§aArea cleared! §7Removed §e" + clearBlocksBroken
-                            + "§7 illegal block(s). Commencing build...");
-                } else {
-                    ChatHelper.info("§aNo illegal blocks found. Commencing build...");
-                }
+            if (statusMessages && clearBlocksBroken > 0) {
+                ChatHelper.info("§aArea cleared! §7Removed §e" + clearBlocksBroken
+                        + "§7 illegal block(s). Commencing build...");
+            } else {
+                LOGGER.info("No illegal blocks found - commencing build");
             }
             enterBuildMode("clearing complete");
             return;
@@ -6372,10 +6631,10 @@ public class SchematicPrinter {
                         return;
                     }
                     /*? if >=1.21.5 {*/
-                    inv.setSelectedSlot(dumpShulkerSlot);
-                    /*?} else {*/
-                    /*inv.selectedSlot = dumpShulkerSlot;
-                    *//*?}*/
+                    /*inv.setSelectedSlot(dumpShulkerSlot);
+                    *//*?} else {*/
+                    inv.selectedSlot = dumpShulkerSlot;
+                    /*?}*/
                     return;
                 }
                 if (dumpWaitTicks < 3) return;
@@ -7049,10 +7308,10 @@ public class SchematicPrinter {
             return false;
         } else if (blockSlot != currentSlot) {
             /*? if >=1.21.5 {*/
-            inv.setSelectedSlot(blockSlot);
-            /*?} else {*/
-            /*inv.selectedSlot = blockSlot;
-            *//*?}*/
+            /*inv.setSelectedSlot(blockSlot);
+            *//*?} else {*/
+            inv.selectedSlot = blockSlot;
+            /*?}*/
         }
 
         // Place the block
@@ -7257,10 +7516,10 @@ public class SchematicPrinter {
                     );
                 } else {
                     /*? if >=1.21.5 {*/
-                    inv.setSelectedSlot(shulkerHotbarSlot);
-                    /*?} else {*/
-                    /*inv.selectedSlot = shulkerHotbarSlot;
-                    *//*?}*/
+                    /*inv.setSelectedSlot(shulkerHotbarSlot);
+                    *//*?} else {*/
+                    inv.selectedSlot = shulkerHotbarSlot;
+                    /*?}*/
                 }
                 // Wait 2 ticks for server to process the slot swap
                 shulkerUnloadPhase = 2;
@@ -9873,7 +10132,17 @@ public class SchematicPrinter {
     *//*?} else {*/
     private int getBottomUpActiveBandTopY(World world, RenderWindow renderWindow) {
     /*?}*/
-        if (sortMode != SortMode.BOTTOM_UP || world == null) {
+        if (world == null) {
+            return Integer.MAX_VALUE;
+        }
+        if (effectiveSortMode() == SortMode.NEAREST) {
+            // Radial mode is layer-locked: only the current spiral layer (under
+            // the printer's feet) is buildable. Every band consumer reads this cap,
+            // so the lock applies everywhere at once.
+            BlockPos center = getFlatWorkCenter(world);
+            return center != null ? center.getY() : Integer.MAX_VALUE;
+        }
+        if (effectiveSortMode() != SortMode.BOTTOM_UP) {
             return Integer.MAX_VALUE;
         }
 
@@ -9945,116 +10214,14 @@ public class SchematicPrinter {
     private BuildPlanFrontier getBuildPlanFrontier(World world, RenderWindow renderWindow) {
     /*?}*/
         int activeBandTopY = getBottomUpActiveBandTopY(world, renderWindow);
-        if (sortMode != SortMode.BOTTOM_UP || activeBandTopY == Integer.MAX_VALUE || world == null) {
-            return new BuildPlanFrontier(activeBandTopY, Integer.MIN_VALUE);
-        }
-
-        long tick = getWorldTick();
-        int minChunkX = renderWindow != null ? renderWindow.minChunkX() : Integer.MIN_VALUE;
-        int maxChunkX = renderWindow != null ? renderWindow.maxChunkX() : Integer.MAX_VALUE;
-        int minChunkZ = renderWindow != null ? renderWindow.minChunkZ() : Integer.MIN_VALUE;
-        int maxChunkZ = renderWindow != null ? renderWindow.maxChunkZ() : Integer.MAX_VALUE;
-        if (cachedBuildPlanFrontierTick == tick
-                && cachedBuildPlanFrontierMinChunkX == minChunkX
-                && cachedBuildPlanFrontierMaxChunkX == maxChunkX
-                && cachedBuildPlanFrontierMinChunkZ == minChunkZ
-                && cachedBuildPlanFrontierMaxChunkZ == maxChunkZ) {
-            return cachedBuildPlanFrontier;
-        }
-
-        Integer activeRow = scanBuildPlanFrontierRow(world, activeBandTopY);
-
-        BuildPlanFrontier result = new BuildPlanFrontier(
-                activeBandTopY,
-                activeRow == null ? Integer.MIN_VALUE : activeRow);
-        cachedBuildPlanFrontierTick = tick;
-        cachedBuildPlanFrontierMinChunkX = minChunkX;
-        cachedBuildPlanFrontierMaxChunkX = maxChunkX;
-        cachedBuildPlanFrontierMinChunkZ = minChunkZ;
-        cachedBuildPlanFrontierMaxChunkZ = maxChunkZ;
-        cachedBuildPlanFrontier = result;
-        return result;
-    }
-
-    /*? if >=26.1 {*//*
-    private Integer scanBuildPlanFrontierRow(Level world, int activeBandTopY) {
-    *//*?} else {*/
-    private Integer scanBuildPlanFrontierRow(World world, int activeBandTopY) {
-    /*?}*/
-        long tick = getWorldTick();
-        // Fix #consistency: collect every currently-actionable row for this Y
-        // band instead of just tracking the minimum. Building the lowest row
-        // index first (old behavior) tends to complete perimeter/shell rows
-        // before interior rows purely by coincidence of index order, which
-        // can seal off interior access from outside before the interior is
-        // reached (the "entombment" cycling reported by users). Rows are
-        // now chosen interior-first: the actionable row farthest from either
-        // edge of the CURRENT remaining footprint wins, deferring boundary
-        // rows (which become the min/max as the build progresses) to last.
-        TreeSet<Integer> actionableRows = new TreeSet<>();
-        Map<Integer, BlockPos> sampleCellByRow = new HashMap<>();
-        for (long key : schematicBlocksByChunk.keySet()) {
-            int chunkX = chunkXFromKey(key);
-            int chunkZ = chunkZFromKey(key);
-            /*? if >=26.1 {*//*
-            if (!world.hasChunk(chunkX, chunkZ)) continue;
-            *//*?} else {*/
-            if (!world.isChunkLoaded(chunkX, chunkZ)) continue;
-            /*?}*/
-
-            for (SchematicBlockRef ref : getUnresolvedChunkEntries(world, tick, key)) {
-                if (!matchesCurrentBuildPass(ref)) continue;
-                if (!isCurrentlyUnresolved(ref, world)) continue;
-                BlockPos worldPos = ref.pos();
-                if (!isWithinActiveBuildFrontier(
-                        worldPos.getY(), activeBandTopY, activeBandTopY)) continue;
-                if (isBuildLayerCoolingDown(worldPos.getY())) continue;
-                if (isPlacementTargetCoolingDown(worldPos)) continue;
-
-                int row = getBuildPlanRow(worldPos);
-                actionableRows.add(row);
-                sampleCellByRow.putIfAbsent(row, worldPos);
-            }
-        }
-        if (actionableRows.isEmpty()) {
-            return null;
-        }
-        int minRow = actionableRows.first();
-        int maxRow = actionableRows.last();
-        Integer bestRow = null;
-        int bestDistance = -1;
-        // Ground-truth refinement: among rows still in the running by the
-        // farthest-from-edge heuristic above, prefer ones whose sample cell
-        // is confirmed reachable from the player right now (via the bounded
-        // reachability BFS) over ones that aren't. Row index alone can't
-        // tell a genuine interior row from a disconnected pocket that just
-        // happens to sit near the middle of the current index range — real
-        // connectivity can. Falls back to the plain heuristic when no
-        // origin hint is available yet, or when reachability data doesn't
-        // confirm any row (e.g. all sample cells are outside BFS radius).
-        BlockPos origin = reachabilityOriginHint;
-        Integer bestReachableRow = null;
-        int bestReachableDistance = -1;
-        for (int row : actionableRows) {
-            int distance = Math.min(row - minRow, maxRow - row);
-            if (distance > bestDistance) {
-                bestDistance = distance;
-                bestRow = row;
-            }
-            if (origin != null) {
-                BlockPos sample = sampleCellByRow.get(row);
-                if (sample != null && isPositionReachable(sample, origin, world)
-                        && distance > bestReachableDistance) {
-                    bestReachableDistance = distance;
-                    bestReachableRow = row;
-                }
-            }
-        }
-        return bestReachableRow != null ? bestReachableRow : bestRow;
+        // Rows are no longer a constraint: within the active layer the spiral
+        // ordering decides placement order, so the old single-active-row lock only
+        // caused "nothing placeable in reach" stalls with no benefit.
+        return new BuildPlanFrontier(activeBandTopY, Integer.MIN_VALUE);
     }
 
     private boolean isInActiveBuildPlanRow(BlockPos worldPos, BuildPlanFrontier frontier) {
-        if (worldPos == null || frontier == null || sortMode != SortMode.BOTTOM_UP) {
+        if (worldPos == null || frontier == null || effectiveSortMode() != SortMode.BOTTOM_UP) {
             return true;
         }
         if (!frontier.rowConstrained()) {
@@ -10117,7 +10284,7 @@ public class SchematicPrinter {
     }
 
     private boolean prefersHigherBuildLayers() {
-        return sortMode == SortMode.TOP_DOWN;
+        return effectiveSortMode() == SortMode.TOP_DOWN;
     }
 
     private boolean isBetterBuildLayer(int candidateY, int bestY) {
@@ -10125,7 +10292,7 @@ public class SchematicPrinter {
     }
 
     private boolean isWithinActiveBuildFrontier(int y, int frontierY, int activeBandTopY) {
-        if (sortMode == SortMode.BOTTOM_UP && activeBandTopY != Integer.MAX_VALUE) {
+        if (effectiveSortMode() == SortMode.BOTTOM_UP && activeBandTopY != Integer.MAX_VALUE) {
             int bandBottomY = activeBandTopY - BOTTOM_UP_ACTIVE_BAND_HEIGHT + 1;
             return y >= bandBottomY && y <= activeBandTopY;
         }
@@ -10162,6 +10329,24 @@ public class SchematicPrinter {
         BuildPlanFrontier buildFrontier = getBuildPlanFrontier(world, renderWindow);
         int activeBandTopY = buildFrontier.activeBandTopY();
         boolean preferExterior = shouldPreferExteriorBuildTargets(playerBlockPos);
+        // Spiral: rank staging targets from the schematic center (innermost
+        // cell of the current layer first) rather than from the player.
+        // playerPos itself stays untouched - stance evaluation needs it.
+        /*? if >=26.1 {*//*
+        Vec3 rankOrigin = playerPos;
+        *//*?} else {*/
+        Vec3d rankOrigin = playerPos;
+        /*?}*/
+        if (effectiveSortMode() != SortMode.TOP_DOWN) {
+            BlockPos center = getFlatWorkCenter(world);
+            if (center != null) {
+                /*? if >=26.1 {*//*
+                rankOrigin = Vec3.atCenterOf(center);
+                *//*?} else {*/
+                rankOrigin = Vec3d.ofCenter(center);
+                /*?}*/
+            }
+        }
         List<StagingTargetCandidate> repairVisibleExteriorCandidates = new ArrayList<>(STAGING_PLAN_MAX_CANDIDATES);
         List<StagingTargetCandidate> repairVisibleInteriorCandidates = new ArrayList<>(STAGING_PLAN_MAX_CANDIDATES);
         List<StagingTargetCandidate> repairFallbackExteriorCandidates = new ArrayList<>(STAGING_PLAN_MAX_CANDIDATES);
@@ -10195,9 +10380,9 @@ public class SchematicPrinter {
                 if (wouldSealCoolingDownVerticalAccess(worldPos, world)) continue;
 
                 /*? if >=26.1 {*//*
-                double targetDist = playerPos.distanceToSqr(Vec3.atCenterOf(worldPos));
+                double targetDist = rankOrigin.distanceToSqr(Vec3.atCenterOf(worldPos));
                 *//*?} else {*/
-                double targetDist = playerPos.squaredDistanceTo(Vec3d.ofCenter(worldPos));
+                double targetDist = rankOrigin.squaredDistanceTo(Vec3d.ofCenter(worldPos));
 	                /*?}*/
 	                boolean visible = isWithinRenderWindow(renderWindow, worldPos.getX(), worldPos.getZ());
 	                boolean exterior = isExteriorBuildTarget(worldPos);
@@ -10298,6 +10483,13 @@ public class SchematicPrinter {
 
     private boolean shouldPreferExteriorBuildTargets(BlockPos playerBlockPos) {
         if (playerBlockPos == null || schematic == null || anchor == null) {
+            return false;
+        }
+        // The spiral heads for the innermost unbuilt cell of the layer; biasing
+        // toward the perimeter when the player stands outside the footprint (true
+        // at every build start) sent it to the edge. Exterior preference only
+        // matters for TOP_DOWN now.
+        if (effectiveSortMode() != SortMode.TOP_DOWN) {
             return false;
         }
         if (failedZones.size() >= EXTERIOR_FAILED_ZONE_BUDGET) {
@@ -10471,12 +10663,9 @@ public class SchematicPrinter {
 
     private int compareStagingCandidates(BlockPos candidatePos, double candidateDist,
                                          BlockPos existingPos, double existingDist) {
-        if (sortMode == SortMode.BOTTOM_UP && candidatePos != null && existingPos != null) {
-            int planComparison = compareBuildPlanOrder(candidatePos, existingPos);
-            if (planComparison != 0) {
-                return planComparison;
-            }
-        }
+        // Layer first, then distance from the spiral ranking origin (the
+        // schematic center) - the old row/serpentine plan comparison here
+        // silently overrode the spiral's innermost-first target order.
         if (candidatePos != null && existingPos != null && candidatePos.getY() != existingPos.getY()) {
             if (isBetterBuildLayer(candidatePos.getY(), existingPos.getY())) {
                 return -1;
@@ -10908,6 +11097,8 @@ public class SchematicPrinter {
                         rejectedGround++;
                         continue;
                     }
+                    boolean onStructureStance = isUnbuiltSchematicBlock(feetPos, world)
+                            || isUnbuiltSchematicBlock(headPos, world);
                     considered++;
                     boolean directProbe = canProbeBuildTargetFromStagingPosition(feetPos, targetPos, world, player);
 
@@ -11008,7 +11199,8 @@ public class SchematicPrinter {
                             + reachabilityPenalty
                             + Math.abs(feetPos.getY() - targetPos.getY()) * 18.0
                             + (clearPos != null ? 8.0 : 0.0)
-                            + waterPenalty;
+                            + waterPenalty
+                            + (onStructureStance ? BUILD_ACCESS_ON_STRUCTURE_PENALTY : 0.0);
                     if (directProbe) {
                         if (targetDist > range * range) {
                             rejectedRange++;
@@ -11027,6 +11219,7 @@ public class SchematicPrinter {
                                 + Math.abs(feetPos.getY() - targetPos.getY()) * 14.0
                                 + (clearPos != null ? 8.0 : 0.0)
                                 + waterPenalty
+                                + (onStructureStance ? BUILD_ACCESS_ON_STRUCTURE_PENALTY : 0.0)
                                 + 24.0;
                         if (relaxedScore < bestReachableScore) {
                             bestReachableScore = relaxedScore;
@@ -11075,7 +11268,14 @@ public class SchematicPrinter {
         int sz = pos.getZ() - anchor.getZ();
         if (schematic.contains(sx, sy, sz)) {
             BlockState expected = schematic.getBlockState(sx, sy, sz);
-            if (expected == null || !expected.isAir()) return false;
+            // Unbuilt cells still passable in the world are allowed as last-resort
+            // stances (penalised via BUILD_ACCESS_ON_STRUCTURE_PENALTY). Cells whose
+            // expected block is already placed stay rejected so the planner never
+            // treats a correct block as minable access.
+            if (expected == null) return false;
+            if (!expected.isAir() && isMovementBlocking(world.getBlockState(pos))) {
+                return false;
+            }
         }
         BlockState current = world.getBlockState(pos);
         // NOTE: water/lava cells are accepted here so sea-level builds (e.g.
@@ -11230,6 +11430,19 @@ public class SchematicPrinter {
         Vec3d playerPos = player.getPos();
         reachabilityOriginHint = player.getBlockPos();
         /*?}*/
+        // Spiral zone ranking (all modes except TOP_DOWN): zones are ranked by
+        // distance from the schematic center, not the player, so the printer heads
+        // to the middle of the layer first and grows rings outward.
+        BlockPos radialCenter = effectiveSortMode() != SortMode.TOP_DOWN
+                ? getFlatWorkCenter(world)
+                : null;
+        if (radialCenter != null) {
+            /*? if >=26.1 {*//*
+            playerPos = Vec3.atCenterOf(radialCenter);
+            *//*?} else {*/
+            playerPos = Vec3d.ofCenter(radialCenter);
+            /*?}*/
+        }
 	        RenderWindow renderWindow =
 	                getRenderWindow(/*? if >=26.1 {*//* player.blockPosition() *//*?} else {*/player.getBlockPos()/*?}*/);
 	        BuildPlanFrontier buildFrontier = getBuildPlanFrontier(world, renderWindow);
@@ -11283,7 +11496,7 @@ public class SchematicPrinter {
 	                        : (repair
 	                        ? (exterior ? bestRepairFallbackExterior : bestRepairFallbackInterior)
 	                        : (exterior ? bestFallbackExterior : bestFallbackInterior));
-	                if (sortMode == SortMode.TOP_DOWN) {
+	                if (effectiveSortMode() == SortMode.TOP_DOWN) {
 	                    if (currentBest != null && worldPos.getY() < currentBest.getY()) continue;
 	                } else {
                     if (currentBest != null && worldPos.getY() > currentBest.getY()) continue;
@@ -12209,16 +12422,24 @@ public class SchematicPrinter {
                     if (headState.getBlock() == Blocks.LAVA) continue;
 
                     // Must NOT be an unbuilt schematic position (feet or head)
-                    if (isUnbuiltSchematicBlock(feetPos, world)) continue;
                     /*? if >=26.1 {*//*
-                    if (isUnbuiltSchematicBlock(feetPos.above(), world)) continue;
+                    boolean onStructure = isUnbuiltSchematicBlock(feetPos, world)
+                            || isUnbuiltSchematicBlock(feetPos.above(), world);
                     *//*?} else {*/
-                    if (isUnbuiltSchematicBlock(feetPos.up(), world)) continue;
+                    boolean onStructure = isUnbuiltSchematicBlock(feetPos, world)
+                            || isUnbuiltSchematicBlock(feetPos.up(), world);
                     /*?}*/
 
-                    // Must have at least one horizontal escape that won't
-                    // become a schematic block (so we don't get walled in)
-                    if (!hasEscapeRoute(feetPos, world)) continue;
+                    // Prefer stances with a horizontal escape that won't become a
+                    // schematic block, so we don't get walled in. On-structure
+                    // stances can't have one, so a currently-clear exit suffices and
+                    // the penalty below keeps them last-resort - hard-rejecting them
+                    // left void-platform builds with zero stances.
+                    if (onStructure) {
+                        if (!hasCurrentlyClearExit(feetPos, world)) continue;
+                    } else if (!hasEscapeRoute(feetPos, world)) {
+                        continue;
+                    }
 
                     // Avoid positions near flowing water during solid building
                     // (Baritone can't navigate through currents).  Skip during
@@ -12239,6 +12460,7 @@ public class SchematicPrinter {
                     // rejects placements from swimming, so strongly prefer
                     // dry-land positions.
                     double penalty = inWater ? 500.0 : 0.0;
+                    if (onStructure) penalty += STANDING_ON_STRUCTURE_PENALTY;
 
                     // Strongly prefer standing positions near the target's
                     // Y-level. Working from well below the build often leads
@@ -12591,6 +12813,30 @@ public class SchematicPrinter {
         return false;
     }
 
+    // Like hasEscapeRoute but only requires the exit to be clear RIGHT NOW -
+    // used for on-structure stances, where every neighbour is a future
+    // schematic block by definition.
+    /*? if >=26.1 {*//*
+    private static boolean hasCurrentlyClearExit(BlockPos feetPos, Level world) {
+    *//*?} else {*/
+    private static boolean hasCurrentlyClearExit(BlockPos feetPos, World world) {
+    /*?}*/
+        for (Direction dir : HORIZONTALS) {
+            /*? if >=26.1 {*//*
+            BlockPos feetN = feetPos.relative(dir);
+            BlockPos headN = feetN.above();
+            *//*?} else {*/
+            BlockPos feetN = feetPos.offset(dir);
+            BlockPos headN = feetN.up();
+            /*?}*/
+            if (!isMovementBlocking(world.getBlockState(feetN))
+                    && !isMovementBlocking(world.getBlockState(headN))) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     // Returns true if any block within 2 horizontal blocks of
     // feetPos (at feet or head level) contains flowing water or
     // lava.  Flowing liquids push the player, breaking Baritone's
@@ -12742,8 +12988,18 @@ public class SchematicPrinter {
         double rangeSq = range * range;
         int maxReach = (int) Math.ceil(range);
 
+        // Manual discipline (default AUTO sort, no AutoBuild): place strictly
+        // below the player's feet, fill the lowest reachable layer first (build
+        // upward), and sweep outward from the stance, so the top stays walkable
+        // and no cell is sealed as an air pocket. Explicit sort modes opt out.
+        boolean playerOutwardManual = !autoBuild && sortMode == SortMode.AUTO;
+
         List<BlockPos> candidates = new ArrayList<>();
         List<BlockPos> fallbackCandidates = new ArrayList<>();
+        // Unplaced schematic cells the player is standing on / too close to.
+        // They never become candidates, so without special handling AutoBuild
+        // walks away and leaves a hole under every stance.
+        List<BlockPos> overlapPendingCells = new ArrayList<>();
         /*? if >=26.1 {*//*
         BlockPos playerPos = player.blockPosition();
         *//*?} else {*/
@@ -12769,6 +13025,10 @@ public class SchematicPrinter {
         String dbgFirstReason = null;
         Set<Long> observedPlacedChunks = new HashSet<>();
 
+        // Cheap single-ray reachability during the scan (hundreds of cells/
+        // tick); the precise 9-point sweep still runs at actual placement.
+        PlacementEngine.setCheapProbeScan(true);
+        try {
         for (int dy = -maxReach; dy <= maxReach; dy++) {
             for (int dx = -maxReach; dx <= maxReach; dx++) {
                 for (int dz = -maxReach; dz <= maxReach; dz++) {
@@ -12789,6 +13049,19 @@ public class SchematicPrinter {
                     if (playerOverlapsBlock(player, worldPos)
                             || playerTooCloseForServerPlacement(player, worldPos)) {
                         dbgOverlap++;
+                        int osx = worldPos.getX() - anchor.getX();
+                        int osy = worldPos.getY() - anchor.getY();
+                        int osz = worldPos.getZ() - anchor.getZ();
+                        if (schematic.contains(osx, osy, osz)) {
+                            BlockState oTarget = schematic.getBlockState(osx, osy, osz);
+                            if (oTarget != null && !oTarget.isAir()
+                                    && (isPlaceable(oTarget) || isLiquidSource(oTarget))
+                                    && matchesCurrentBuildPass(oTarget)
+                                    && worldPos.getY() <= activeBandTopY
+                                    && !isEffectivelyPlaced(world.getBlockState(worldPos), oTarget)) {
+                                overlapPendingCells.add(worldPos);
+                            }
+                        }
                         continue;
                     }
 
@@ -12796,6 +13069,10 @@ public class SchematicPrinter {
                     int sy = worldPos.getY() - anchor.getY();
                     int sz = worldPos.getZ() - anchor.getZ();
                     if (!schematic.contains(sx, sy, sz)) continue;
+                    // Only place strictly below the player's feet in manual mode -
+                    // under your legs and down, nothing at feet level or above, so
+                    // the top stays clear to walk while it fills beneath you.
+                    if (playerOutwardManual && worldPos.getY() >= playerPos.getY()) continue;
                     if (isBuildTargetCoolingDown(worldPos)) {
                         dbgCoolingDown++;
                         continue;
@@ -12821,6 +13098,20 @@ public class SchematicPrinter {
                         if (dbgFirstFiltered == null) { dbgFirstFiltered = worldPos.immutable(); dbgFirstReason = "already placed (" + existingState.getBlock() + " vs " + target.getBlock() + ")"; }
                         *//*?} else {*/
                         if (dbgFirstFiltered == null) { dbgFirstFiltered = worldPos.toImmutable(); dbgFirstReason = "already placed (" + existingState.getBlock() + " vs " + target.getBlock() + ")"; }
+                        /*?}*/
+                        continue;
+                    }
+
+                    // Anti-burial: don't place a block while the schematic cell
+                    // directly below it is still unplaced. Building downward from on
+                    // top, once this is down the one under it can't be reached - so
+                    // fill the lower cell first (lowest-layer-first handles it).
+                    if (playerOutwardManual && sealsUnplacedCellBelow(sx, sy, sz, worldPos, world)) {
+                        dbgNoAdj++;
+                        /*? if >=26.1 {*//*
+                        if (dbgFirstFiltered == null) { dbgFirstFiltered = worldPos.immutable(); dbgFirstReason = "unplaced cell below (would seal)"; }
+                        *//*?} else {*/
+                        if (dbgFirstFiltered == null) { dbgFirstFiltered = worldPos.toImmutable(); dbgFirstReason = "unplaced cell below (would seal)"; }
                         /*?}*/
                         continue;
                     }
@@ -12884,6 +13175,10 @@ public class SchematicPrinter {
                     }
                 }
             }
+        }
+
+        } finally {
+            PlacementEngine.setCheapProbeScan(false);
         }
 
         if (candidates.isEmpty() && !fallbackCandidates.isEmpty() && !autoBuild) {
@@ -12974,6 +13269,21 @@ public class SchematicPrinter {
                 placeDebugCooldown = PLACE_SCAN_NONE_COOLDOWN_TICKS;
             }
             if (placeDebugCooldown > 0) placeDebugCooldown--;
+            // Nothing else placeable but the player is blocking unplaced
+            // cells - step one block aside and fill them instead of walking
+            // to the next zone and leaving a hole under the old stance.
+            if (autoBuild && !overlapPendingCells.isEmpty() && !PathWalker.isActive()) {
+                BlockPos underfoot = overlapPendingCells.get(0);
+                BlockPos aside = findStandingPosition(underfoot, world, player);
+                if (aside != null) {
+                    PacketTelemetry.mark("build step aside underfoot=" + posLabel(underfoot)
+                            + " cells=" + overlapPendingCells.size()
+                            + " stance=" + posLabel(aside));
+                    PathWalker.walkTo(aside);
+                    autoState = AutoState.WALKING_TO_BUILD;
+                    return false;
+                }
+            }
             if (dbgTotal > 0 && dbgPlaced >= dbgTotal && lastWalkTargetZone != null) {
                 BlockPos completedZone = lastWalkTargetZone;
                 rememberFailedBuildZone(completedZone, 2);
@@ -13055,46 +13365,79 @@ public class SchematicPrinter {
         // undecorate): the adjacency score alone costs up to 6 world
         // lookups, and evaluating it inside the comparator repeated that
         // work ~2·n·log(n) times per sort.
-        record CandidateSortKey(BlockPos pos, int row, int col, int tier,
-                                int negAdjacency, int itemPriority, double distSq) {}
+        record CandidateSortKey(BlockPos pos, int tier,
+                                int negAdjacency, int itemPriority, int spiralRing,
+                                double spiralAngle, double distSq, double playerHDistSq) {}
         List<CandidateSortKey> keyedCandidates = new ArrayList<>(candidates.size());
-        boolean planOrdered = sortMode == SortMode.BOTTOM_UP;
+        // Spiral ordering (all modes except TOP_DOWN): candidates bucket into
+        // integer rings around the schematic center (inner first), placed in
+        // angular order so the printer sweeps arcs instead of zigzagging.
+        BlockPos spiralCenter = effectiveSortMode() != SortMode.TOP_DOWN
+                ? getFlatWorkCenter(world)
+                : null;
         for (BlockPos p : candidates) {
             int sx2 = p.getX() - anchor.getX();
             int sy2 = p.getY() - anchor.getY();
             int sz2 = p.getZ() - anchor.getZ();
+            int spiralRing = 0;
+            double spiralAngle = 0.0;
+            if (spiralCenter != null) {
+                double cdx = p.getX() - spiralCenter.getX();
+                double cdz = p.getZ() - spiralCenter.getZ();
+                spiralRing = (int) Math.floor(Math.sqrt(cdx * cdx + cdz * cdz));
+                spiralAngle = Math.atan2(cdz, cdx);
+            }
+            int pdx = p.getX() - playerPos.getX();
+            int pdz = p.getZ() - playerPos.getZ();
             keyedCandidates.add(new CandidateSortKey(
                     p,
-                    planOrdered ? getBuildPlanRow(p) : 0,
-                    planOrdered ? getBuildPlanColumnOrder(p) : 0,
                     BlockDependency.getTier(schematic.getBlockState(sx2, sy2, sz2)),
                     -getConfirmedBuildAdjacencyScore(p, world),
                     getBuildItemPriority(p, heldBuildItem, hotbarInventory),
+                    spiralRing,
+                    spiralAngle,
                     /*? if >=26.1 {*//*
-                    eyePos.distanceToSqr(Vec3.atCenterOf(p))
+                    eyePos.distanceToSqr(Vec3.atCenterOf(p)),
                     *//*?} else {*/
-                    eyePos.squaredDistanceTo(Vec3d.ofCenter(p))
+                    eyePos.squaredDistanceTo(Vec3d.ofCenter(p)),
                     /*?}*/
+                    (double) (pdx * pdx + pdz * pdz)
             ));
         }
 
         Comparator<CandidateSortKey> comparator;
-        if (sortMode == SortMode.BOTTOM_UP) {
+        if (playerOutwardManual) {
+            // Lowest layer first (build upward), then nearest-to-player first
+            // (fill outward from the stance). The player is always over solid
+            // work and the sweep never leaves a cell sealed behind it.
             comparator = Comparator.<CandidateSortKey>comparingInt(k -> k.pos().getY())
-                .thenComparingInt(CandidateSortKey::row)
-                .thenComparingInt(CandidateSortKey::col)
+                .thenComparingDouble(CandidateSortKey::playerHDistSq)
                 .thenComparingInt(CandidateSortKey::tier)
                 .thenComparingInt(CandidateSortKey::negAdjacency)
                 .thenComparingInt(CandidateSortKey::itemPriority)
                 .thenComparingDouble(CandidateSortKey::distSq);
-        } else if (sortMode == SortMode.TOP_DOWN) {
+        } else if (effectiveSortMode() == SortMode.BOTTOM_UP) {
+            // Lowest layer first, then spiral within the layer.
+            comparator = Comparator.<CandidateSortKey>comparingInt(k -> k.pos().getY())
+                .thenComparingInt(CandidateSortKey::spiralRing)
+                .thenComparingDouble(CandidateSortKey::spiralAngle)
+                .thenComparingInt(CandidateSortKey::tier)
+                .thenComparingInt(CandidateSortKey::negAdjacency)
+                .thenComparingInt(CandidateSortKey::itemPriority)
+                .thenComparingDouble(CandidateSortKey::distSq);
+        } else if (effectiveSortMode() == SortMode.TOP_DOWN) {
             comparator = Comparator.<CandidateSortKey>comparingInt(k -> -k.pos().getY())
                 .thenComparingInt(CandidateSortKey::tier)
                 .thenComparingInt(CandidateSortKey::negAdjacency)
                 .thenComparingInt(CandidateSortKey::itemPriority)
                 .thenComparingDouble(CandidateSortKey::distSq);
         } else {
+            // NEAREST/radial: inner rings first, arcs swept in angular order
+            // (ring/angle are 0 for every candidate when no center is
+            // available, keeping plain nearest-to-player behavior).
             comparator = Comparator.comparingInt(CandidateSortKey::tier)
+                .thenComparingInt(CandidateSortKey::spiralRing)
+                .thenComparingDouble(CandidateSortKey::spiralAngle)
                 .thenComparingInt(CandidateSortKey::negAdjacency)
                 .thenComparingInt(CandidateSortKey::itemPriority)
                 .thenComparingDouble(CandidateSortKey::distSq);
@@ -13458,6 +13801,25 @@ public class SchematicPrinter {
         return !createBuildPlacementContract(targetPos, world, null)
                 .allowedSupports()
                 .isEmpty();
+    }
+
+    // True if the schematic wants a real block one cell below (sx,sy,sz) and it
+    // isn't placed yet - placing at (sx,sy,sz) would seal that cell off from
+    // above. Used by manual mode so building downward never buries a hole.
+    /*? if >=26.1 {*//*
+    private boolean sealsUnplacedCellBelow(int sx, int sy, int sz, BlockPos worldPos, Level world) {
+    *//*?} else {*/
+    private boolean sealsUnplacedCellBelow(int sx, int sy, int sz, BlockPos worldPos, World world) {
+    /*?}*/
+        if (schematic == null || anchor == null) return false;
+        if (!schematic.contains(sx, sy - 1, sz)) return false;
+        BlockState belowTarget = schematic.getBlockState(sx, sy - 1, sz);
+        if (belowTarget.isAir()) return false;
+        if (!isPlaceable(belowTarget) && !isLiquidSource(belowTarget)) return false;
+        if (isAutoCreatedPart(belowTarget)) return false;
+        if (!matchesCurrentBuildPass(belowTarget)) return false;
+        BlockPos belowPos = new BlockPos(worldPos.getX(), worldPos.getY() - 1, worldPos.getZ());
+        return !isEffectivelyPlaced(world.getBlockState(belowPos), belowTarget);
     }
 
     /*? if >=26.1 {*//*
