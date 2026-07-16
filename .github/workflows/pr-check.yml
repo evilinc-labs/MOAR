@@ -37,7 +37,6 @@ jobs:
         id: build
         run: |
           ./gradlew clean \
-            :1.21.1:buildAndCollect \
             :1.21.4:buildAndCollect \
             :1.21.5:buildAndCollect \
             :1.21.8:buildAndCollect \
@@ -52,7 +51,7 @@ jobs:
           VER=$(grep '^mod.version=' gradle.properties | cut -d= -f2)
           echo "## Build Results" >> "$GITHUB_STEP_SUMMARY"
           echo "" >> "$GITHUB_STEP_SUMMARY"
-          for mc in 1.21.1 1.21.4 1.21.5 1.21.8 1.21.10 1.21.11; do
+          for mc in 1.21.4 1.21.5 1.21.8 1.21.10 1.21.11; do
             jar="build/libs/${VER}/moar-${VER}+${mc}.jar"
             if [ -f "$jar" ]; then
               size=$(du -h "$jar" | cut -f1)
@@ -66,7 +65,7 @@ jobs:
         if: always()
         run: |
           # Verify all stable version jars were produced (excludes 26.1.1)
-          expected=6
+          expected=5
           actual=$(find build/libs -name '*.jar' ! -name '*-sources.jar' | wc -l)
           if [ "$actual" -ne "$expected" ]; then
             echo "::error::Expected $expected version jars but found $actual"

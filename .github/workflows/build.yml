@@ -60,7 +60,7 @@ jobs:
           STAGING="build/release"
           mkdir -p "$STAGING"
 
-          for mc in 1.21.1 1.21.4 1.21.5 1.21.8 1.21.10 1.21.11; do
+          for mc in 1.21.4 1.21.5 1.21.8 1.21.10 1.21.11; do
             JAR="build/libs/${VER}/moar-${VER}+${mc}.jar"
             if [ ! -f "$JAR" ]; then
               echo "::error::Missing JAR: $JAR"
@@ -80,14 +80,6 @@ jobs:
 
           echo "staging=$STAGING" >> "$GITHUB_OUTPUT"
           ls -la "$STAGING/"
-
-      - name: Upload MC 1.21.1
-        uses: actions/upload-artifact@v4
-        with:
-          name: moar-1.21.1
-          path: build/release/moar-*+1.21.1.zip
-          if-no-files-found: error
-          retention-days: 14
 
       - name: Upload MC 1.21.4
         uses: actions/upload-artifact@v4
