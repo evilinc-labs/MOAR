@@ -78,6 +78,35 @@ public final class HighwayDetectorBridge {
         return Optional.empty();
     }
 
+    // How deep to scan below a candidate point for exposed lava.
+    private static final int LAVA_CHECK_DEPTH = 6;
+
+    // True if there's exposed lava within a short depth below this position —
+    // used to reject detour waypoints that would send the player over an open
+    // lava lake instead of solid ground. Nether highways are commonly built as
+    // causeways over lava, and stepping off to the side has no guaranteed floor.
+    public boolean hasLavaBelow(int x, int floorY, int z) {
+        for (int dy = 0; dy <= LAVA_CHECK_DEPTH; dy++) {
+            BlockPos probe = new BlockPos(x, floorY - dy, z);
+            if (!isChunkLoaded(probe)) return false; // unknown — don't block a detour on missing data
+            /*? if >=26.1 {*//*
+            Minecraft mc = Minecraft.getInstance();
+            if (mc.level == null) return false;
+            Block b = mc.level.getBlockState(probe).getBlock();
+            *//*?} else {*/
+            MinecraftClient mc = MinecraftClient.getInstance();
+            if (mc.world == null) return false;
+            Block b = mc.world.getBlockState(probe).getBlock();
+            /*?}*/
+            if (b == Blocks.LAVA) return true;
+            if (b != Blocks.AIR && b != Blocks.CAVE_AIR && b != Blocks.VOID_AIR
+                    && b != Blocks.FIRE && b != Blocks.SOUL_FIRE) {
+                return false; // hit solid ground before finding lava — safe
+            }
+        }
+        return false; // no floor and no lava found within the checked depth
+    }
+
     // Classify one floor cell with headroom checks.
     public CellStatus checkCell(BlockPos floorPos) {
         if (!isChunkLoaded(floorPos)) return CellStatus.UNLOADED;

@@ -1,5 +1,6 @@
 package dev.moar.travel.detour;
 
+import dev.moar.travel.highway.HighwayDetectorBridge;
 import dev.moar.travel.highway.IntegrityReport;
 import dev.moar.travel.plan.HighwayCandidate;
 
@@ -62,17 +63,30 @@ public final class DetourPlanner {
         // How far along the axis to travel to clear the grief region
         int clearDepth = report.griefEndOffset() + CLEAR_MARGIN;
 
+        // Try the "natural" side first, then the opposite side if that one
+        // hangs over exposed lava — nether highways are commonly built as
+        // causeways, and stepping off to the side has no guaranteed floor.
+        HighwayDetectorBridge bridge = HighwayDetectorBridge.get();
+        int side = 1;
+        if (isSideUnsafe(bridge, px, pz, floorY, perpDx, perpDz, stepDx, stepDz, clearDepth, side)) {
+            side = -1;
+            if (isSideUnsafe(bridge, px, pz, floorY, perpDx, perpDz, stepDx, stepDz, clearDepth, side)) {
+                // Both sides hang over lava — don't send the player over it blind.
+                return Collections.emptyList();
+            }
+        }
+
         // ── WP 1: slide perpendicular off the highway ─────────────
         BlockPos wp1 = new BlockPos(
-                px + perpDx * SIDE_OFFSET,
+                px + perpDx * SIDE_OFFSET * side,
                 floorY,
-                pz + perpDz * SIDE_OFFSET);
+                pz + perpDz * SIDE_OFFSET * side);
 
         // ── WP 2: forward past grief at the side offset ───────────
         BlockPos wp2 = new BlockPos(
-                px + stepDx * clearDepth + perpDx * SIDE_OFFSET,
+                px + stepDx * clearDepth + perpDx * SIDE_OFFSET * side,
                 floorY,
-                pz + stepDz * clearDepth + perpDz * SIDE_OFFSET);
+                pz + stepDz * clearDepth + perpDz * SIDE_OFFSET * side);
 
         // ── WP 3: return to highway ───────────────────────────────
         BlockPos wp3 = new BlockPos(
@@ -85,5 +99,15 @@ public final class DetourPlanner {
         waypoints.add(wp2);
         waypoints.add(wp3);
         return waypoints;
+    }
+
+    private static boolean isSideUnsafe(HighwayDetectorBridge bridge, int px, int pz, int floorY,
+                                        int perpDx, int perpDz, int stepDx, int stepDz,
+                                        int clearDepth, int side) {
+        int wp1x = px + perpDx * SIDE_OFFSET * side;
+        int wp1z = pz + perpDz * SIDE_OFFSET * side;
+        int wp2x = px + stepDx * clearDepth + perpDx * SIDE_OFFSET * side;
+        int wp2z = pz + stepDz * clearDepth + perpDz * SIDE_OFFSET * side;
+        return bridge.hasLavaBelow(wp1x, floorY, wp1z) || bridge.hasLavaBelow(wp2x, floorY, wp2z);
     }
 }
