@@ -40,7 +40,6 @@ jobs:
       - name: Clean & build stable versions
         run: >
           ./gradlew clean
-          :1.21.1:buildAndCollect
           :1.21.4:buildAndCollect
           :1.21.5:buildAndCollect
           :1.21.8:buildAndCollect

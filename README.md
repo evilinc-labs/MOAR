@@ -130,6 +130,12 @@ How do I...
 | Command | What it does |
 |---------|--------------|
 | `/moar gui` | Open the MOAR control screen (Kits, Index, Regions, Retrieve, Printer, Spawnproof, API tabs) |
+| `/moar packetlog on` | Start recording placement/interaction packet telemetry |
+| `/moar packetlog off` | Stop recording telemetry |
+| `/moar packetlog status` | Show whether telemetry is enabled and how many events are buffered |
+| `/moar packetlog clear` | Clear the telemetry buffer |
+| `/moar packetlog mark` | Insert a manual marker into the trace |
+| `/moar packetlog dump` | Write the telemetry trace to a file for diagnostics |
 
 </details>
 
@@ -281,6 +287,8 @@ How do I...
 | `/stash lanes sort` | Sort your inventory into accepted lanes |
 | `/stash lanes sort preview` | Preview inventory moves without executing them |
 | `/stash lanes sort stop` | Stop an in-progress sort |
+| `/stash lanes label preview` | Preview label-frame positions for lanes |
+| `/stash lanes label run` | Run the labeling flow (placeholder — placement not yet implemented) |
 
 </details>
 
@@ -334,6 +342,8 @@ Requires **JDK 21+** for 1.21.x builds. The experimental 26.1.1 target requires 
 ./gradlew -Pmoar.includeJava25Targets=true build  # Include 26.1.1 on JDK 25+
 ./gradlew buildAndCollect        # Collect all JARs -> build/libs/<mod.version>/
 ```
+
+Output: `versions/<mc>/build/libs/moar-<mod.version>+<mc>.jar` (current version: see `mod.version` in [gradle.properties](gradle.properties))
 
 ---
 
