@@ -329,20 +329,11 @@ public final class TravelManager {
 
         Optional<HighwayRoute> planned = planner.plan(origin, state.mission.destination, opts);
         if (planned.isEmpty()) {
-            if (canDirectFlightFromCurrentPosition(origin)) {
-                double dist = horizontalDistance(origin, state.mission.destination);
-                state.route = new HighwayRoute(
-                        null,
-                        List.of(new HighwayRoute.FlightLeg(state.mission.destination)),
-                        dist,
-                        0,
-                        0);
-                currentLegIndex = -1;
-                LOGGER.info("[Travel] planner returned no highway route; falling back to direct open-nether flight to {}",
-                        state.mission.destination.toShortString());
-                advanceLeg("planning complete");
-                return;
-            }
+            // Nothing confirmable from here — head toward the nearest
+            // plausible highway instead of flying all the way to the final
+            // destination in one uninterrupted hop. Incremental replanning
+            // (see advanceLeg()) re-evaluates once we arrive.
+            if (tryStartDirectFlightFallback(origin, opts)) return;
             abort("planner returned no route");
             return;
         }
@@ -351,6 +342,40 @@ public final class TravelManager {
         currentLegIndex = -1;
         LOGGER.info("[Travel] planned {}", state.route);
         advanceLeg("planning complete");
+    }
+
+    // Attempts to start a direct open-nether flight toward the nearest
+    // plausible highway when no route could be planned. If the player's
+    // exact position doesn't have safe takeoff footing (common over lava
+    // lakes or open water, where the immediate spot is often unsuitable even
+    // though a good one is nearby), first walks to a nearby launch anchor via
+    // Baritone using the same search already used for mining-takeoff — rather
+    // than giving up immediately.
+    private boolean tryStartDirectFlightFallback(BlockPos origin, HighwayPlanner.Options opts) {
+        if (state.mission == null || !state.mission.useElytra) return false;
+        if (horizontalDistance(origin, state.mission.destination) < state.mission.freeNetherFlightThreshold) {
+            return false;
+        }
+        BlockPos flightTarget = planner.suggestFlightWaypoint(origin, state.mission.destination, opts);
+
+        List<HighwayRoute.Leg> legs;
+        double dist;
+        if (isLaunchReadyAt(origin, flightTarget) || isStrongLaunchAnchor(origin, flightTarget)) {
+            legs = List.of(new HighwayRoute.FlightLeg(flightTarget));
+            dist = horizontalDistance(origin, flightTarget);
+        } else {
+            BlockPos nearbyAnchor = findNearbyLaunchAnchor(origin, flightTarget, NEARBY_LAUNCH_RADIUS);
+            if (nearbyAnchor == null) return false;
+            legs = List.of(new HighwayRoute.ApproachLeg(nearbyAnchor), new HighwayRoute.FlightLeg(flightTarget));
+            dist = horizontalDistance(origin, nearbyAnchor) + horizontalDistance(nearbyAnchor, flightTarget);
+        }
+
+        state.route = new HighwayRoute(null, legs, dist, 0, 0);
+        currentLegIndex = -1;
+        LOGGER.info("[Travel] planner returned no highway route; flying toward nearest plausible highway at {}",
+                flightTarget.toShortString());
+        advanceLeg("planning complete");
+        return true;
     }
 
     private void tickApproach() {
@@ -774,24 +799,39 @@ public final class TravelManager {
         return null;
     }
 
-    private boolean canDirectFlightFromCurrentPosition(BlockPos origin) {
-        if (state.mission == null || !state.mission.useElytra) return false;
-        if (horizontalDistance(origin, state.mission.destination) < state.mission.freeNetherFlightThreshold) {
-            return false;
-        }
-        return isLaunchReadyAt(origin, state.mission.destination)
-                || isStrongLaunchAnchor(origin, state.mission.destination);
-    }
-
     // ──────────────────────────────────────────────────────────────
     // Leg advancement
     // ──────────────────────────────────────────────────────────────
+
+    // Legs run out short of the destination when a route only covered the
+    // portion HighwayPlanner could actually confirm from the previous origin
+    // (see HighwayPlanner's per-hop verification) — replan the remaining
+    // distance from here instead of declaring arrival early. This is what
+    // makes travel incremental/GPS-style: each planning pass only commits to
+    // what it can verify, and the mission naturally recalculates as it goes.
+    private static final int FINAL_ARRIVAL_RADIUS = 32;
+
+    private boolean isNearMissionDestination() {
+        if (state.mission == null) return false;
+        BlockPos pos = currentPlayerPos();
+        if (pos == null) return false;
+        return horizontalDistance(pos, state.mission.destination) <= FINAL_ARRIVAL_RADIUS;
+    }
 
     private void advanceLeg(String reason) {
         if (state.route == null) { abort("advanceLeg with null route"); return; }
         currentLegIndex++;
         if (currentLegIndex >= state.route.legs.size()) {
-            transition(TravelPhase.ARRIVED, "all legs complete: " + reason);
+            if (isNearMissionDestination()) {
+                transition(TravelPhase.ARRIVED, "all legs complete: " + reason);
+            } else {
+                releaseOwner(state.owner);
+                state.owner = MovementOwner.NONE;
+                state.route = null;
+                currentLegIndex = -1;
+                transition(TravelPhase.PLANNING,
+                        "leg chain exhausted short of destination — replanning next hop (" + reason + ")");
+            }
             return;
         }
         HighwayRoute.Leg leg = state.route.legs.get(currentLegIndex);
@@ -824,6 +864,16 @@ public final class TravelManager {
             BlockPos mineTarget = resolveMiningTarget(mine.freeNetherTarget(), plannedFlightDestination());
             startMiningTraversal(mineTarget, reason);
         } else if (leg instanceof HighwayRoute.FlightLeg flightLeg) {
+            BlockPos pos = currentPlayerPos();
+            if (pos != null && isMostlyVerticalHop(pos, flightLeg.destination())) {
+                // Elytra flight only steers by horizontal yaw — a target that's
+                // nearly straight up/down gives an unstable/arbitrary heading
+                // and a blind dive into whatever's in the way (e.g. the
+                // highway tunnel's own roof). Baritone can path this safely.
+                startBaritoneWalk(flightLeg.destination(), 2, TravelPhase.APPROACH_ONRAMP,
+                        reason + " -> mostly-vertical hop, walking instead of flying");
+                return;
+            }
             if (state.mission != null && state.mission.useElytra) {
                 acquireOwner(MovementOwner.FLIGHT);
                 flight.start(flightLeg.destination());
@@ -1403,6 +1453,16 @@ public final class TravelManager {
 
     private static int horizontalDistance(BlockPos a, BlockPos b) {
         return Math.max(Math.abs(a.getX() - b.getX()), Math.abs(a.getZ() - b.getZ()));
+    }
+
+    // True when a hop is mostly a vertical climb/descent rather than a real
+    // horizontal glide — elytra flight only steers by yaw and can't aim at a
+    // target that's nearly straight up/down, so this must route through
+    // Baritone instead (see the FlightLeg handling in advanceLeg()).
+    private static boolean isMostlyVerticalHop(BlockPos pos, BlockPos target) {
+        int horiz = horizontalDistance(pos, target);
+        int vert = Math.abs(target.getY() - pos.getY());
+        return vert > 8 && horiz < Math.max(16, vert / 2);
     }
 
     private static int scoreTakeoffCandidate(BlockPos pos, int dirX, int dirZ) {

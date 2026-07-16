@@ -22,7 +22,11 @@ public final class SetbackMonitor {
     private static final double SETBACK_THRESHOLD_BLOCKS = 0.6;
 
     // Stable ticks required after the last setback before isCalm() returns true.
-    private static final int CALM_WINDOW_TICKS = 12;
+    // 2b2t trace: placements sent ~0.6s after a rubber-band still got
+    // swallowed - Grim ignores actions between issuing a teleport and the
+    // client's confirm settling, and that grace outlasts the old 12-tick
+    // window on real-world latency. 30 ticks (1.5s) clears it with margin.
+    private static final int CALM_WINDOW_TICKS = 30;
 
     // Ring buffer length for recentSetbackCount().
     private static final int HISTORY_SIZE = 64;
