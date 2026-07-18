@@ -29,9 +29,49 @@ public final class BounceTuning {
     // Ignore tiny sideways drift.
     public static double PERP_CORRECTION_DEADZONE = 0.15;
 
-    // Activate elytra near jump apex.
-    public static double ELYTRA_ACTIVATE_VY_THRESHOLD = 0.1;
+    // Require a persistent blocked corridor before detouring.
+    public static int WALL_CONFIRM_TICKS = 3;
 
-    // Aggressive downward glide pitch.
-    public static float BOUNCE_PITCH = 75.0f;
+    // Activate only after the jump apex.
+    public static double ELYTRA_ACTIVATE_VY_THRESHOLD = -0.04;
+
+    // Flatten the arc before the player's head reaches a low ceiling.
+    public static double ELYTRA_ACTIVATE_MAX_RISE = 0.35;
+
+    // Retry if vanilla does not accept the jump input.
+    public static int GROUND_JUMP_TIMEOUT_TICKS = 3;
+
+    // Stop waiting for a rejected launch before landing.
+    public static int LAUNCH_ACK_TIMEOUT_TICKS = 8;
+
+    // Fall back to sprint-jump after repeated correction packets.
+    public static int CORRECTIONS_DISABLE_ELYTRA = 3;
+
+    // Count only correction storms, not mission-lifetime corrections.
+    public static int CORRECTION_STORM_WINDOW_TICKS = 60;
+
+    // Fall back to plain sprint if jumping is also rejected.
+    public static int CORRECTIONS_DISABLE_JUMP = 6;
+
+    // Keep launch acknowledgement on the proven posture.
+    public static float LAUNCH_PITCH = 68.0f;
+
+    // Stabilize speed after reaching the target.
+    public static float GLIDE_CRUISE_PITCH = 60.0f;
+
+    // Accelerate only after the server accepts gliding.
+    public static float GLIDE_ACCEL_PITCH = 52.0f;
+
+    // Aim just below 40 blocks per second before cruising.
+    public static double TARGET_HORIZONTAL_SPEED = 1.9;
+
+    // Stabilize several bounces after a server correction.
+    public static int CORRECTION_RECOVERY_BOUNCES = 8;
+
+    // Check the roof above the player's full bounce height.
+    public static int HEADROOM_Y_OFFSET = 4;
+
+    // Observe immediate headroom once per bounce.
+    public static int HEADROOM_SCAN_AHEAD = 2;
+
 }

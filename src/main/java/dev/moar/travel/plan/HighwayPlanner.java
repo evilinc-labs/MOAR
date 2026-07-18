@@ -532,6 +532,9 @@ public final class HighwayPlanner {
                                         HighwayCandidate highway,
                                         int travelDx,
                                         int travelDz) {
+        int[] normalized = normalizeTravelDirection(highway.axis, travelDx, travelDz);
+        travelDx = normalized[0];
+        travelDz = normalized[1];
         if (!legs.isEmpty()) {
             HighwayRoute.Leg previous = legs.get(legs.size() - 1);
             if (previous instanceof HighwayRoute.BounceLeg prevBounce
@@ -908,13 +911,19 @@ public final class HighwayPlanner {
     private static int[] travelDirection(int[] onRampXZ,
                                          int[] exitXZ,
                                          HighwayCandidate.Axis axis) {
-        int tx = Integer.compare(exitXZ[0], onRampXZ[0]);
-        int tz = Integer.compare(exitXZ[1], onRampXZ[1]);
-        if (tx == 0 && tz == 0) {
-            tx = axis.stepDx;
-            tz = axis.stepDz;
-        }
-        return new int[]{tx, tz};
+        int dx = Integer.compare(exitXZ[0], onRampXZ[0]);
+        int dz = Integer.compare(exitXZ[1], onRampXZ[1]);
+        return normalizeTravelDirection(axis, dx, dz);
+    }
+
+    // Constrain movement to the selected highway axis.
+    private static int[] normalizeTravelDirection(HighwayCandidate.Axis axis,
+                                                  int requestedDx,
+                                                  int requestedDz) {
+        int projection = requestedDx * axis.stepDx + requestedDz * axis.stepDz;
+        int direction = Integer.compare(projection, 0);
+        if (direction == 0) direction = 1;
+        return new int[]{axis.stepDx * direction, axis.stepDz * direction};
     }
 
     private static HighwayGeometry.GeometryCandidate fallbackAxis(int ox, int oz, int dx, int dz) {

@@ -58,7 +58,8 @@ public final class TravelManager {
     // Bounce-leg exit to re-enter after a detour/resupply; null when none active.
     private BlockPos detourResumeExit;
 
-    private int  settleTicks  = 0;  // yaw-hold countdown; 0 = not settling
+    private int  settleTicks  = 0;
+    private int  settleGroundedTicks = 0;
     private int  settleYawDx  = 0;
     private int  settleYawDz  = 0;
 
@@ -82,6 +83,9 @@ public final class TravelManager {
     private static final int NEARBY_LAUNCH_RADIUS = 12;
     private static final int NEARBY_LAUNCH_UP = 4;
     private static final int NEARBY_LAUNCH_DOWN = 8;
+    private static final int SETTLE_MIN_TICKS = 10;
+    private static final int SETTLE_GROUNDED_TICKS = 3;
+    private static final int SETTLE_TIMEOUT_TICKS = 60;
 
     private int miningRetargetAttempts = 0;
     private MiningTraversal miningTraversal = MiningTraversal.NONE;
@@ -118,6 +122,8 @@ public final class TravelManager {
         state.mission = mission;
         currentLegIndex = -1;
         detourResumeExit = null;
+        settleTicks = 0;
+        settleGroundedTicks = 0;
         autoResumeAttempts = 0;
         autoResumeTicks = 0;
         miningRetargetAttempts = 0;
@@ -131,6 +137,7 @@ public final class TravelManager {
 
     public synchronized void stop() {
         settleTicks = 0;
+        settleGroundedTicks = 0;
         detourResumeExit = null;
         autoResumeTicks = 0;
         autoResumeAttempts = 0;
@@ -545,7 +552,8 @@ public final class TravelManager {
                 }
                 settleYawDx = bounceLeg.travelDx();
                 settleYawDz = bounceLeg.travelDz();
-                settleTicks = 10;   // 10-tick grace window before bounce resumes
+                settleTicks = 0;
+                settleGroundedTicks = 0;
                 releaseOwner(state.owner);
                 state.owner = MovementOwner.NONE;
                 transition(TravelPhase.SETTLE, "detour complete, entering settle");
@@ -560,22 +568,36 @@ public final class TravelManager {
         }
     }
 
-    // 10-tick yaw-hold after detour before resuming the bounce.
+    // Resume only after the player is stably grounded.
     private void tickSettle() {
-        settleTicks--;
-        if (settleTicks <= 0) {
-            settleTicks = 0;
+        settleTicks++;
+        if (isPlayerGrounded() && !isPlayerGliding()) {
+            settleGroundedTicks++;
+        } else {
+            settleGroundedTicks = 0;
+        }
+        if (settleTicks >= SETTLE_MIN_TICKS
+                && settleGroundedTicks >= SETTLE_GROUNDED_TICKS) {
             if (detourResumeExit != null && state.route != null && resumeCurrentBounce()) {
-                LOGGER.info("[Travel] SETTLE done, resuming bounce to {}", detourResumeExit);
+                LOGGER.info("[Travel] SETTLE done after {}t (grounded={}t), resuming bounce to {}",
+                        settleTicks, settleGroundedTicks, detourResumeExit);
                 // Clear stale report without re-arming the scan timer.
                 verifier.resetLastReport();
                 detourResumeExit = null;
+                settleTicks = 0;
+                settleGroundedTicks = 0;
                 autoResumeAttempts = 0; // detour succeeded: reset retry budget
                 transition(TravelPhase.BOUNCING, "settle complete, resuming bounce");
             } else {
                 detourResumeExit = null;
+                settleTicks = 0;
+                settleGroundedTicks = 0;
                 advanceLeg("settle complete (no resume exit)");
             }
+        } else if (settleTicks >= SETTLE_TIMEOUT_TICKS) {
+            settleTicks = 0;
+            settleGroundedTicks = 0;
+            abort("detour settle timed out before stable ground contact");
         }
     }
 
@@ -1558,6 +1580,16 @@ public final class TravelManager {
         *//*?} else {*/
         MinecraftClient mc = MinecraftClient.getInstance();
         return mc.player != null && mc.player.isGliding();
+        /*?}*/
+    }
+
+    private static boolean isPlayerGrounded() {
+        /*? if >=26.1 {*//*
+        Minecraft mc = Minecraft.getInstance();
+        return mc.player != null && mc.player.onGround();
+        *//*?} else {*/
+        MinecraftClient mc = MinecraftClient.getInstance();
+        return mc.player != null && mc.player.isOnGround();
         /*?}*/
     }
 

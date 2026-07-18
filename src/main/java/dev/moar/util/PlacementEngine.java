@@ -1,6 +1,7 @@
 package dev.moar.util;
 
 import dev.moar.world.SetbackMonitor;
+import dev.moar.world.VelocityMonitor;
 
 /*? if >=26.1 {*//*
 import net.minecraft.world.level.block.*;
@@ -4405,6 +4406,9 @@ public final class PlacementEngine {
     }
 
     private static boolean isPlacementWindowSafe() {
+        if (VelocityMonitor.get().isSettling()) {
+            return false;
+        }
         SetbackMonitor monitor = SetbackMonitor.get();
         // `isCalm()` already means we've gone a full quiet window since the
         // last setback. Requiring zero "recent" setbacks on top of that can

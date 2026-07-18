@@ -3,6 +3,7 @@ package dev.moar;
 import dev.moar.api.ApiServer;
 import dev.moar.api.MoarProperties;
 import dev.moar.world.SetbackMonitor;
+import dev.moar.world.VelocityMonitor;
 import dev.moar.chest.ChestManager;
 import dev.moar.command.MoarCommand;
 import dev.moar.command.PrinterCommand;
@@ -143,6 +144,8 @@ public class MoarMod implements ClientModInitializer {
         ClientTickEvents.END_CLIENT_TICK.register(client -> {
             MoarNetworkManager.beginClientTick();
 
+            VelocityMonitor.get().tick(client);
+
             // Setback monitor must tick first so other subsystems see
             // up-to-date isCalm() / ticksSinceSetback() this tick.
             SetbackMonitor.get().tick(client);
@@ -216,6 +219,7 @@ public class MoarMod implements ClientModInitializer {
             SPAWN_PROOFER.stop();
             TravelManager.get().stop();
             PathWalker.stop();
+            VelocityMonitor.get().reset();
             SetbackMonitor.get().reset();
             PrinterDatabase.clearScaffold();
             DATABASE.close();

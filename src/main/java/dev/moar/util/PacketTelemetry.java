@@ -27,7 +27,7 @@ import java.util.Set;
 public final class PacketTelemetry {
 
     private static final Logger LOGGER = LoggerFactory.getLogger("MOAR/Packets");
-    private static final String TRACE_BUILD = "fix63-holes-nearest-sort";
+    private static final String TRACE_BUILD = "fix64-correction-sensor";
     private static final int MAX_EVENTS = 768;
     private static final int MAX_FIELDS = 14;
     private static final int MAX_VALUE_LENGTH = 220;
@@ -86,10 +86,22 @@ public final class PacketTelemetry {
     }
 
     public static void markSetback(int totalSetbacks, int ticksSinceSetback) {
+        markSetback(totalSetbacks, ticksSinceSetback, "position-delta");
+    }
+
+    public static void markSetback(int totalSetbacks, int ticksSinceSetback, String source) {
         if (!enabled) {
             return;
         }
-        append("SETBACK total=" + totalSetbacks + " calmTicks=" + ticksSinceSetback, true);
+        append("SETBACK source=" + safe(source) + " total=" + totalSetbacks
+                + " calmTicks=" + ticksSinceSetback, true);
+    }
+
+    public static void markCorrectionAcknowledged(int count) {
+        if (!enabled) {
+            return;
+        }
+        append("CORRECTION_ACK count=" + count, true);
     }
 
     public static void recordOutgoing(Object packet) {
@@ -106,7 +118,7 @@ public final class PacketTelemetry {
         if (!enabled || packet == null) {
             return;
         }
-        if (!isPlacementFeedbackPacket(packet)) {
+        if (!isRelevantIncomingPacket(packet)) {
             return;
         }
         append("IN " + describePacket(packet), false);
@@ -193,7 +205,7 @@ public final class PacketTelemetry {
         return QUIET_PACKET_NAMES.contains(simpleName);
     }
 
-    private static boolean isPlacementFeedbackPacket(Object packet) {
+    private static boolean isRelevantIncomingPacket(Object packet) {
         String className = packet.getClass().getName().toLowerCase(java.util.Locale.ROOT);
         String simpleName = packet.getClass().getSimpleName().toLowerCase(java.util.Locale.ROOT);
         String type = packetType(packet).toLowerCase(java.util.Locale.ROOT);
@@ -205,7 +217,10 @@ public final class PacketTelemetry {
                 || simpleName.equals("class_2637")
                 || type.contains("block_changed_ack")
                 || type.contains("block_update")
-                || type.contains("section_blocks_update");
+                || type.contains("section_blocks_update")
+                || className.contains("playerpositionlook")
+                || className.contains("clientboundplayerposition")
+                || type.contains("player_position");
     }
 
     private static String packetType(Object packet) {

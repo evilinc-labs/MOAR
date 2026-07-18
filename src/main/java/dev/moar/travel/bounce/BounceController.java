@@ -2,6 +2,7 @@ package dev.moar.travel.bounce;
 
 import dev.moar.travel.plan.HighwayCandidate;
 import dev.moar.util.MoarNetworkManager;
+import dev.moar.world.SetbackMonitor;
 
 /*? if >=26.1 {*//*
 import net.minecraft.client.Minecraft;
@@ -49,6 +50,36 @@ public final class BounceController {
     private boolean stuckFromFall;
     private int     ticksActive;
 
+    private enum LaunchPhase {
+        GROUNDED,
+        GROUND_JUMP_REQUESTED,
+        ASCENDING,
+        LAUNCH_REQUESTED,
+        GLIDING,
+        LANDING
+    }
+
+    private LaunchPhase launchPhase = LaunchPhase.GROUNDED;
+    private int launchPhaseTicks;
+    private int launchRequests;
+    private int completedBounces;
+    private int consecutiveLaunchFailures;
+    private double takeoffY;
+    private double peakY;
+    private boolean ceilingContact;
+    private boolean roofDetected;
+    private boolean acceleratingArc;
+    private int correctionRecoveryBounces;
+    private float arcPitch;
+    private boolean launchArmed;
+    private boolean setbackHolding;
+    private boolean elytraLaunchEnabled;
+    private boolean jumpingEnabled;
+    private int wallObservationTicks;
+    private int correctionBaseline;
+    private double lastPerpOffset;
+    private float lastPerpCorrection;
+
     // Stuck detection — track XZ progress in periodic windows
     private double lastProgressX;
     private double lastProgressZ;
@@ -72,6 +103,26 @@ public final class BounceController {
         wallAhead      = false;
         stuckFromFall  = false;
         ticksActive    = 0;
+        launchPhase    = LaunchPhase.GROUNDED;
+        launchPhaseTicks = 0;
+        launchRequests = 0;
+        completedBounces = 0;
+        consecutiveLaunchFailures = 0;
+        takeoffY = Double.NaN;
+        peakY = Double.NaN;
+        ceilingContact = false;
+        roofDetected = false;
+        acceleratingArc = true;
+        correctionRecoveryBounces = 0;
+        arcPitch = BounceTuning.GLIDE_ACCEL_PITCH;
+        launchArmed = false;
+        setbackHolding = false;
+        elytraLaunchEnabled = true;
+        jumpingEnabled = true;
+        wallObservationTicks = 0;
+        correctionBaseline = SetbackMonitor.get().totalServerCorrections();
+        lastPerpOffset = 0.0;
+        lastPerpCorrection = 0.0f;
         noProgressTicks = 0;
         progressSeeded  = false;
         LOGGER.info("[Bounce] start axis={} dir={},{} exit={}", hw.axis, dx, dz, exit.toShortString());
@@ -111,6 +162,16 @@ public final class BounceController {
             return;
         }
 
+        applyCorrectionFallbacks();
+
+        if (!SetbackMonitor.get().isCalm()) {
+            enterSetbackHold();
+            return;
+        }
+        if (setbackHolding) {
+            resumeAfterSetback(mc);
+        }
+
         // ── Current position ─────────────────────────────────────
         /*? if >=26.1 {*//*
         BlockPos pos = mc.player.blockPosition();
@@ -134,7 +195,12 @@ public final class BounceController {
         // Check horizontalCollision and scan 2-6 blocks ahead at
         // player-body height.  TravelManager reads isWallAhead() to
         // trigger a detour walk rather than a hard abort.
-        wallAhead = detectWallOrCollision(mc);
+        if (detectWallOrCollision(mc)) {
+            wallObservationTicks++;
+        } else {
+            wallObservationTicks = 0;
+        }
+        wallAhead = wallObservationTicks >= BounceTuning.WALL_CONFIRM_TICKS;
         if (wallAhead) return; // skip stuck-detection this tick
 
         // ── Exit check ───────────────────────────────────────────
@@ -159,7 +225,8 @@ public final class BounceController {
             } else {
                 noProgressTicks += BounceTuning.PROGRESS_CHECK_INTERVAL;
                 if (noProgressTicks >= BounceTuning.STUCK_TICKS) {
-                    LOGGER.warn("[Bounce] stuck at {}", pos.toShortString());
+                    LOGGER.warn("[Bounce] stuck at {} phase={} requests={} completed={}",
+                            pos.toShortString(), launchPhase, launchRequests, completedBounces);
                     stuck = true;
                     releaseKeys();
                     return;
@@ -183,9 +250,16 @@ public final class BounceController {
         MinecraftClient mc = MinecraftClient.getInstance();
         /*?}*/
         if (mc.player == null) return;
+        if (!SetbackMonitor.get().isCalm()) {
+            releaseKeys();
+            return;
+        }
+        launchPhaseTicks++;
 
         // ── Yaw alignment ────────────────────────────────────────
         float targetYaw = yawForDirection(travelDx, travelDz);
+        lastPerpOffset = 0.0;
+        lastPerpCorrection = 0.0f;
 
         // ── Perp drift correction ─────────────────────────────────
         // Blend a small correction toward center into targetYaw to prevent
@@ -198,6 +272,7 @@ public final class BounceController {
             double cpz  = mc.player.getZ();
             double perpOffset = ((cpx - highway.entry.getX() - 0.5) * perpDx
                                + (cpz - highway.entry.getZ() - 0.5) * perpDz) / perpSq;
+            lastPerpOffset = perpOffset;
             if (Math.abs(perpOffset) > BounceTuning.PERP_CORRECTION_DEADZONE) {
                 double normPerpX = perpDx / Math.sqrt(perpSq);
                 double normPerpZ = perpDz / Math.sqrt(perpSq);
@@ -205,7 +280,14 @@ public final class BounceController {
                 double dirZ =  Math.cos(Math.toRadians(targetYaw));
                 dirX -= normPerpX * perpOffset * BounceTuning.PERP_CORRECTION_GAIN;
                 dirZ -= normPerpZ * perpOffset * BounceTuning.PERP_CORRECTION_GAIN;
-                targetYaw = (float) Math.toDegrees(Math.atan2(-dirX, dirZ));
+                float correctedYaw = (float) Math.toDegrees(Math.atan2(-dirX, dirZ));
+                /*? if >=26.1 {*//*
+                float correction = Mth.wrapDegrees(correctedYaw - targetYaw);
+                *//*?} else {*/
+                float correction = MathHelper.wrapDegrees(correctedYaw - targetYaw);
+                /*?}*/
+                lastPerpCorrection = correction;
+                targetYaw += lastPerpCorrection;
             }
         }
 
@@ -229,8 +311,7 @@ public final class BounceController {
 
         // ── Emergency fall detection ──────────────────────────────
         // Player has dropped below the highway floor — there is a gap underfoot.
-        // Set pitch to LEVEL (0°) so that the elytra activation in sendStartFlying()
-        // carries the player horizontally rather than diving straight into lava.
+        // Set pitch to level so the recovery request carries the player horizontally.
         // Also arm stuckFromFall+stuck immediately so TravelManager can transition
         // to elytra recovery on the same tick without waiting for tick() to run.
         if (highway != null && highway.floorY > Integer.MIN_VALUE
@@ -240,7 +321,7 @@ public final class BounceController {
             *//*?} else {*/
             mc.player.setPitch(0.0f);
             /*?}*/
-            sendStartFlying();
+            sendEmergencyStartFlying();
             if (!stuckFromFall) {
                 stuckFromFall = true;
                 stuck         = true;
@@ -249,16 +330,112 @@ public final class BounceController {
             return;
         }
 
-        // ── Sprint, jump, pitch, START_FALL_FLYING ────────────────
-        mc.player.setSprinting(true);
+        // Use real vanilla state for every launch transition.
         /*? if >=26.1 {*//*
-        if (mc.player.onGround()) mc.player.jumpFromGround();
-        mc.player.setXRot(BounceTuning.BOUNCE_PITCH);
+        Options opts = mc.options;
+        opts.keyUp.setDown(true);
+        opts.keySprint.setDown(true);
+        opts.keyJump.setDown(false);
+        boolean onGround = mc.player.onGround();
+        boolean gliding = mc.player.isFallFlying();
+        double velocityY = mc.player.getDeltaMovement().y;
         *//*?} else {*/
-        if (mc.player.isOnGround()) mc.player.jump();
-        mc.player.setPitch(BounceTuning.BOUNCE_PITCH);
+        GameOptions opts = mc.options;
+        opts.forwardKey.setPressed(true);
+        opts.sprintKey.setPressed(true);
+        opts.jumpKey.setPressed(false);
+        boolean onGround = mc.player.isOnGround();
+        boolean gliding = mc.player.isGliding();
+        double velocityY = mc.player.getVelocity().y;
         /*?}*/
-        sendStartFlying();
+        double rise = Double.isNaN(takeoffY) ? 0.0 : mc.player.getY() - takeoffY;
+        if (!Double.isNaN(takeoffY)) {
+            peakY = Double.isNaN(peakY) ? mc.player.getY() : Math.max(peakY, mc.player.getY());
+            if (!onGround && mc.player.verticalCollision) {
+                ceilingContact = true;
+            }
+        }
+        float commandedPitch = launchPhase == LaunchPhase.GLIDING
+                ? arcPitch
+                : BounceTuning.LAUNCH_PITCH;
+        setPitch(elytraLaunchEnabled ? commandedPitch : 0.0f);
+
+        switch (launchPhase) {
+            case GROUNDED -> {
+                if (!onGround) {
+                    setLaunchPhase(LaunchPhase.LANDING);
+                    return;
+                }
+                if (!jumpingEnabled) {
+                    return;
+                }
+                if (requestGroundJump()) {
+                    setLaunchPhase(LaunchPhase.GROUND_JUMP_REQUESTED);
+                }
+            }
+            case GROUND_JUMP_REQUESTED -> {
+                if (!onGround || rise >= BounceTuning.ELYTRA_ACTIVATE_MAX_RISE) {
+                    if (!tryRequestLaunch(mc.player.getY(), velocityY, rise)) {
+                        setLaunchPhase(LaunchPhase.ASCENDING);
+                    }
+                } else if (launchPhaseTicks >= BounceTuning.GROUND_JUMP_TIMEOUT_TICKS) {
+                    setLaunchPhase(LaunchPhase.GROUNDED);
+                }
+            }
+            case ASCENDING -> {
+                if (launchArmed && gliding && !onGround) {
+                    recordLaunchAccepted();
+                    setLaunchPhase(LaunchPhase.GLIDING);
+                } else if (!onGround || rise >= BounceTuning.ELYTRA_ACTIVATE_MAX_RISE) {
+                    tryRequestLaunch(mc.player.getY(), velocityY, rise);
+                } else if (onGround && launchPhaseTicks > 2) {
+                    setLaunchPhase(LaunchPhase.GROUNDED);
+                }
+            }
+            case LAUNCH_REQUESTED -> {
+                if (gliding && !onGround) {
+                    recordLaunchAccepted();
+                    setLaunchPhase(LaunchPhase.GLIDING);
+                } else if (onGround) {
+                    recordLaunchRejected();
+                    setLaunchPhase(LaunchPhase.GROUNDED);
+                } else if (launchPhaseTicks >= BounceTuning.LAUNCH_ACK_TIMEOUT_TICKS) {
+                    recordLaunchRejected();
+                    setLaunchPhase(LaunchPhase.LANDING);
+                }
+            }
+            case GLIDING -> {
+                if (onGround) {
+                    completedBounces++;
+                    if (correctionRecoveryBounces > 0) {
+                        correctionRecoveryBounces--;
+                    }
+                    if (completedBounces <= 3 || completedBounces % 10 == 0) {
+                        double peakRise = Double.isNaN(peakY) || Double.isNaN(takeoffY)
+                                ? 0.0 : peakY - takeoffY;
+                        LOGGER.info("[Bounce] touchdown #{} speed={} peakRise={} ceiling={} roof={} mode={} launchPitch={} glidePitch={} offset={} steer={}",
+                                completedBounces, String.format("%.3f", horizontalSpeed()),
+                                String.format("%.3f", peakRise), ceilingContact,
+                                roofDetected,
+                                correctionRecoveryBounces > 0
+                                        ? "RECOVERY"
+                                        : acceleratingArc ? "ACCEL" : "CRUISE",
+                                String.format("%.1f", BounceTuning.LAUNCH_PITCH),
+                                String.format("%.1f", arcPitch),
+                                String.format("%.3f", lastPerpOffset),
+                                String.format("%.2f", lastPerpCorrection));
+                    }
+                    setLaunchPhase(LaunchPhase.GROUNDED);
+                } else if (!gliding) {
+                    setLaunchPhase(LaunchPhase.LANDING);
+                }
+            }
+            case LANDING -> {
+                if (onGround) {
+                    setLaunchPhase(LaunchPhase.GROUNDED);
+                }
+            }
+        }
     }
 
     // ──────────────────────────────────────────────────────────────
@@ -277,10 +454,7 @@ public final class BounceController {
         return (float) Math.toDegrees(Math.atan2(-dx, dz));
     }
 
-    // True if a solid block is 2–6 ahead at body height, or horizontalCollision fired.
-    // NETHER_PORTAL blocks are excluded — they have no collision shape and portals are
-    // commonly built on highways; the player can glide through the opening.
-    // Uses locked travel yaw so mouse movement doesn't cause false positives.
+    // Find a blocked body-height corridor ahead.
     private boolean detectWallOrCollision(
             /*? if >=26.1 {*//* Minecraft mc *//*?} else {*/ MinecraftClient mc /*?}*/) {
         if (mc.player == null || highway == null) return false;
@@ -300,18 +474,30 @@ public final class BounceController {
         double px = mc.player.getX();
         double pz = mc.player.getZ();
 
+        int perpX = highway.axis.perpDx();
+        int perpZ = highway.axis.perpDz();
         for (int d = 2; d <= 6; d++) {
-            int bx = (int) Math.floor(px + dirX * d);
-            int bz = (int) Math.floor(pz + dirZ * d);
-            BlockPos feet = new BlockPos(bx, hwY,     bz);
-            BlockPos head = new BlockPos(bx, hwY + 1, bz);
-            /*? if >=26.1 {*//*
-            if (isImpassable(mc.level.getBlockState(feet).getBlock())) return true;
-            if (isImpassable(mc.level.getBlockState(head).getBlock())) return true;
-            *//*?} else {*/
-            if (isImpassable(mc.world.getBlockState(feet).getBlock())) return true;
-            if (isImpassable(mc.world.getBlockState(head).getBlock())) return true;
-            /*?}*/
+            int centerX = (int) Math.floor(px + dirX * d);
+            int centerZ = (int) Math.floor(pz + dirZ * d);
+            boolean corridorBlocked = true;
+            for (int lane = -1; lane <= 1; lane++) {
+                int bx = centerX + perpX * lane;
+                int bz = centerZ + perpZ * lane;
+                BlockPos feet = new BlockPos(bx, hwY, bz);
+                BlockPos head = new BlockPos(bx, hwY + 1, bz);
+                /*? if >=26.1 {*//*
+                boolean laneBlocked = isImpassable(mc.level.getBlockState(feet).getBlock())
+                        || isImpassable(mc.level.getBlockState(head).getBlock());
+                *//*?} else {*/
+                boolean laneBlocked = isImpassable(mc.world.getBlockState(feet).getBlock())
+                        || isImpassable(mc.world.getBlockState(head).getBlock());
+                /*?}*/
+                if (!laneBlocked) {
+                    corridorBlocked = false;
+                    break;
+                }
+            }
+            if (corridorBlocked) return true;
         }
         return false;
     }
@@ -327,8 +513,104 @@ public final class BounceController {
         return true;
     }
 
-    // Ask the server to start elytra flight.
-    private void sendStartFlying() {
+    // Latch the roof profile so pitch stays stable through the arc.
+    private boolean hasLowCeiling(
+            /*? if >=26.1 {*//* Minecraft mc *//*?} else {*/ MinecraftClient mc /*?}*/) {
+        if (mc.player == null || highway == null) return false;
+        /*? if >=26.1 {*//*
+        if (mc.level == null) return false;
+        *//*?} else {*/
+        if (mc.world == null) return false;
+        /*?}*/
+
+        int x = (int) Math.floor(mc.player.getX());
+        int z = (int) Math.floor(mc.player.getZ());
+        int ceilingY = highway.floorY + BounceTuning.HEADROOM_Y_OFFSET;
+        for (int ahead = 0; ahead <= BounceTuning.HEADROOM_SCAN_AHEAD; ahead++) {
+            BlockPos pos = new BlockPos(
+                    x + travelDx * ahead,
+                    ceilingY,
+                    z + travelDz * ahead);
+            /*? if >=26.1 {*//*
+            if (isImpassable(mc.level.getBlockState(pos).getBlock())) return true;
+            *//*?} else {*/
+            if (isImpassable(mc.world.getBlockState(pos).getBlock())) return true;
+            /*?}*/
+        }
+        return false;
+    }
+
+    // Pulse vanilla jump input and let normal movement create the jump.
+    private boolean requestGroundJump() {
+        if (!MoarNetworkManager.tryAcquire(
+                MoarNetworkManager.Lane.MOVEMENT,
+                MoarNetworkManager.OWNER_BOUNCE, 1, 2)) {
+            return false;
+        }
+        /*? if >=26.1 {*//*
+        Minecraft mc = Minecraft.getInstance();
+        if (mc.player == null) return false;
+        mc.options.keyJump.setDown(true);
+        *//*?} else {*/
+        MinecraftClient mc = MinecraftClient.getInstance();
+        if (mc.player == null) return false;
+        mc.options.jumpKey.setPressed(true);
+        /*?}*/
+        roofDetected = hasLowCeiling(mc);
+        acceleratingArc = correctionRecoveryBounces == 0
+                && horizontalSpeed() < BounceTuning.TARGET_HORIZONTAL_SPEED;
+        arcPitch = acceleratingArc
+                ? BounceTuning.GLIDE_ACCEL_PITCH
+                : BounceTuning.GLIDE_CRUISE_PITCH;
+        setPitch(BounceTuning.LAUNCH_PITCH);
+        takeoffY = mc.player.getY();
+        peakY = takeoffY;
+        ceilingContact = false;
+        launchArmed = false;
+        LOGGER.debug("[Bounce] ground jump requested");
+        return true;
+    }
+
+    // Arm flight at the first safe fractional launch point.
+    private boolean tryRequestLaunch(double y, double velocityY, double rise) {
+        boolean reachedLaunchPoint = velocityY <= BounceTuning.ELYTRA_ACTIVATE_VY_THRESHOLD
+                || rise >= BounceTuning.ELYTRA_ACTIVATE_MAX_RISE;
+        if (!elytraLaunchEnabled || !reachedLaunchPoint
+                || !requestStartFlying(y, velocityY, rise)) {
+            return false;
+        }
+        launchRequests++;
+        launchArmed = true;
+        setLaunchPhase(LaunchPhase.LAUNCH_REQUESTED);
+        return true;
+    }
+
+    // Pulse vanilla jump input after reaching a server-valid airborne state.
+    private boolean requestStartFlying(double y, double velocityY, double rise) {
+        if (!MoarNetworkManager.tryAcquire(
+                MoarNetworkManager.Lane.MOVEMENT,
+                MoarNetworkManager.OWNER_BOUNCE, 1, 2)) {
+            return false;
+        }
+        /*? if >=26.1 {*//*
+        Minecraft mc = Minecraft.getInstance();
+        if (mc.player == null) return false;
+        mc.options.keyJump.setDown(true);
+        *//*?} else {*/
+        MinecraftClient mc = MinecraftClient.getInstance();
+        if (mc.player == null) return false;
+        mc.options.jumpKey.setPressed(true);
+        /*?}*/
+        if (launchRequests < 3) {
+            LOGGER.info("[Bounce] launch request #{} y={} rise={} vy={}", launchRequests + 1,
+                    String.format("%.3f", y), String.format("%.3f", rise),
+                    String.format("%.3f", velocityY));
+        }
+        return true;
+    }
+
+    // Make one best-effort recovery request after leaving the highway surface.
+    private void sendEmergencyStartFlying() {
         if (!MoarNetworkManager.tryAcquire(
                 MoarNetworkManager.Lane.MOVEMENT,
                 MoarNetworkManager.OWNER_BOUNCE, 1, 2)) {
@@ -344,6 +626,100 @@ public final class BounceController {
         if (mc.player == null) return;
         mc.player.networkHandler.sendPacket(new ClientCommandC2SPacket(
                 mc.player, ClientCommandC2SPacket.Mode.START_FALL_FLYING));
+        /*?}*/
+    }
+
+    private void recordLaunchAccepted() {
+        consecutiveLaunchFailures = 0;
+        launchArmed = false;
+        if (completedBounces < 3) {
+            LOGGER.info("[Bounce] launch acknowledged #{} after {}t", launchRequests, launchPhaseTicks);
+        }
+    }
+
+    private void recordLaunchRejected() {
+        consecutiveLaunchFailures++;
+        launchArmed = false;
+        if (consecutiveLaunchFailures <= 3) {
+            LOGGER.warn("[Bounce] launch not acknowledged phase={} failures={}",
+                    launchPhase, consecutiveLaunchFailures);
+        }
+    }
+
+    private void enterSetbackHold() {
+        releaseKeys();
+        noProgressTicks = 0;
+        progressSeeded = false;
+        if (!setbackHolding) {
+            setbackHolding = true;
+            correctionRecoveryBounces = BounceTuning.CORRECTION_RECOVERY_BOUNCES;
+            LOGGER.warn("[Bounce] paused for server correction phase={} requests={} completed={}",
+                    launchPhase, launchRequests, completedBounces);
+        }
+    }
+
+    private void applyCorrectionFallbacks() {
+        SetbackMonitor monitor = SetbackMonitor.get();
+        int sessionCorrections = Math.max(0,
+                monitor.totalServerCorrections() - correctionBaseline);
+        int corrections = Math.min(sessionCorrections,
+                monitor.recentSetbackCount(BounceTuning.CORRECTION_STORM_WINDOW_TICKS));
+        if (elytraLaunchEnabled && corrections >= BounceTuning.CORRECTIONS_DISABLE_ELYTRA) {
+            elytraLaunchEnabled = false;
+            LOGGER.warn("[Bounce] {} server corrections; falling back to sprint-jump", corrections);
+        }
+        if (jumpingEnabled && corrections >= BounceTuning.CORRECTIONS_DISABLE_JUMP) {
+            jumpingEnabled = false;
+            LOGGER.warn("[Bounce] {} server corrections; falling back to plain highway sprint", corrections);
+        }
+    }
+
+    private void resumeAfterSetback(
+            /*? if >=26.1 {*//* Minecraft mc *//*?} else {*/ MinecraftClient mc /*?}*/) {
+        /*? if >=26.1 {*//*
+        boolean onGround = mc.player.onGround();
+        boolean gliding = mc.player.isFallFlying();
+        *//*?} else {*/
+        boolean onGround = mc.player.isOnGround();
+        boolean gliding = mc.player.isGliding();
+        /*?}*/
+        LaunchPhase resumedPhase = onGround
+                ? LaunchPhase.GROUNDED
+                : gliding ? LaunchPhase.GLIDING : LaunchPhase.LANDING;
+        setbackHolding = false;
+        setLaunchPhase(resumedPhase);
+        LOGGER.info("[Bounce] server correction settled; resuming phase={}", resumedPhase);
+    }
+
+    private void setLaunchPhase(LaunchPhase next) {
+        if (launchPhase == next) return;
+        LOGGER.debug("[Bounce] launch {} -> {}", launchPhase, next);
+        launchPhase = next;
+        launchPhaseTicks = 0;
+    }
+
+    private static double horizontalSpeed() {
+        /*? if >=26.1 {*//*
+        Minecraft mc = Minecraft.getInstance();
+        if (mc.player == null) return 0.0;
+        double x = mc.player.getDeltaMovement().x;
+        double z = mc.player.getDeltaMovement().z;
+        *//*?} else {*/
+        MinecraftClient mc = MinecraftClient.getInstance();
+        if (mc.player == null) return 0.0;
+        double x = mc.player.getVelocity().x;
+        double z = mc.player.getVelocity().z;
+        /*?}*/
+        return Math.sqrt(x * x + z * z);
+    }
+
+    private static void setPitch(float pitch) {
+        /*? if >=26.1 {*//*
+        Minecraft mc = Minecraft.getInstance();
+        if (mc.player != null) mc.player.setXRot(pitch);
+        *//*?} else {*/
+        MinecraftClient mc = MinecraftClient.getInstance();
+        if (mc.player != null) mc.player.setPitch(pitch);
         /*?}*/
     }
 
