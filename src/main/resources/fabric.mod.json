@@ -18,9 +18,9 @@
 		"moar.mixins.json"
 	],
 	"depends": {
-		"fabricloader": ">=0.18.4",
+		"fabricloader": ">=${loader}",
 		"minecraft": "${minecraft}",
-		"java": ">=21",
+		"java": ">=${java}",
 		"fabric-api": "*"
 	}
 }

@@ -7,68 +7,63 @@ on:
 
 permissions:
   contents: read
-  pull-requests: write
 
 jobs:
   check:
+    name: Check ${{ matrix.lane }}
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - lane: legacy
+            java: '21'
+            args: ''
+            versions: '1.21.4 1.21.5 1.21.8 1.21.10 1.21.11'
+            tasks: ':1.21.4:buildAndCollect :1.21.5:buildAndCollect :1.21.8:buildAndCollect :1.21.10:buildAndCollect :1.21.11:buildAndCollect'
+            expected: 5
+          - lane: modern
+            java: '25'
+            args: '-Pmoar.includeJava25Targets=true'
+            versions: '26.1.1 26.2'
+            tasks: ':26.1.1:buildAndCollect :26.2:buildAndCollect'
+            expected: 2
     steps:
       - name: Checkout
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
+          persist-credentials: false
 
-      - name: Set up JDK 21
+      - name: Set up JDK ${{ matrix.java }}
         uses: actions/setup-java@v4
         with:
-          java-version: '21'
-          distribution: 'temurin'
+          java-version: ${{ matrix.java }}
+          distribution: temurin
 
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v4
         with:
           cache-read-only: true
 
-      - name: Grant execute permission
-        run: chmod +x gradlew
+      - name: Build versions
+        run: ./gradlew ${{ matrix.args }} ${{ matrix.tasks }} --no-daemon
 
-      # 26.1.1 excluded — requires JDK 25 (not yet available on GitHub-hosted runners)
-      - name: Clean & build stable versions
-        id: build
+      - name: Verify and summarize
         run: |
-          ./gradlew clean \
-            :1.21.4:buildAndCollect \
-            :1.21.5:buildAndCollect \
-            :1.21.8:buildAndCollect \
-            :1.21.10:buildAndCollect \
-            :1.21.11:buildAndCollect \
-            --no-daemon 2>&1 | tee build.log
-          echo "status=${PIPESTATUS[0]}" >> "$GITHUB_OUTPUT"
-
-      - name: Summarize build
-        if: always()
-        run: |
-          VER=$(grep '^mod.version=' gradle.properties | cut -d= -f2)
-          echo "## Build Results" >> "$GITHUB_STEP_SUMMARY"
-          echo "" >> "$GITHUB_STEP_SUMMARY"
-          for mc in 1.21.4 1.21.5 1.21.8 1.21.10 1.21.11; do
+          VER=$(grep '^mod\.version=' gradle.properties | cut -d= -f2)
+          actual=0
+          echo "## ${{ matrix.lane }} build results" >> "$GITHUB_STEP_SUMMARY"
+          for mc in ${{ matrix.versions }}; do
             jar="build/libs/${VER}/moar-${VER}+${mc}.jar"
             if [ -f "$jar" ]; then
-              size=$(du -h "$jar" | cut -f1)
-              echo "- :white_check_mark: **MC ${mc}** — ${size}" >> "$GITHUB_STEP_SUMMARY"
+              actual=$((actual + 1))
+              echo "- :white_check_mark: Minecraft ${mc} ($(du -h "$jar" | cut -f1))" >> "$GITHUB_STEP_SUMMARY"
             else
-              echo "- :x: **MC ${mc}** — jar not found" >> "$GITHUB_STEP_SUMMARY"
+              echo "- :x: Minecraft ${mc}" >> "$GITHUB_STEP_SUMMARY"
             fi
           done
-
-      - name: Check for version-specific issues
-        if: always()
-        run: |
-          # Verify all stable version jars were produced (excludes 26.1.1)
-          expected=5
-          actual=$(find build/libs -name '*.jar' ! -name '*-sources.jar' | wc -l)
-          if [ "$actual" -ne "$expected" ]; then
-            echo "::error::Expected $expected version jars but found $actual"
+          if [ "$actual" -ne "${{ matrix.expected }}" ]; then
+            echo "::error::Expected ${{ matrix.expected }} JARs but found ${actual}"
             exit 1
           fi
-          echo "All $expected version jars built successfully."

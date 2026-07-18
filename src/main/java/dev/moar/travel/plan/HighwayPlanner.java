@@ -134,7 +134,7 @@ public final class HighwayPlanner {
 
         RoutePlan plan = shouldUseSafeRingRoute(origin, destination,
                 bestDirect.geometry(), bestDirect.onRampXZ(), bestDirect.exitXZ())
-                ? buildSafeRingRoute(origin, destination, opts, floorY)
+                ? buildSafeRingRoute(origin, destination, opts, floorY, originHighway)
                 : bestDirect.route();
         if (plan == null || plan.primary == null || plan.legs.isEmpty()) return Optional.empty();
 
@@ -235,16 +235,11 @@ public final class HighwayPlanner {
         BlockPos exitColumn = new BlockPos(exitXZ[0], refinedFloorY, exitXZ[1]);
 
         Optional<HighwayDetectorBridge.ScanResult> scan = confirmHighway(origin, best.axis, onRamp, floorY);
-        if (scan.isEmpty()) {
-            // Can't confirm this highway actually exists near the player right
-            // now — refuse to fabricate a route from coordinate math alone.
-            // The caller falls back to direct flight instead (see
-            // TravelManager.tickPlanning()).
-            return null;
+        if (scan.isPresent()) {
+            refinedFloorY = scan.get().floorY();
+            onRamp = new BlockPos(scan.get().centerX(), refinedFloorY, scan.get().centerZ());
+            exitColumn = new BlockPos(exitXZ[0], refinedFloorY, exitXZ[1]);
         }
-        refinedFloorY = scan.get().floorY();
-        onRamp = new BlockPos(scan.get().centerX(), refinedFloorY, scan.get().centerZ());
-        exitColumn = new BlockPos(exitXZ[0], refinedFloorY, exitXZ[1]);
 
         HighwayCandidate primary = new HighwayCandidate(
                 best.axis, best.category, refinedFloorY, onRamp, exitColumn, best.confidence,
@@ -303,7 +298,8 @@ public final class HighwayPlanner {
     private RoutePlan buildSafeRingRoute(BlockPos origin,
                                          BlockPos destination,
                                          Options opts,
-                                         int floorYHint) {
+                                         int floorYHint,
+                                         OriginHighway originHighway) {
         List<HighwayRoute.Leg> legs = new ArrayList<>();
         double totalCost = 0.0;
 
@@ -311,6 +307,10 @@ public final class HighwayPlanner {
         BlockPos[] ringJunctions = chooseRingJunctions(origin, destination, floorYHint, ringRadius);
         BlockPos originJunction = ringJunctions[0];
         BlockPos destinationJunction = ringJunctions[1];
+        boolean preserveOriginHighway = canRideOriginHighwayToRing(origin, originHighway);
+        if (preserveOriginHighway) {
+            originJunction = ringIntersection(originHighway.axis(), origin, floorYHint, ringRadius);
+        }
 
         HighwayCandidate primary = null;
         int primaryDx = 0;
@@ -318,23 +318,29 @@ public final class HighwayPlanner {
         int floorY = floorYHint;
 
         if (!isWithinSafeRing(origin)) {
-            HighwayCandidate.Axis originAxis = spokeAxisForJunction(originJunction);
-            BlockPos originOnRamp = projectOntoSpoke(originAxis, origin, floorY);
-            // This is the very next hop from the player's current position —
-            // confirm it's a real highway before committing (see buildDirectRoute).
+            HighwayCandidate.Axis originAxis = preserveOriginHighway
+                    ? originHighway.axis()
+                    : spokeAxisForJunction(originJunction);
+            BlockPos originOnRamp = preserveOriginHighway
+                    ? new BlockPos(originHighway.scan().centerX(), originHighway.scan().floorY(),
+                            originHighway.scan().centerZ())
+                    : projectOntoSpoke(originAxis, origin, floorY);
             Optional<HighwayDetectorBridge.ScanResult> originSpokeScan = confirmHighway(origin, originAxis, originOnRamp, floorY);
-            if (originSpokeScan.isEmpty()) return null;
-            floorY = originSpokeScan.get().floorY();
+            if (originSpokeScan.isPresent()) {
+                floorY = originSpokeScan.get().floorY();
+            }
             originJunction = withY(originJunction, floorY);
             destinationJunction = withY(destinationJunction, floorY);
-            originOnRamp = projectOntoSpoke(originAxis, origin, floorY);
+            originOnRamp = preserveOriginHighway
+                    ? new BlockPos(originHighway.scan().centerX(), floorY, originHighway.scan().centerZ())
+                    : projectOntoSpoke(originAxis, origin, floorY);
 
             double originToOnRamp = HighwayGeometry.horizontalDistance(
                     origin.getX(), origin.getZ(), originOnRamp.getX(), originOnRamp.getZ());
             int[] travelDir = travelDirection(point(originOnRamp), point(originJunction), originAxis);
             HighwayCandidate provisionalSpoke = syntheticCandidate(
-                    originAxis, HighwayCandidate.Category.CARDINAL, floorY,
-                    originOnRamp, originJunction, null, 0.0);
+                    originAxis, originAxis.diagonal ? HighwayCandidate.Category.DIAGONAL : HighwayCandidate.Category.CARDINAL,
+                    floorY, originOnRamp, originJunction, null, 0.0);
             boolean requiresIngressTravel = !isReadyForIngressBounce(origin, provisionalSpoke, travelDir[0], travelDir[1])
                     && needsIngressTravel(originToOnRamp, 10.0, opts.allowFlight);
             BlockPos spokeEntry = requiresIngressTravel
@@ -343,8 +349,8 @@ public final class HighwayPlanner {
             totalCost += addIngressLeg(legs, origin, originToOnRamp, spokeEntry, 10.0, opts.allowFlight);
 
             HighwayCandidate spoke = syntheticCandidate(
-                    originAxis, HighwayCandidate.Category.CARDINAL, floorY,
-                    spokeEntry, originJunction, null, 0.0);
+                    originAxis, originAxis.diagonal ? HighwayCandidate.Category.DIAGONAL : HighwayCandidate.Category.CARDINAL,
+                    floorY, spokeEntry, originJunction, null, 0.0);
             travelDir = travelDirection(point(spoke.entry), point(spoke.exit), originAxis);
             appendBounceLeg(legs, spoke, travelDir[0], travelDir[1]);
             totalCost += HighwayGeometry.horizontalDistance(
@@ -376,11 +382,10 @@ public final class HighwayPlanner {
                 segmentEntry = directionalAnchor(segment.start, travelDir[0], travelDir[1]);
             }
             if (primary == null) {
-                // No spoke was built above, so this ring segment is the very
-                // next hop from the player's current position — confirm it.
                 Optional<HighwayDetectorBridge.ScanResult> ringScan = confirmHighway(origin, segment.axis, segmentEntry, floorY);
-                if (ringScan.isEmpty()) return null;
-                floorY = ringScan.get().floorY();
+                if (ringScan.isPresent()) {
+                    floorY = ringScan.get().floorY();
+                }
             }
             HighwayCandidate ring = syntheticCandidate(
                     segment.axis, HighwayCandidate.Category.RING, floorY,
@@ -597,6 +602,38 @@ public final class HighwayPlanner {
         return false;
     }
 
+    // Keep a visible spawn highway as the ring ingress.
+    private static boolean canRideOriginHighwayToRing(BlockPos origin, OriginHighway highway) {
+        if (origin == null || highway == null || highway.scan() == null) return false;
+        int x = highway.scan().centerX();
+        int z = highway.scan().centerZ();
+        int tolerance = Math.max(16, highway.scan().width() + 4);
+        return switch (highway.axis()) {
+            case PLUS_X, MINUS_X -> Math.abs(z) <= tolerance;
+            case PLUS_Z, MINUS_Z -> Math.abs(x) <= tolerance;
+            case DIAG_PX_PZ, DIAG_MX_MZ -> Math.abs(x - z) <= tolerance;
+            case DIAG_PX_MZ, DIAG_MX_PZ -> Math.abs(x + z) <= tolerance;
+        };
+    }
+
+    private static BlockPos ringIntersection(HighwayCandidate.Axis axis,
+                                             BlockPos origin,
+                                             int floorY,
+                                             int ringRadius) {
+        return switch (axis) {
+            case PLUS_X, MINUS_X -> new BlockPos(origin.getX() >= 0 ? ringRadius : -ringRadius, floorY, 0);
+            case PLUS_Z, MINUS_Z -> new BlockPos(0, floorY, origin.getZ() >= 0 ? ringRadius : -ringRadius);
+            case DIAG_PX_PZ, DIAG_MX_MZ -> {
+                int sign = origin.getX() + origin.getZ() >= 0 ? 1 : -1;
+                yield new BlockPos(sign * ringRadius, floorY, sign * ringRadius);
+            }
+            case DIAG_PX_MZ, DIAG_MX_PZ -> {
+                int sign = origin.getX() - origin.getZ() >= 0 ? 1 : -1;
+                yield new BlockPos(sign * ringRadius, floorY, -sign * ringRadius);
+            }
+        };
+    }
+
     private static double segmentDistanceToPoint(int x1, int z1, int x2, int z2, int px, int pz) {
         double dx = x2 - x1;
         double dz = z2 - z1;
@@ -613,15 +650,7 @@ public final class HighwayPlanner {
         return Math.sqrt(ddx * ddx + ddz * ddz);
     }
 
-    // Try to confirm a highway actually exists for this candidate near the
-    // player's current position before committing a route to it — scans
-    // origin, the projected on-ramp, and the midpoint between them, all near
-    // the player's CURRENT altitude, then also retries at the expected/
-    // default floor Y hint if that's meaningfully different — a long elytra
-    // glide can leave the player far above or below the highway's real
-    // floor level, well outside scanAt()'s +/-4 block search window around
-    // the player's own Y. A hop that isn't loaded yet (e.g. a hub thousands
-    // of blocks away) simply can't be confirmed until the player gets close.
+    // Refine a projected route from visible highway data when available.
     private static Optional<HighwayDetectorBridge.ScanResult> confirmHighway(
             BlockPos origin, HighwayCandidate.Axis axis, BlockPos onRamp, int floorYHint) {
         HighwayDetectorBridge bridge = HighwayDetectorBridge.get();

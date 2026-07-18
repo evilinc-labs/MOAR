@@ -166,7 +166,11 @@ public class MoarMod implements ClientModInitializer {
 
             if (guiOpenRequested) {
                 guiOpenRequested = false;
+                /*? if >=26.2 {*//*
+                client.gui.setScreen(new MoarScreen());
+                *//*?} else {*/
                 client.setScreen(new MoarScreen());
+                /*?}*/
             }
 
             // Tick the printer

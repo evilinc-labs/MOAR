@@ -1680,7 +1680,9 @@ public final class ElytraManager {
 
             // Phase 6: initiate break
             case 6 -> {
-                /*? if >=26.1 {*//*
+                /*? if >=26.2 {*//*
+                if (mc.gui.screen() != null) { player.clientSideCloseContainer(); return; }
+                *//*?} else if >=26.1 {*//*
                 if (mc.screen != null) { player.clientSideCloseContainer(); return; }
                 *//*?} else {*/
                 if (mc.currentScreen != null) { player.closeHandledScreen(); return; }

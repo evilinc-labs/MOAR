@@ -103,7 +103,7 @@ public final class HighwayOverlayRenderer {
 
     // ── Render callbacks ──────────────────────────────────────────
 
-    /*? if >=26.1 {*//*
+    /*? if >=26.2 {*//*
     private static void onRender26(LevelRenderContext ctx) {
         Minecraft mc = Minecraft.getInstance();
         if (mc.player == null || mc.level == null) return;
@@ -111,21 +111,18 @@ public final class HighwayOverlayRenderer {
         HighwayCandidate hw = t.selectedHighway();
         if (hw == null || hw.floorY == Integer.MIN_VALUE) return;
 
-        Vec3 cam = mc.gameRenderer.getMainCamera().position();
+        Vec3 cam = ctx.levelState().cameraRenderState.pos;
         BlockPos playerPos = mc.player.blockPosition();
-
-        var bufferSource = ctx.bufferSource();
-        VertexConsumer lines = bufferSource.getBuffer(RenderTypes.lines());
 
         PoseStack ms = ctx.poseStack();
         ms.pushPose();
         ms.translate(cam.x, cam.y, cam.z);
-        renderHighway26(ms, cam, lines, hw, playerPos);
+        ctx.submitNodeCollector().submitCustomGeometry(ms, RenderTypes.lines(),
+                (pose, lines) -> renderHighway26(pose, cam, lines, hw, playerPos));
         ms.popPose();
-        bufferSource.endBatch(RenderTypes.lines());
     }
 
-    private static void renderHighway26(PoseStack ms, Vec3 cam,
+    private static void renderHighway26(PoseStack.Pose pose, Vec3 cam,
             VertexConsumer vc, HighwayCandidate hw, BlockPos playerPos) {
         int stepDx = hw.axis.stepDx, stepDz = hw.axis.stepDz;
         int perpDx = hw.axis.perpDx(), perpDz = hw.axis.perpDz();
@@ -140,20 +137,19 @@ public final class HighwayOverlayRenderer {
             int az = anchorZ + stepDz * (playerStep + step);
 
             for (int p = -halfWidth; p <= halfWidth; p++) {
-                emitBox26(ms, vc, cam, ax + perpDx * p, floorY, az + perpDz * p, 0f, 1f, 0f);
+                emitBox26(pose, vc, cam, ax + perpDx * p, floorY, az + perpDz * p, 0f, 1f, 0f);
             }
-            emitBox26(ms, vc, cam, ax - perpDx * (halfWidth + 1), floorY,   az - perpDz * (halfWidth + 1), 0f, 0.53f, 1f);
-            emitBox26(ms, vc, cam, ax - perpDx * (halfWidth + 1), floorY+1, az - perpDz * (halfWidth + 1), 0f, 0.53f, 1f);
-            emitBox26(ms, vc, cam, ax + perpDx * (halfWidth + 1), floorY,   az + perpDz * (halfWidth + 1), 0f, 0.53f, 1f);
-            emitBox26(ms, vc, cam, ax + perpDx * (halfWidth + 1), floorY+1, az + perpDz * (halfWidth + 1), 0f, 0.53f, 1f);
+            emitBox26(pose, vc, cam, ax - perpDx * (halfWidth + 1), floorY,   az - perpDz * (halfWidth + 1), 0f, 0.53f, 1f);
+            emitBox26(pose, vc, cam, ax - perpDx * (halfWidth + 1), floorY+1, az - perpDz * (halfWidth + 1), 0f, 0.53f, 1f);
+            emitBox26(pose, vc, cam, ax + perpDx * (halfWidth + 1), floorY,   az + perpDz * (halfWidth + 1), 0f, 0.53f, 1f);
+            emitBox26(pose, vc, cam, ax + perpDx * (halfWidth + 1), floorY+1, az + perpDz * (halfWidth + 1), 0f, 0.53f, 1f);
         }
     }
 
-    private static void emitBox26(PoseStack ms, VertexConsumer vc, Vec3 cam,
+    private static void emitBox26(PoseStack.Pose pose, VertexConsumer vc, Vec3 cam,
             int bx, int by, int bz, float r, float g, float b) {
         float x1 = (float)(bx - cam.x), y1 = (float)(by - cam.y), z1 = (float)(bz - cam.z);
         float x2 = x1 + 1f, y2 = y1 + 1f, z2 = z1 + 1f;
-        var pose = ms.last();
         org.joml.Matrix4f m = pose.pose();
         emitLine26(vc,m,pose, x1,y1,z1, x2,y1,z1, r,g,b); emitLine26(vc,m,pose, x2,y1,z1, x2,y1,z2, r,g,b);
         emitLine26(vc,m,pose, x2,y1,z2, x1,y1,z2, r,g,b); emitLine26(vc,m,pose, x1,y1,z2, x1,y1,z1, r,g,b);
@@ -171,6 +167,73 @@ public final class HighwayOverlayRenderer {
         float len=(float)Math.sqrt(dx*dx+dy*dy+dz*dz);
         if (len<0.0001f) return;
         float nx=dx/len, ny=dy/len, nz=dz/len;
+        vc.addVertex(m,x1,y1,z1).setColor(r,g,b,ALPHA).setNormal(pose,nx,ny,nz).setLineWidth(LINE_WIDTH);
+        vc.addVertex(m,x2,y2,z2).setColor(r,g,b,ALPHA).setNormal(pose,nx,ny,nz).setLineWidth(LINE_WIDTH);
+    }
+    *//*?} else if >=26.1 {*//*
+    private static void onRender26(LevelRenderContext ctx) {
+        Minecraft mc = Minecraft.getInstance();
+        if (mc.player == null || mc.level == null) return;
+        TravelTelemetry t = TravelManager.get().snapshot();
+        HighwayCandidate hw = t.selectedHighway();
+        if (hw == null || hw.floorY == Integer.MIN_VALUE) return;
+
+        Vec3 cam = mc.gameRenderer.getMainCamera().position();
+        BlockPos playerPos = mc.player.blockPosition();
+        var bufferSource = ctx.bufferSource();
+        VertexConsumer lines = bufferSource.getBuffer(RenderTypes.lines());
+
+        PoseStack ms = ctx.poseStack();
+        ms.pushPose();
+        ms.translate(cam.x, cam.y, cam.z);
+        renderHighway26(ms.last(), cam, lines, hw, playerPos);
+        ms.popPose();
+        bufferSource.endBatch(RenderTypes.lines());
+    }
+
+    private static void renderHighway26(PoseStack.Pose pose, Vec3 cam,
+            VertexConsumer vc, HighwayCandidate hw, BlockPos playerPos) {
+        int stepDx = hw.axis.stepDx, stepDz = hw.axis.stepDz;
+        int perpDx = hw.axis.perpDx(), perpDz = hw.axis.perpDz();
+        int halfWidth = hw.width > 0 ? hw.width / 2 : 1;
+        int floorY = hw.floorY;
+        int anchorX = hw.entry.getX(), anchorZ = hw.entry.getZ();
+        int playerStep = (playerPos.getX() - anchorX) * stepDx
+                + (playerPos.getZ() - anchorZ) * stepDz;
+
+        for (int step = -10; step <= 10; step++) {
+            int ax = anchorX + stepDx * (playerStep + step);
+            int az = anchorZ + stepDz * (playerStep + step);
+            for (int p = -halfWidth; p <= halfWidth; p++) {
+                emitBox26(pose, vc, cam, ax + perpDx * p, floorY, az + perpDz * p, 0f, 1f, 0f);
+            }
+            emitBox26(pose, vc, cam, ax - perpDx * (halfWidth + 1), floorY, az - perpDz * (halfWidth + 1), 0f, 0.53f, 1f);
+            emitBox26(pose, vc, cam, ax - perpDx * (halfWidth + 1), floorY + 1, az - perpDz * (halfWidth + 1), 0f, 0.53f, 1f);
+            emitBox26(pose, vc, cam, ax + perpDx * (halfWidth + 1), floorY, az + perpDz * (halfWidth + 1), 0f, 0.53f, 1f);
+            emitBox26(pose, vc, cam, ax + perpDx * (halfWidth + 1), floorY + 1, az + perpDz * (halfWidth + 1), 0f, 0.53f, 1f);
+        }
+    }
+
+    private static void emitBox26(PoseStack.Pose pose, VertexConsumer vc, Vec3 cam,
+            int bx, int by, int bz, float r, float g, float b) {
+        float x1 = (float) (bx - cam.x), y1 = (float) (by - cam.y), z1 = (float) (bz - cam.z);
+        float x2 = x1 + 1f, y2 = y1 + 1f, z2 = z1 + 1f;
+        org.joml.Matrix4f m = pose.pose();
+        emitLine26(vc,m,pose, x1,y1,z1, x2,y1,z1, r,g,b); emitLine26(vc,m,pose, x2,y1,z1, x2,y1,z2, r,g,b);
+        emitLine26(vc,m,pose, x2,y1,z2, x1,y1,z2, r,g,b); emitLine26(vc,m,pose, x1,y1,z2, x1,y1,z1, r,g,b);
+        emitLine26(vc,m,pose, x1,y2,z1, x2,y2,z1, r,g,b); emitLine26(vc,m,pose, x2,y2,z1, x2,y2,z2, r,g,b);
+        emitLine26(vc,m,pose, x2,y2,z2, x1,y2,z2, r,g,b); emitLine26(vc,m,pose, x1,y2,z2, x1,y2,z1, r,g,b);
+        emitLine26(vc,m,pose, x1,y1,z1, x1,y2,z1, r,g,b); emitLine26(vc,m,pose, x2,y1,z1, x2,y2,z1, r,g,b);
+        emitLine26(vc,m,pose, x2,y1,z2, x2,y2,z2, r,g,b); emitLine26(vc,m,pose, x1,y1,z2, x1,y2,z2, r,g,b);
+    }
+
+    private static void emitLine26(VertexConsumer vc, org.joml.Matrix4f m,
+            PoseStack.Pose pose, float x1, float y1, float z1,
+            float x2, float y2, float z2, float r, float g, float b) {
+        float dx = x2 - x1, dy = y2 - y1, dz = z2 - z1;
+        float len = (float) Math.sqrt(dx * dx + dy * dy + dz * dz);
+        if (len < 0.0001f) return;
+        float nx = dx / len, ny = dy / len, nz = dz / len;
         vc.addVertex(m,x1,y1,z1).setColor(r,g,b,ALPHA).setNormal(pose,nx,ny,nz).setLineWidth(LINE_WIDTH);
         vc.addVertex(m,x2,y2,z2).setColor(r,g,b,ALPHA).setNormal(pose,nx,ny,nz).setLineWidth(LINE_WIDTH);
     }
