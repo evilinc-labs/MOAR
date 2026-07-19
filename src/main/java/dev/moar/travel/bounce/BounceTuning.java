@@ -62,8 +62,8 @@ public final class BounceTuning {
     // Accelerate only after the server accepts gliding.
     public static float GLIDE_ACCEL_PITCH = 52.0f;
 
-    // Aim just below 40 blocks per second before cruising.
-    public static double TARGET_HORIZONTAL_SPEED = 1.9;
+    // Accelerate until reaching 40 blocks per second.
+    public static double TARGET_HORIZONTAL_SPEED = 2.0;
 
     // Stabilize several bounces after a server correction.
     public static int CORRECTION_RECOVERY_BOUNCES = 8;
