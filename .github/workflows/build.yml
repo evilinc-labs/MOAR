@@ -13,119 +13,46 @@ permissions:
   contents: read
 
 jobs:
-  # Build
   build:
+    name: Build ${{ matrix.lane }}
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - lane: legacy
+            java: '21'
+            args: ''
+            tasks: ':1.21.4:buildAndCollect :1.21.5:buildAndCollect :1.21.8:buildAndCollect :1.21.10:buildAndCollect :1.21.11:buildAndCollect'
+          - lane: modern
+            java: '25'
+            args: '-Pmoar.includeJava25Targets=true'
+            tasks: ':26.1.1:buildAndCollect :26.2:buildAndCollect'
     steps:
       - name: Checkout
         uses: actions/checkout@v4
         with:
           persist-credentials: false
 
-      - name: Set up JDK 21
+      - name: Set up JDK ${{ matrix.java }}
         uses: actions/setup-java@v4
         with:
-          java-version: '21'
-          distribution: 'temurin'
+          java-version: ${{ matrix.java }}
+          distribution: temurin
 
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v4
         with:
           cache-read-only: ${{ github.event_name == 'pull_request' }}
 
-      - name: Grant execute permission
-        run: chmod +x gradlew
+      - name: Build versions
+        run: ./gradlew ${{ matrix.args }} ${{ matrix.tasks }} --no-daemon
 
-      # 26.1.1 excluded — requires JDK 25 (not yet available on GitHub-hosted runners)
-      - name: Clean & build stable versions
-        run: >
-          ./gradlew clean
-          :1.21.4:buildAndCollect
-          :1.21.5:buildAndCollect
-          :1.21.8:buildAndCollect
-          :1.21.10:buildAndCollect
-          :1.21.11:buildAndCollect
-          --no-daemon
-
-      - name: Read mod version
-        id: modver
-        run: |
-          VER=$(grep '^mod\.version=' gradle.properties | cut -d= -f2)
-          echo "version=${VER}" >> "$GITHUB_OUTPUT"
-
-      - name: Package build ZIPs
-        id: package
-        run: |
-          VER="${{ steps.modver.outputs.version }}"
-          STAGING="build/release"
-          mkdir -p "$STAGING"
-
-          for mc in 1.21.4 1.21.5 1.21.8 1.21.10 1.21.11; do
-            JAR="build/libs/${VER}/moar-${VER}+${mc}.jar"
-            if [ ! -f "$JAR" ]; then
-              echo "::error::Missing JAR: $JAR"
-              exit 1
-            fi
-            JAR_NAME="moar-${VER}+${mc}.jar"
-            ZIP_NAME="moar-${VER}+${mc}.zip"
-            HASH=$(sha256sum "$JAR" | awk '{print $1}')
-            echo "${HASH}  ${JAR_NAME}" > "${STAGING}/SHA256SUMS.txt"
-            (cd "build/libs/${VER}" && zip -j "../../release/${ZIP_NAME}" "$JAR_NAME")
-            (cd "$STAGING" && zip "${ZIP_NAME}" SHA256SUMS.txt)
-            rm "${STAGING}/SHA256SUMS.txt"
-          done
-
-          SOURCES_JAR=$(find "build/libs/${VER}" -name "moar-*-sources.jar" | head -1)
-          [ -n "$SOURCES_JAR" ] && cp "$SOURCES_JAR" "$STAGING/"
-
-          echo "staging=$STAGING" >> "$GITHUB_OUTPUT"
-          ls -la "$STAGING/"
-
-      - name: Upload MC 1.21.4
+      - name: Upload collected JARs
         uses: actions/upload-artifact@v4
         with:
-          name: moar-1.21.4
-          path: build/release/moar-*+1.21.4.zip
-          if-no-files-found: error
-          retention-days: 14
-
-      - name: Upload MC 1.21.5
-        uses: actions/upload-artifact@v4
-        with:
-          name: moar-1.21.5
-          path: build/release/moar-*+1.21.5.zip
-          if-no-files-found: error
-          retention-days: 14
-
-      - name: Upload MC 1.21.8
-        uses: actions/upload-artifact@v4
-        with:
-          name: moar-1.21.8
-          path: build/release/moar-*+1.21.8.zip
-          if-no-files-found: error
-          retention-days: 14
-
-      - name: Upload MC 1.21.10
-        uses: actions/upload-artifact@v4
-        with:
-          name: moar-1.21.10
-          path: build/release/moar-*+1.21.10.zip
-          if-no-files-found: error
-          retention-days: 14
-
-      - name: Upload MC 1.21.11
-        uses: actions/upload-artifact@v4
-        with:
-          name: moar-1.21.11
-          path: build/release/moar-*+1.21.11.zip
-          if-no-files-found: error
-          retention-days: 14
-
-      - name: Upload sources
-        uses: actions/upload-artifact@v4
-        with:
-          name: moar-sources
-          path: build/release/moar-*-sources.jar
+          name: compiled-${{ matrix.lane }}
+          path: build/libs/**/*.jar
           if-no-files-found: error
           retention-days: 14
 
@@ -133,92 +60,110 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: test-reports
-          path: build/reports/tests/
+          name: test-reports-${{ matrix.lane }}
+          path: versions/*/build/reports/tests/
+          if-no-files-found: ignore
 
-  # Dependency review (PR policy gate)
+  package:
+    name: Package artifacts
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Download compiled JARs
+        uses: actions/download-artifact@v4
+        with:
+          pattern: compiled-*
+          path: build/collected
+          merge-multiple: true
+
+      - name: Package version ZIPs
+        run: |
+          VER=$(grep '^mod\.version=' gradle.properties | cut -d= -f2)
+          STAGING=build/release
+          mkdir -p "$STAGING"
+          for mc in 1.21.4 1.21.5 1.21.8 1.21.10 1.21.11 26.1.1 26.2; do
+            JAR=$(find build/collected -name "moar-${VER}+${mc}.jar" -print -quit)
+            if [ -z "$JAR" ]; then
+              echo "::error::Missing JAR for Minecraft ${mc}"
+              exit 1
+            fi
+            JAR_NAME=$(basename "$JAR")
+            ZIP_NAME="moar-${VER}+${mc}.zip"
+            sha256sum "$JAR" | sed "s#${JAR}#${JAR_NAME}#" > "$STAGING/SHA256SUMS.txt"
+            zip -j "$STAGING/$ZIP_NAME" "$JAR" "$STAGING/SHA256SUMS.txt"
+            rm "$STAGING/SHA256SUMS.txt"
+          done
+          SOURCES=$(find build/collected -name 'moar-*-sources.jar' -print -quit)
+          [ -n "$SOURCES" ] && cp "$SOURCES" "$STAGING/"
+
+      - name: Upload packaged builds
+        uses: actions/upload-artifact@v4
+        with:
+          name: moar-all-versions
+          path: build/release/
+          if-no-files-found: error
+          retention-days: 14
+
   dependency-review:
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
         with:
           persist-credentials: false
-
-      - name: Dependency review
-        uses: actions/dependency-review-action@v4
+      - uses: actions/dependency-review-action@v4
         with:
           fail-on-severity: moderate
 
-  # Static analysis
   static-analysis:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
         with:
           persist-credentials: false
-
-      - name: Set up JDK 21
-        uses: actions/setup-java@v4
+      - uses: actions/setup-java@v4
         with:
           java-version: '21'
-          distribution: 'temurin'
-
-      - name: Grant execute permission
-        run: chmod +x gradlew
-
-      - name: Setup Gradle
-        uses: gradle/actions/setup-gradle@v4
-
+          distribution: temurin
+      - uses: gradle/actions/setup-gradle@v4
       - name: SpotBugs / checkstyle
         run: ./gradlew check -x test || true
 
-  # Secret scanning
   secret-scan:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
         with:
           fetch-depth: 0
           persist-credentials: false
-
-      - name: TruffleHog secret scan
-        uses: trufflesecurity/trufflehog@main
+      - uses: trufflesecurity/trufflehog@main
         with:
           path: ./
           base: ${{ github.event.repository.default_branch }}
           extra_args: --only-verified
 
-  # Dependency vulnerability scan
   dependency-scan:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
         with:
           persist-credentials: false
-
-      - name: Set up JDK 21
-        uses: actions/setup-java@v4
+      - uses: actions/setup-java@v4
         with:
           java-version: '21'
-          distribution: 'temurin'
-
-      - name: Grant execute permission
-        run: chmod +x gradlew
-
-      - name: Setup Gradle
-        uses: gradle/actions/setup-gradle@v4
-
+          distribution: temurin
+      - uses: gradle/actions/setup-gradle@v4
       - name: OWASP Dependency-Check
         run: ./gradlew dependencyCheckAnalyze --info || true
-
-      - name: Upload dependency-check report
+      - name: Upload dependency report
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: dependency-check-report
           path: build/reports/dependency-check-report.html
+          if-no-files-found: ignore

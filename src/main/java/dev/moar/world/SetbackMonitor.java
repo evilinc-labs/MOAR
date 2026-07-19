@@ -1,25 +1,28 @@
 package dev.moar.world;
 
 import dev.moar.util.PacketTelemetry;
+import dev.moar.util.MoarNetworkManager;
 /*? if >=26.1 {*//*
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.player.LocalPlayer;
+import net.minecraft.network.protocol.game.ClientboundPlayerPositionPacket;
+import net.minecraft.network.protocol.game.ServerboundAcceptTeleportationPacket;
 *//*?} else {*/
 import net.minecraft.client.MinecraftClient;
 import net.minecraft.client.network.ClientPlayerEntity;
+import net.minecraft.network.packet.c2s.play.TeleportConfirmC2SPacket;
+import net.minecraft.network.packet.s2c.play.PlayerPositionLookS2CPacket;
 /*?}*/
 
-// Backend-only setback detector. Subsystems call isCalm() before
-// sending placement/interaction packets to avoid stacking actions on
-// top of a server-issued teleport-back.
-//
-// Detection: sample player position each client tick; any single-tick
-// delta above SETBACK_THRESHOLD_BLOCKS is treated as a server teleport.
-// Normal walk/sprint stays well under the threshold.
+import java.util.concurrent.atomic.AtomicInteger;
+
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+// Detect server corrections and hold automation until movement settles.
 public final class SetbackMonitor {
 
-    // Single-tick movement above this distance counts as a setback.
-    private static final double SETBACK_THRESHOLD_BLOCKS = 0.6;
+    private static final Logger LOGGER = LoggerFactory.getLogger("MOAR/Setback");
 
     // Stable ticks required after the last setback before isCalm() returns true.
     // 2b2t trace: placements sent ~0.6s after a rubber-band still got
@@ -34,6 +37,9 @@ public final class SetbackMonitor {
     // Movement below this per-tick delta counts as stationary.
     private static final double STATIONARY_DELTA_BLOCKS = 0.025;
 
+    private final AtomicInteger pendingCorrections = new AtomicInteger();
+    private final AtomicInteger pendingAcknowledgements = new AtomicInteger();
+
     private boolean primed;
     private double lastX, lastY, lastZ;
 
@@ -45,6 +51,7 @@ public final class SetbackMonitor {
 
     // Total setbacks observed since join.
     private int totalSetbacks;
+    private int totalServerCorrections;
 
     // Tick timestamps of recent setbacks (newest first), capped to HISTORY_SIZE.
     private final long[] setbackTicks = new long[HISTORY_SIZE];
@@ -58,6 +65,30 @@ public final class SetbackMonitor {
 
     private SetbackMonitor() {}
 
+    // Queue packet observations for the client tick thread.
+    public void onIncomingPacket(Object packet) {
+        if (packet == null) return;
+        /*? if >=26.1 {*//*
+        if (packet instanceof ClientboundPlayerPositionPacket) {
+        *//*?} else {*/
+        if (packet instanceof PlayerPositionLookS2CPacket) {
+        /*?}*/
+            pendingCorrections.incrementAndGet();
+        }
+    }
+
+    // Track the client acknowledgement for correction diagnostics.
+    public void onOutgoingPacket(Object packet) {
+        if (packet == null) return;
+        /*? if >=26.1 {*//*
+        if (packet instanceof ServerboundAcceptTeleportationPacket) {
+        *//*?} else {*/
+        if (packet instanceof TeleportConfirmC2SPacket) {
+        /*?}*/
+            pendingAcknowledgements.incrementAndGet();
+        }
+    }
+
     // Call once per client tick (END_CLIENT_TICK). Safe when no player is loaded.
     /*? if >=26.1 {*//*
     public void tick(Minecraft mc) {
@@ -68,6 +99,8 @@ public final class SetbackMonitor {
                 /*? if >=26.1 {*//*|| mc.level == null*//*?} else {*/|| mc.world == null/*?}*/) {
             primed = false;
             ticksSinceSetback = CALM_WINDOW_TICKS;
+            pendingCorrections.set(0);
+            pendingAcknowledgements.set(0);
             return;
         }
         currentTick++;
@@ -77,11 +110,18 @@ public final class SetbackMonitor {
         ClientPlayerEntity p = mc.player;
         /*?}*/
         double x = p.getX(), y = p.getY(), z = p.getZ();
-
         if (!primed) {
             lastX = x; lastY = y; lastZ = z;
             primed = true;
+            pendingCorrections.set(0);
+            pendingAcknowledgements.set(0);
             return;
+        }
+
+        int correctionCount = pendingCorrections.getAndSet(0);
+        int acknowledgementCount = pendingAcknowledgements.getAndSet(0);
+        if (acknowledgementCount > 0) {
+            PacketTelemetry.markCorrectionAcknowledged(acknowledgementCount);
         }
 
         double dx = x - lastX, dy = y - lastY, dz = z - lastZ;
@@ -95,20 +135,32 @@ public final class SetbackMonitor {
             stationaryTicks = 0;
         }
 
-        if (distSq > SETBACK_THRESHOLD_BLOCKS * SETBACK_THRESHOLD_BLOCKS) {
-            ticksSinceSetback = 0;
-            totalSetbacks++;
-            setbackTicks[historyHead] = currentTick;
-            historyHead = (historyHead + 1) % HISTORY_SIZE;
-            PacketTelemetry.markSetback(totalSetbacks, ticksSinceSetback);
+        if (correctionCount > 0) {
+            for (int i = 0; i < correctionCount; i++) {
+                recordSetback("server-correction");
+            }
         } else if (ticksSinceSetback < CALM_WINDOW_TICKS) {
             ticksSinceSetback++;
         }
     }
 
+    private void recordSetback(String source) {
+        ticksSinceSetback = 0;
+        totalSetbacks++;
+        setbackTicks[historyHead] = currentTick;
+        historyHead = (historyHead + 1) % HISTORY_SIZE;
+        MoarNetworkManager.pauseAutomation(CALM_WINDOW_TICKS, source);
+        if ("server-correction".equals(source)) {
+            totalServerCorrections++;
+            LOGGER.warn("[Setback] server correction #{}; holding automation for {}t",
+                    totalServerCorrections, CALM_WINDOW_TICKS);
+        }
+        PacketTelemetry.markSetback(totalSetbacks, ticksSinceSetback, source);
+    }
+
     // True when no setback has occurred in the last CALM_WINDOW_TICKS ticks.
     public boolean isCalm() {
-        return ticksSinceSetback >= CALM_WINDOW_TICKS;
+        return pendingCorrections.get() == 0 && ticksSinceSetback >= CALM_WINDOW_TICKS;
     }
 
     // Ticks elapsed since the most recent setback (capped at CALM_WINDOW_TICKS).
@@ -116,6 +168,8 @@ public final class SetbackMonitor {
 
     // Total setbacks observed this session.
     public int totalSetbacks() { return totalSetbacks; }
+
+    public int totalServerCorrections() { return totalServerCorrections; }
 
     // Setbacks within the last windowTicks client ticks.
     public int recentSetbackCount(int windowTicks) {
@@ -139,9 +193,12 @@ public final class SetbackMonitor {
         primed = false;
         ticksSinceSetback = CALM_WINDOW_TICKS;
         totalSetbacks = 0;
+        totalServerCorrections = 0;
         stationaryTicks = 0;
         currentTick = 0;
         historyHead = 0;
+        pendingCorrections.set(0);
+        pendingAcknowledgements.set(0);
         for (int i = 0; i < setbackTicks.length; i++) setbackTicks[i] = 0;
     }
 }

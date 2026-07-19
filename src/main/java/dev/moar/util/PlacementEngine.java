@@ -1,6 +1,7 @@
 package dev.moar.util;
 
 import dev.moar.world.SetbackMonitor;
+import dev.moar.world.VelocityMonitor;
 
 /*? if >=26.1 {*//*
 import net.minecraft.world.level.block.*;
@@ -1390,7 +1391,11 @@ public final class PlacementEngine {
         *//*?} else {*/
         MinecraftClient mc = MinecraftClient.getInstance();
         /*?}*/
+        /*? if >=26.1 {*//*
+        if (mc.level == null || mc.player == null) return;
+        *//*?} else {*/
         if (mc.world == null || mc.player == null) return;
+        /*?}*/
         QueuedPlacement head = placementQueue.pollFirst();
         if (head == null) return;
         // Validate the entry is still needed — world state may have changed
@@ -3813,7 +3818,7 @@ public final class PlacementEngine {
     /*? if >=26.1 {*//*
     private static boolean shouldClientSwing(InteractionResult result) {
         return result instanceof InteractionResult.Success success
-                && success.e() == InteractionResult.SwingSource.CLIENT;
+                && success.swingSource() == InteractionResult.SwingSource.CLIENT;
     }
     *//*?} else {*/
     private static boolean shouldClientSwing(ActionResult result) {
@@ -4401,6 +4406,9 @@ public final class PlacementEngine {
     }
 
     private static boolean isPlacementWindowSafe() {
+        if (VelocityMonitor.get().isSettling()) {
+            return false;
+        }
         SetbackMonitor monitor = SetbackMonitor.get();
         // `isCalm()` already means we've gone a full quiet window since the
         // last setback. Requiring zero "recent" setbacks on top of that can

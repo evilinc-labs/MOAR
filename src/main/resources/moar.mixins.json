@@ -5,9 +5,6 @@
   "compatibilityLevel": "JAVA_21",
   "client": [
     "KeyboardInputMixin",
-    "BounceGlideSpoofLivingEntityMixin",
-    "BounceGlideSpoofEntityMixin",
-    "BounceForwardKeyMixin",
     "PlacementMovementSuppressMixin",
     "PacketTelemetryMixin"
   ],

@@ -19,7 +19,7 @@ val includeJava25Targets = providers.gradleProperty("moar.includeJava25Targets")
     ?: false
 
 if (includeJava25Targets && javaMajor < 25) {
-    throw GradleException("Minecraft 26.1.1 requires JDK 25+. "
+    throw GradleException("Minecraft 26.x requires JDK 25+. "
         + "Run Gradle with Java 25+ or omit -Pmoar.includeJava25Targets=true.")
 }
 
@@ -31,6 +31,7 @@ val minecraftVersions = buildList {
     add("1.21.11")
     if (includeJava25Targets) {
         add("26.1.1")
+        add("26.2")
     }
 }
 

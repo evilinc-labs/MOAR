@@ -38,6 +38,8 @@ public final class MoarNetworkManager {
     private static String tickOwner;
     private static int packetCostThisTick;
     private static long logicalTick;
+    private static int automationPauseTicks;
+    private static String automationPauseReason;
 
     private MoarNetworkManager() {}
 
@@ -46,6 +48,12 @@ public final class MoarNetworkManager {
         tickOwner = null;
         laneOwners.clear();
         packetCostThisTick = 0;
+        if (automationPauseTicks > 0) {
+            automationPauseTicks--;
+            if (automationPauseTicks == 0) {
+                automationPauseReason = null;
+            }
+        }
         decrementLaneCooldowns();
         decrementOwnerLeases();
     }
@@ -96,6 +104,22 @@ public final class MoarNetworkManager {
         return !isBlank(owner) && ownerCanAct(owner);
     }
 
+    public static void pauseAutomation(int ticks, String reason) {
+        if (ticks <= 0) {
+            return;
+        }
+        automationPauseTicks = Math.max(automationPauseTicks, ticks);
+        if (!isBlank(reason)) {
+            automationPauseReason = reason;
+        }
+        tickOwner = null;
+        laneOwners.clear();
+    }
+
+    public static boolean isAutomationPaused() {
+        return automationPauseTicks > 0;
+    }
+
     public static boolean hasOwnerOtherThan(String owner) {
         if (isBlank(owner)) {
             return tickOwner != null || !ownerLeases.isEmpty() || !laneOwners.isEmpty();
@@ -122,10 +146,15 @@ public final class MoarNetworkManager {
                 + " cost=" + packetCostThisTick
                 + " lanes=" + laneOwners
                 + " laneCooldowns=" + laneCooldowns
-                + " leases=" + ownerLeases;
+                + " leases=" + ownerLeases
+                + " pause=" + automationPauseTicks
+                + " pauseReason=" + automationPauseReason;
     }
 
     private static boolean ownerCanAct(String owner) {
+        if (automationPauseTicks > 0) {
+            return false;
+        }
         if (tickOwner != null && !owner.equals(tickOwner)) {
             return false;
         }

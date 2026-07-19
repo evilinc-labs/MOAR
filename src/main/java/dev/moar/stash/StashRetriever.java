@@ -1037,7 +1037,9 @@ public final class StashRetriever {
 
         if (shulkerTotalTicks >= SHULKER_TOTAL_TIMEOUT) {
             ChatHelper.labelled("Stash", "§cShulker unloading timed out.");
-            /*? if >=26.1 {*//*
+            /*? if >=26.2 {*//*
+            if (mc.gui.screen() != null) player.clientSideCloseContainer();
+            *//*?} else if >=26.1 {*//*
             if (mc.screen != null) player.clientSideCloseContainer();
             *//*?} else {*/
             if (mc.currentScreen != null) player.closeHandledScreen();
@@ -1403,7 +1405,9 @@ public final class StashRetriever {
 
             // Phase 6: Start breaking the shulker
             case 6 -> {
-                /*? if >=26.1 {*//*
+                /*? if >=26.2 {*//*
+                if (mc.gui.screen() != null) { player.clientSideCloseContainer(); return; }
+                *//*?} else if >=26.1 {*//*
                 if (mc.screen != null) { player.clientSideCloseContainer(); return; }
                 *//*?} else {*/
                 if (mc.currentScreen != null) { player.closeHandledScreen(); return; }

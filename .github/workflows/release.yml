@@ -12,152 +12,129 @@ permissions:
   artifact-metadata: write
 
 jobs:
+  build:
+    name: Build ${{ matrix.lane }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - lane: legacy
+            java: '21'
+            args: ''
+            tasks: ':1.21.4:buildAndCollect :1.21.5:buildAndCollect :1.21.8:buildAndCollect :1.21.10:buildAndCollect :1.21.11:buildAndCollect'
+          - lane: modern
+            java: '25'
+            args: '-Pmoar.includeJava25Targets=true'
+            tasks: ':26.1.1:buildAndCollect :26.2:buildAndCollect'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-java@v4
+        with:
+          java-version: ${{ matrix.java }}
+          distribution: temurin
+      - uses: gradle/actions/setup-gradle@v4
+      - name: Build versions
+        run: ./gradlew ${{ matrix.args }} ${{ matrix.tasks }} --no-daemon
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-${{ matrix.lane }}
+          path: build/libs/**/*.jar
+          if-no-files-found: error
+
   release:
+    needs: build
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+          persist-credentials: false
 
-      - name: Set up JDK 21
-        uses: actions/setup-java@v4
+      - name: Download compiled JARs
+        uses: actions/download-artifact@v4
         with:
-          java-version: '21'
-          distribution: 'temurin'
+          pattern: release-*
+          path: build/collected
+          merge-multiple: true
 
-      - name: Setup Gradle
-        uses: gradle/actions/setup-gradle@v4
-
-      - name: Grant execute permission
-        run: chmod +x gradlew
-
-      # 26.1.1 excluded — requires JDK 25 (not yet available on GitHub-hosted runners)
-      - name: Clean & build stable versions
-        run: >
-          ./gradlew clean
-          :1.21.4:buildAndCollect
-          :1.21.5:buildAndCollect
-          :1.21.8:buildAndCollect
-          :1.21.10:buildAndCollect
-          :1.21.11:buildAndCollect
-          --no-daemon
-
-      - name: Extract version from tag
+      - name: Resolve version
         id: version
         run: |
           if [[ "$GITHUB_REF_NAME" == v* ]]; then
-            echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+            VER="${GITHUB_REF_NAME#v}"
           else
             VER=$(grep '^mod\.version=' gradle.properties | cut -d= -f2)
-            echo "version=${VER}" >> "$GITHUB_OUTPUT"
           fi
+          echo "version=$VER" >> "$GITHUB_OUTPUT"
 
-      - name: Package release ZIPs
+      - name: Normalize and package artifacts
         id: package
         run: |
-          VER="${{ steps.version.outputs.version }}"
-          STAGING="build/release"
-          mkdir -p "$STAGING"
-
-          HASH_BODY=""
-
-          for mc in 1.21.4 1.21.5 1.21.8 1.21.10 1.21.11; do
-            JAR="build/libs/${VER}/moar-${VER}+${mc}.jar"
+          VER=${{ steps.version.outputs.version }}
+          JAR_DIR="build/libs/${VER}"
+          STAGING=build/release
+          mkdir -p "$JAR_DIR" "$STAGING"
+          find build/collected -name '*.jar' -exec cp {} "$JAR_DIR/" \;
+          HASH_BODY=''
+          for mc in 1.21.4 1.21.5 1.21.8 1.21.10 1.21.11 26.1.1 26.2; do
+            JAR="$JAR_DIR/moar-${VER}+${mc}.jar"
             if [ ! -f "$JAR" ]; then
               echo "::error::Missing JAR: $JAR"
               exit 1
             fi
-
-            HASH=$(sha256sum "$JAR" | awk '{print $1}')
-            JAR_NAME="moar-${VER}+${mc}.jar"
+            JAR_NAME=$(basename "$JAR")
             ZIP_NAME="moar-${VER}+${mc}.zip"
-
-            # Create checksum file for inside the ZIP
-            echo "${HASH}  ${JAR_NAME}" > "${STAGING}/SHA256SUMS.txt"
-
-            # Build the ZIP (jar + checksum)
-            (cd "build/libs/${VER}" && zip -j "../../release/${ZIP_NAME}" "$JAR_NAME")
-            (cd "$STAGING" && zip "${ZIP_NAME}" SHA256SUMS.txt)
-            rm "${STAGING}/SHA256SUMS.txt"
-
+            HASH=$(sha256sum "$JAR" | awk '{print $1}')
+            echo "${HASH}  ${JAR_NAME}" > "$STAGING/SHA256SUMS.txt"
+            zip -j "$STAGING/$ZIP_NAME" "$JAR" "$STAGING/SHA256SUMS.txt"
+            rm "$STAGING/SHA256SUMS.txt"
             HASH_BODY="${HASH_BODY}| ${mc} | \`${JAR_NAME}\` | \`${HASH}\` |"$'\n'
           done
-
-          # Sources JAR (not zipped, included directly)
-          SOURCES_JAR=$(find "build/libs/${VER}" -name "moar-*-sources.jar" | head -1)
-          if [ -n "$SOURCES_JAR" ]; then
-            cp "$SOURCES_JAR" "$STAGING/"
-          fi
-
-          # Write hash table for release body
-          {
-            echo "hashes<<EOF"
-            echo "$HASH_BODY"
-            echo "EOF"
-          } >> "$GITHUB_OUTPUT"
-
+          SOURCES=$(find "$JAR_DIR" -name 'moar-*-sources.jar' -print -quit)
+          [ -n "$SOURCES" ] && cp "$SOURCES" "$STAGING/"
+          printf 'hashes<<EOF\n%sEOF\n' "$HASH_BODY" >> "$GITHUB_OUTPUT"
+          echo "jar_dir=$JAR_DIR" >> "$GITHUB_OUTPUT"
           echo "staging=$STAGING" >> "$GITHUB_OUTPUT"
-          ls -la "$STAGING/"
 
       - name: Generate changelog
         id: changelog
         run: |
           PREV_TAG=$(git tag --sort=-creatordate | sed -n '2p')
           if [ -n "$PREV_TAG" ] && [ "$PREV_TAG" != "$GITHUB_REF_NAME" ]; then
-            CHANGES=$(git log --pretty=format:"- %s" "$PREV_TAG".."$GITHUB_REF_NAME" -- \
-              ':!*.md' ':!.github' 2>/dev/null || echo "- Initial release")
+            CHANGES=$(git log --pretty=format:'- %s' "$PREV_TAG".."$GITHUB_REF_NAME" -- ':!*.md' ':!.github' || true)
           else
-            CHANGES="- Initial release"
+            CHANGES='- Initial release'
           fi
-          {
-            echo "changes<<EOF"
-            echo "$CHANGES"
-            echo "EOF"
-          } >> "$GITHUB_OUTPUT"
-
-      - name: Resolve release artifact paths
-        id: artifacts
-        run: |
-          VER="${{ steps.version.outputs.version }}"
-          jar_dir="build/libs/${VER}"
-          jar_path="${jar_dir}/*.jar"
-          sbom_path="build/release/moar-${VER}.spdx.json"
-          echo "jar_dir=${jar_dir}" >> "$GITHUB_OUTPUT"
-          echo "jar_path=${jar_path}" >> "$GITHUB_OUTPUT"
-          echo "sbom_path=${sbom_path}" >> "$GITHUB_OUTPUT"
+          printf 'changes<<EOF\n%s\nEOF\n' "$CHANGES" >> "$GITHUB_OUTPUT"
 
       - name: Generate SBOM
         uses: anchore/sbom-action@v0
         with:
-          path: ${{ steps.artifacts.outputs.jar_dir }}
+          path: ${{ steps.package.outputs.jar_dir }}
           format: spdx-json
-          output-file: ${{ steps.artifacts.outputs.sbom_path }}
+          output-file: build/release/moar-${{ steps.version.outputs.version }}.spdx.json
           upload-artifact: false
           upload-release-assets: false
 
-      - name: Generate SHA-256 checksums
+      - name: Generate checksums
         run: |
-          VER="${{ steps.version.outputs.version }}"
-          mkdir -p build/release
-          for jar in build/libs/${VER}/*.jar; do
-            [ -f "$jar" ] || continue
-            out="build/release/$(basename "$jar").sha256"
-            sha256sum "$jar" > "$out"
-            echo "Generated checksum for $(basename "$jar")"
-            cat "$out"
+          for jar in ${{ steps.package.outputs.jar_dir }}/*.jar; do
+            sha256sum "$jar" > "build/release/$(basename "$jar").sha256"
           done
 
-      - name: Attest release artifacts provenance
+      - name: Attest provenance
         uses: actions/attest@v4
         with:
-          subject-path: ${{ steps.artifacts.outputs.jar_path }}
+          subject-path: ${{ steps.package.outputs.jar_dir }}/*.jar
 
-      - name: Attest release artifact SBOM
+      - name: Attest SBOM
         uses: actions/attest@v4
         with:
-          subject-path: ${{ steps.artifacts.outputs.jar_path }}
-          sbom-path: ${{ steps.artifacts.outputs.sbom_path }}
+          subject-path: ${{ steps.package.outputs.jar_dir }}/*.jar
+          sbom-path: build/release/moar-${{ steps.version.outputs.version }}.spdx.json
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
@@ -166,8 +143,7 @@ jobs:
           body: |
             ## MOAR v${{ steps.version.outputs.version }}
 
-            ### Downloads
-            Each ZIP contains the mod JAR and a `SHA256SUMS.txt` verification file.
+            Each ZIP contains the mod JAR and its SHA-256 verification file.
 
             | Minecraft | File | SHA-256 |
             |-----------|------|---------|
@@ -176,9 +152,9 @@ jobs:
             ### Changes
             ${{ steps.changelog.outputs.changes }}
           files: |
-            ${{ steps.package.outputs.staging }}/moar-*.zip
-            ${{ steps.package.outputs.staging }}/moar-*-sources.jar
-            ${{ steps.package.outputs.staging }}/*.sha256
-            ${{ steps.artifacts.outputs.sbom_path }}
+            build/release/moar-*.zip
+            build/release/moar-*-sources.jar
+            build/release/*.sha256
+            build/release/*.spdx.json
           fail_on_unmatched_files: true
           generate_release_notes: false

@@ -32,18 +32,12 @@ public final class HighwayPlanner {
     // Split off-ramp mining into short legs.
     private static final int FREENETHER_MINING_LEG_LENGTH = 12;
 
-    // Zones the router treats as unsafe to route straight through (e.g. world
-    // spawn, where PVP happens). Only spawn is populated for now; this is
-    // structured as a list so more zones can be added later without reworking
-    // the detour trigger. NOTE: the actual detour geometry in
-    // buildSafeRingRoute() still assumes a spawn-centered ring — generalizing
-    // it to arbitrary hazard centers is deferred to the upcoming hub-graph router.
+    // Avoid direct routes through configured hazard zones.
     private record HazardZone(int cx, int cz, int radius) {}
     private static final List<HazardZone> HAZARD_ZONES =
             List.of(new HazardZone(0, 0, HighwayRoute.SAFE_RING_RADIUS));
 
-    // Push far enough that a stalled suggestFlightWaypoint hop always makes
-    // real progress instead of returning (near) where the player already is.
+    // Force fallback waypoints to make forward progress.
     private static final int MIN_WAYPOINT_PROGRESS = 500;
 
     public static final class Options {
@@ -133,30 +127,26 @@ public final class HighwayPlanner {
         }
 
         RoutePlan plan = shouldUseSafeRingRoute(origin, destination,
-                bestDirect.geometry(), bestDirect.onRampXZ(), bestDirect.exitXZ())
-                ? buildSafeRingRoute(origin, destination, opts, floorY)
+                bestDirect.onRampXZ(), bestDirect.exitXZ())
+                ? buildSafeRingRoute(origin, destination, opts, floorY, originHighway)
                 : bestDirect.route();
         if (plan == null || plan.primary == null || plan.legs.isEmpty()) return Optional.empty();
+
+        // Enforce the spawn boundary against the route that will execute.
+        if (!isWithinSafeRing(origin) && !isWithinSafeRing(destination)
+                && !routeClearsAllHazards(origin, plan)) {
+            plan = buildSafeRingRoute(origin, destination, opts, floorY, originHighway);
+            if (plan == null || plan.primary == null || plan.legs.isEmpty()
+                    || !routeClearsAllHazards(origin, plan)) {
+                return Optional.empty();
+            }
+        }
 
         return Optional.of(new HighwayRoute(
                 plan.primary, plan.legs, plan.totalCost, plan.travelDx, plan.travelDz));
     }
 
-    // Best-guess interim flight target when plan() couldn't confirm any
-    // highway from here (too far away to scan anything real yet) — the
-    // projected on-ramp of the strongest geometric candidate, so the player
-    // flies toward a plausible highway instead of straight to the final
-    // destination in one hop. Deliberately does NOT jump straight to the
-    // safe-ring detour just because the *overall* origin-destination line
-    // would eventually cross a hazard zone — that would send the player on
-    // a huge detour before ever trying the highway that's likely close by.
-    // Once the player arrives near this on-ramp, incremental replanning
-    // (TravelManager.advanceLeg) re-invokes plan() from the new position,
-    // where the candidate may finally be close enough to confirm for real —
-    // and plan()'s existing shouldUseSafeRingRoute() check already detours
-    // correctly from there if the confirmed highway itself leads through a
-    // hazard zone. Only skips straight to the ring junction if this short
-    // interim hop would itself cross a hazard zone (rare).
+    // Suggest an interim highway waypoint when scanning cannot confirm one.
     public BlockPos suggestFlightWaypoint(BlockPos origin, BlockPos destination, Options opts) {
         if (opts == null) opts = new Options();
         int ox = origin.getX(), oz = origin.getZ();
@@ -175,13 +165,7 @@ public final class HighwayPlanner {
 
         int[] onRampXZ = HighwayGeometry.projectOnto(best, ox, oz);
 
-        // If the on-ramp is basically where we already are (e.g. we arrived
-        // here on a previous hop but still couldn't confirm a highway — see
-        // confirmHighway()), push further along the candidate's direction
-        // toward the destination instead of returning a no-progress target.
-        // Otherwise the resulting hop has no meaningful launch direction
-        // (isLaunchReadyAt/isStrongLaunchAnchor's degenerate dx==0&&dz==0
-        // check fails) and the mission stalls/aborts instead of continuing.
+        // Push stalled waypoints farther toward the destination.
         if (HighwayGeometry.horizontalDistance(ox, oz, onRampXZ[0], onRampXZ[1]) < MIN_WAYPOINT_PROGRESS) {
             int stepDx = Integer.compare(dx, ox);
             int stepDz = Integer.compare(dz, oz);
@@ -204,8 +188,7 @@ public final class HighwayPlanner {
     private static double routeScore(RoutePlan route,
                                      HighwayGeometry.GeometryCandidate candidate,
                                      OriginHighway originHighway) {
-        // Prefer the cheapest route from the player's actual origin, while giving
-        // a small edge to stronger geometric matches when costs are close.
+        // Prefer low-cost routes and break ties by confidence.
         double score = route.totalCost + (1.0 - candidate.confidence) * 64.0;
         if (originHighway == null) return score;
 
@@ -235,16 +218,11 @@ public final class HighwayPlanner {
         BlockPos exitColumn = new BlockPos(exitXZ[0], refinedFloorY, exitXZ[1]);
 
         Optional<HighwayDetectorBridge.ScanResult> scan = confirmHighway(origin, best.axis, onRamp, floorY);
-        if (scan.isEmpty()) {
-            // Can't confirm this highway actually exists near the player right
-            // now — refuse to fabricate a route from coordinate math alone.
-            // The caller falls back to direct flight instead (see
-            // TravelManager.tickPlanning()).
-            return null;
+        if (scan.isPresent()) {
+            refinedFloorY = scan.get().floorY();
+            onRamp = new BlockPos(scan.get().centerX(), refinedFloorY, scan.get().centerZ());
+            exitColumn = new BlockPos(exitXZ[0], refinedFloorY, exitXZ[1]);
         }
-        refinedFloorY = scan.get().floorY();
-        onRamp = new BlockPos(scan.get().centerX(), refinedFloorY, scan.get().centerZ());
-        exitColumn = new BlockPos(exitXZ[0], refinedFloorY, exitXZ[1]);
 
         HighwayCandidate primary = new HighwayCandidate(
                 best.axis, best.category, refinedFloorY, onRamp, exitColumn, best.confidence,
@@ -303,7 +281,8 @@ public final class HighwayPlanner {
     private RoutePlan buildSafeRingRoute(BlockPos origin,
                                          BlockPos destination,
                                          Options opts,
-                                         int floorYHint) {
+                                         int floorYHint,
+                                         OriginHighway originHighway) {
         List<HighwayRoute.Leg> legs = new ArrayList<>();
         double totalCost = 0.0;
 
@@ -311,6 +290,10 @@ public final class HighwayPlanner {
         BlockPos[] ringJunctions = chooseRingJunctions(origin, destination, floorYHint, ringRadius);
         BlockPos originJunction = ringJunctions[0];
         BlockPos destinationJunction = ringJunctions[1];
+        boolean preserveOriginHighway = canRideOriginHighwayToRing(origin, originHighway);
+        if (preserveOriginHighway) {
+            originJunction = ringIntersection(originHighway.axis(), origin, floorYHint, ringRadius);
+        }
 
         HighwayCandidate primary = null;
         int primaryDx = 0;
@@ -318,23 +301,29 @@ public final class HighwayPlanner {
         int floorY = floorYHint;
 
         if (!isWithinSafeRing(origin)) {
-            HighwayCandidate.Axis originAxis = spokeAxisForJunction(originJunction);
-            BlockPos originOnRamp = projectOntoSpoke(originAxis, origin, floorY);
-            // This is the very next hop from the player's current position —
-            // confirm it's a real highway before committing (see buildDirectRoute).
+            HighwayCandidate.Axis originAxis = preserveOriginHighway
+                    ? originHighway.axis()
+                    : spokeAxisForJunction(originJunction);
+            BlockPos originOnRamp = preserveOriginHighway
+                    ? new BlockPos(originHighway.scan().centerX(), originHighway.scan().floorY(),
+                            originHighway.scan().centerZ())
+                    : projectOntoSpoke(originAxis, origin, floorY);
             Optional<HighwayDetectorBridge.ScanResult> originSpokeScan = confirmHighway(origin, originAxis, originOnRamp, floorY);
-            if (originSpokeScan.isEmpty()) return null;
-            floorY = originSpokeScan.get().floorY();
+            if (originSpokeScan.isPresent()) {
+                floorY = originSpokeScan.get().floorY();
+            }
             originJunction = withY(originJunction, floorY);
             destinationJunction = withY(destinationJunction, floorY);
-            originOnRamp = projectOntoSpoke(originAxis, origin, floorY);
+            originOnRamp = preserveOriginHighway
+                    ? new BlockPos(originHighway.scan().centerX(), floorY, originHighway.scan().centerZ())
+                    : projectOntoSpoke(originAxis, origin, floorY);
 
             double originToOnRamp = HighwayGeometry.horizontalDistance(
                     origin.getX(), origin.getZ(), originOnRamp.getX(), originOnRamp.getZ());
             int[] travelDir = travelDirection(point(originOnRamp), point(originJunction), originAxis);
             HighwayCandidate provisionalSpoke = syntheticCandidate(
-                    originAxis, HighwayCandidate.Category.CARDINAL, floorY,
-                    originOnRamp, originJunction, null, 0.0);
+                    originAxis, originAxis.diagonal ? HighwayCandidate.Category.DIAGONAL : HighwayCandidate.Category.CARDINAL,
+                    floorY, originOnRamp, originJunction, null, 0.0);
             boolean requiresIngressTravel = !isReadyForIngressBounce(origin, provisionalSpoke, travelDir[0], travelDir[1])
                     && needsIngressTravel(originToOnRamp, 10.0, opts.allowFlight);
             BlockPos spokeEntry = requiresIngressTravel
@@ -343,8 +332,8 @@ public final class HighwayPlanner {
             totalCost += addIngressLeg(legs, origin, originToOnRamp, spokeEntry, 10.0, opts.allowFlight);
 
             HighwayCandidate spoke = syntheticCandidate(
-                    originAxis, HighwayCandidate.Category.CARDINAL, floorY,
-                    spokeEntry, originJunction, null, 0.0);
+                    originAxis, originAxis.diagonal ? HighwayCandidate.Category.DIAGONAL : HighwayCandidate.Category.CARDINAL,
+                    floorY, spokeEntry, originJunction, null, 0.0);
             travelDir = travelDirection(point(spoke.entry), point(spoke.exit), originAxis);
             appendBounceLeg(legs, spoke, travelDir[0], travelDir[1]);
             totalCost += HighwayGeometry.horizontalDistance(
@@ -357,7 +346,7 @@ public final class HighwayPlanner {
             destinationJunction = withY(destinationJunction, floorY);
             double originToRing = HighwayGeometry.horizontalDistance(
                     origin.getX(), origin.getZ(), originJunction.getX(), originJunction.getZ());
-            List<RingSegment> previewSegments = planRingSegments(originJunction, destinationJunction, destination, ringRadius);
+            List<RingSegment> previewSegments = planRingSegments(originJunction, destinationJunction, ringRadius);
             BlockPos ingressTarget = originJunction;
             if (!previewSegments.isEmpty() && needsIngressTravel(originToRing, 10.0, opts.allowFlight)) {
                 RingSegment first = previewSegments.get(0);
@@ -367,20 +356,20 @@ public final class HighwayPlanner {
             totalCost += addIngressLeg(legs, origin, originToRing, ingressTarget, 10.0, opts.allowFlight);
         }
 
-        List<RingSegment> ringSegments = planRingSegments(originJunction, destinationJunction, destination, ringRadius);
+        List<RingSegment> ringSegments = planRingSegments(originJunction, destinationJunction, ringRadius);
         for (int i = 0; i < ringSegments.size(); i++) {
             RingSegment segment = ringSegments.get(i);
+            if (!isValidRingSegment(segment, ringRadius)) return null;
             int[] travelDir = travelDirection(point(segment.start), point(segment.end), segment.axis);
             BlockPos segmentEntry = segment.start;
             if (i > 0 || isWithinSafeRing(origin)) {
                 segmentEntry = directionalAnchor(segment.start, travelDir[0], travelDir[1]);
             }
             if (primary == null) {
-                // No spoke was built above, so this ring segment is the very
-                // next hop from the player's current position — confirm it.
                 Optional<HighwayDetectorBridge.ScanResult> ringScan = confirmHighway(origin, segment.axis, segmentEntry, floorY);
-                if (ringScan.isEmpty()) return null;
-                floorY = ringScan.get().floorY();
+                if (ringScan.isPresent()) {
+                    floorY = ringScan.get().floorY();
+                }
             }
             HighwayCandidate ring = syntheticCandidate(
                     segment.axis, HighwayCandidate.Category.RING, floorY,
@@ -474,11 +463,7 @@ public final class HighwayPlanner {
         return distance > approachThreshold;
     }
 
-    // Same "can't aim elytra at a nearly-vertical target" rule as
-    // TravelManager.isMostlyVerticalHop() — an ingress hop with a large Y gap
-    // but little horizontal distance needs Baritone (which can pillar/dig/
-    // climb), not a raw elytra glide (which only steers by horizontal yaw and
-    // would pick an unstable heading and dive blindly into whatever's there).
+    // Keep steep ingress hops under Baritone control.
     private static boolean isMostlyVerticalGap(BlockPos origin, BlockPos target) {
         int horiz = (int) Math.round(HighwayGeometry.horizontalDistance(
                 origin.getX(), origin.getZ(), target.getX(), target.getZ()));
@@ -527,6 +512,9 @@ public final class HighwayPlanner {
                                         HighwayCandidate highway,
                                         int travelDx,
                                         int travelDz) {
+        int[] normalized = normalizeTravelDirection(highway.axis, travelDx, travelDz);
+        travelDx = normalized[0];
+        travelDz = normalized[1];
         if (!legs.isEmpty()) {
             HighwayRoute.Leg previous = legs.get(legs.size() - 1);
             if (previous instanceof HighwayRoute.BounceLeg prevBounce
@@ -555,10 +543,8 @@ public final class HighwayPlanner {
 
     private static boolean shouldUseSafeRingRoute(BlockPos origin,
                                                   BlockPos destination,
-                                                  HighwayGeometry.GeometryCandidate best,
                                                   int[] onRampXZ,
                                                   int[] exitXZ) {
-        if (candidateClearsAllHazards(best)) return false;
         if (isWithinSafeRing(origin) || isWithinSafeRing(destination)) return true;
         for (HazardZone zone : HAZARD_ZONES) {
             if (segmentDistanceToPoint(onRampXZ[0], onRampXZ[1], exitXZ[0], exitXZ[1], zone.cx(), zone.cz())
@@ -569,21 +555,41 @@ public final class HighwayPlanner {
         return false;
     }
 
-    // A ring/diamond candidate only counts as an inherently safe route if its
-    // own distance clears every hazard zone — otherwise the "highway" itself
-    // runs through the danger zone and still needs the check above. Diamond
-    // boundaries (|x|+|z|=D) come as close as D/2 in Chebyshev terms at the
-    // midpoint of each edge, hence the /2 for that category.
-    private static boolean candidateClearsAllHazards(HighwayGeometry.GeometryCandidate best) {
-        if (best.category != HighwayCandidate.Category.RING
-                && best.category != HighwayCandidate.Category.DIAMOND) {
-            return false;
+    private static boolean routeClearsAllHazards(BlockPos origin, RoutePlan route) {
+        BlockPos cursor = origin;
+        for (HighwayRoute.Leg leg : route.legs) {
+            if (leg instanceof HighwayRoute.ApproachLeg approach) {
+                if (!segmentClearsAllHazards(cursor, approach.onRamp())) return false;
+                cursor = approach.onRamp();
+            } else if (leg instanceof HighwayRoute.BounceLeg bounce) {
+                if (!segmentClearsAllHazards(cursor, bounce.highway().entry)
+                        || !segmentClearsAllHazards(bounce.highway().entry, bounce.exitColumn())) {
+                    return false;
+                }
+                cursor = bounce.exitColumn();
+            } else if (leg instanceof HighwayRoute.TurnLeg turn) {
+                if (!segmentClearsAllHazards(cursor, turn.branchTarget())) return false;
+                cursor = turn.branchTarget();
+            } else if (leg instanceof HighwayRoute.OffRampLeg offRamp) {
+                if (!segmentClearsAllHazards(cursor, offRamp.handoffPoint())) return false;
+                cursor = offRamp.handoffPoint();
+            } else if (leg instanceof HighwayRoute.MineLeg mine) {
+                if (!segmentClearsAllHazards(cursor, mine.freeNetherTarget())) return false;
+                cursor = mine.freeNetherTarget();
+            } else if (leg instanceof HighwayRoute.FlightLeg flight) {
+                if (!segmentClearsAllHazards(cursor, flight.destination())) return false;
+                cursor = flight.destination();
+            }
         }
-        double effectiveDist = best.category == HighwayCandidate.Category.DIAMOND
-                ? best.ringOrDiamondDist / 2.0
-                : best.ringOrDiamondDist;
+        return true;
+    }
+
+    private static boolean segmentClearsAllHazards(BlockPos from, BlockPos to) {
         for (HazardZone zone : HAZARD_ZONES) {
-            if (effectiveDist < zone.radius()) return false;
+            if (segmentDistanceToPoint(
+                    from.getX(), from.getZ(), to.getX(), to.getZ(), zone.cx(), zone.cz()) < zone.radius()) {
+                return false;
+            }
         }
         return true;
     }
@@ -597,6 +603,37 @@ public final class HighwayPlanner {
         return false;
     }
 
+    // Keep a visible spawn highway as the ring ingress.
+    private static boolean canRideOriginHighwayToRing(BlockPos origin, OriginHighway highway) {
+        if (origin == null || highway == null || highway.scan() == null) return false;
+        int x = highway.scan().centerX();
+        int z = highway.scan().centerZ();
+        int tolerance = Math.max(16, highway.scan().width() + 4);
+        return switch (highway.axis()) {
+            case PLUS_X, MINUS_X -> Math.abs(z) <= tolerance;
+            case PLUS_Z, MINUS_Z -> Math.abs(x) <= tolerance;
+            case DIAG_PX_PZ, DIAG_MX_MZ -> Math.abs(x - z) <= tolerance;
+            case DIAG_PX_MZ, DIAG_MX_PZ -> Math.abs(x + z) <= tolerance;
+        };
+    }
+
+    private static BlockPos ringIntersection(HighwayCandidate.Axis axis,
+                                             BlockPos origin,
+                                             int floorY,
+                                             int ringRadius) {
+        return switch (axis) {
+            case PLUS_X, MINUS_X -> new BlockPos(origin.getX() >= 0 ? ringRadius : -ringRadius, floorY, 0);
+            case PLUS_Z, MINUS_Z -> new BlockPos(0, floorY, origin.getZ() >= 0 ? ringRadius : -ringRadius);
+            case DIAG_PX_PZ, DIAG_MX_MZ -> {
+                int sign = origin.getX() + origin.getZ() >= 0 ? 1 : -1;
+                yield new BlockPos(sign * ringRadius, floorY, sign * ringRadius);
+            }
+            case DIAG_PX_MZ, DIAG_MX_PZ -> {
+                int sign = origin.getX() - origin.getZ() >= 0 ? 1 : -1;
+                yield new BlockPos(sign * ringRadius, floorY, -sign * ringRadius);
+            }
+        };
+    }
     private static double segmentDistanceToPoint(int x1, int z1, int x2, int z2, int px, int pz) {
         double dx = x2 - x1;
         double dz = z2 - z1;
@@ -613,15 +650,7 @@ public final class HighwayPlanner {
         return Math.sqrt(ddx * ddx + ddz * ddz);
     }
 
-    // Try to confirm a highway actually exists for this candidate near the
-    // player's current position before committing a route to it — scans
-    // origin, the projected on-ramp, and the midpoint between them, all near
-    // the player's CURRENT altitude, then also retries at the expected/
-    // default floor Y hint if that's meaningfully different — a long elytra
-    // glide can leave the player far above or below the highway's real
-    // floor level, well outside scanAt()'s +/-4 block search window around
-    // the player's own Y. A hop that isn't loaded yet (e.g. a hub thousands
-    // of blocks away) simply can't be confirmed until the player gets close.
+    // Refine a projected route from visible highway data when available.
     private static Optional<HighwayDetectorBridge.ScanResult> confirmHighway(
             BlockPos origin, HighwayCandidate.Axis axis, BlockPos onRamp, int floorYHint) {
         HighwayDetectorBridge bridge = HighwayDetectorBridge.get();
@@ -643,20 +672,8 @@ public final class HighwayPlanner {
         return scan;
     }
 
-    // Pick the smallest known ring distance that clears every hazard zone, so
-    // the spawn-avoidance detour rides a real highway distance (e.g. one of
-    // the actual known ring roads) instead of an arbitrary hardcoded radius.
-    // Falls back to HighwayRoute.SAFE_RING_RADIUS if no known ring distance is
-    // large enough (shouldn't happen — even the smallest real ring distances
-    // comfortably clear the spawn hazard).
+    // Use the configured spawn boundary as the bypass ring.
     private static int selectSafeRingDistance() {
-        int required = 0;
-        for (HazardZone zone : HAZARD_ZONES) {
-            required = Math.max(required, zone.radius());
-        }
-        for (double d : HighwayGeometry.RING_DISTANCES) {
-            if (d >= required) return (int) Math.round(d);
-        }
         return HighwayRoute.SAFE_RING_RADIUS;
     }
 
@@ -669,9 +686,7 @@ public final class HighwayPlanner {
         return new BlockPos(0, floorY, sz);
     }
 
-    // Arc distance walking the square ring's perimeter between two of the
-    // four possible axis-junction points: adjacent sides are a quarter of
-    // the perimeter (2 * ringRadius), opposite sides are half (4 * ringRadius).
+    // Measure travel between square-ring junctions.
     private static double ringArcDistance(BlockPos a, BlockPos b, int ringRadius) {
         if (a.getX() == b.getX() && a.getZ() == b.getZ()) return 0.0;
         boolean aOnXAxis = a.getZ() == 0;
@@ -679,11 +694,7 @@ public final class HighwayPlanner {
         return aOnXAxis == bOnXAxis ? 4.0 * ringRadius : 2.0 * ringRadius;
     }
 
-    // Try both axis choices for origin and destination (up to 4 combinations)
-    // and pick whichever pairing minimizes total travel (ingress + arc +
-    // egress), instead of always joining via each point's own dominant axis
-    // in isolation — that ignores which side is actually closer to the OTHER
-    // endpoint and can pick an unnecessarily long way around the ring.
+    // Choose the junction pair with the lowest total route cost.
     private static BlockPos[] chooseRingJunctions(BlockPos origin, BlockPos destination, int floorY, int ringRadius) {
         BlockPos originRef = (origin.getX() == 0 && origin.getZ() == 0) ? destination : origin;
         BlockPos destRef = (destination.getX() == 0 && destination.getZ() == 0) ? origin : destination;
@@ -730,104 +741,96 @@ public final class HighwayPlanner {
         };
     }
 
-    private static List<RingSegment> planRingSegments(BlockPos start,
-                                                      BlockPos end,
-                                                      BlockPos destination,
-                                                      int ringRadius) {
+    private static List<RingSegment> planRingSegments(BlockPos start, BlockPos end, int ringRadius) {
+        long perimeter = 8L * ringRadius;
+        long startOffset = ringOffset(start, ringRadius);
+        long endOffset = ringOffset(end, ringRadius);
+        if (startOffset < 0 || endOffset < 0 || startOffset == endOffset) return List.of();
+
+        long clockwiseDistance = Math.floorMod(endOffset - startOffset, perimeter);
+        if (clockwiseDistance <= perimeter - clockwiseDistance) {
+            return boundarySegments(clockwisePoints(start, end, startOffset, endOffset, ringRadius));
+        }
+
+        List<BlockPos> reverse = clockwisePoints(end, start, endOffset, startOffset, ringRadius);
+        java.util.Collections.reverse(reverse);
+        return boundarySegments(reverse);
+    }
+
+    private static List<BlockPos> clockwisePoints(BlockPos start,
+                                                   BlockPos end,
+                                                   long startOffset,
+                                                   long endOffset,
+                                                   int ringRadius) {
+        long perimeter = 8L * ringRadius;
+        long edgeLength = 2L * ringRadius;
+        long adjustedEnd = endOffset <= startOffset ? endOffset + perimeter : endOffset;
+        List<BlockPos> points = new ArrayList<>();
+        points.add(start);
+        for (long corner = ((startOffset / edgeLength) + 1) * edgeLength;
+             corner < adjustedEnd;
+             corner += edgeLength) {
+            points.add(ringPoint(corner % perimeter, start.getY(), ringRadius));
+        }
+        points.add(end);
+        return points;
+    }
+
+    private static List<RingSegment> boundarySegments(List<BlockPos> points) {
         List<RingSegment> segments = new ArrayList<>();
-        if (start.getX() == end.getX() && start.getZ() == end.getZ()) return segments;
+        for (int i = 1; i < points.size(); i++) {
+            BlockPos start = points.get(i - 1);
+            BlockPos end = points.get(i);
+            if (start.getX() == end.getX() && start.getZ() == end.getZ()) continue;
 
-        if (start.getX() == 0 && end.getX() == 0) {
-            int sideX = preferredRingX(start, end, destination, ringRadius);
-            BlockPos sideA = new BlockPos(sideX, start.getY(), start.getZ());
-            BlockPos sideB = new BlockPos(sideX, start.getY(), end.getZ());
-            segments.add(new RingSegment(start, sideA, sideX > 0 ? HighwayCandidate.Axis.PLUS_X : HighwayCandidate.Axis.MINUS_X,
-                    start.getZ() >= 0 ? HighwayCandidate.RingSide.SOUTH : HighwayCandidate.RingSide.NORTH));
-            segments.add(new RingSegment(sideA, sideB, sideX > 0 ? HighwayCandidate.Axis.PLUS_Z : HighwayCandidate.Axis.MINUS_Z,
-                    sideX > 0 ? HighwayCandidate.RingSide.EAST : HighwayCandidate.RingSide.WEST));
-            segments.add(new RingSegment(sideB, end, sideB.getZ() >= 0 ? HighwayCandidate.Axis.MINUS_X : HighwayCandidate.Axis.PLUS_X,
-                    end.getZ() >= 0 ? HighwayCandidate.RingSide.SOUTH : HighwayCandidate.RingSide.NORTH));
-            return compactSegments(segments);
+            HighwayCandidate.Axis axis;
+            HighwayCandidate.RingSide side;
+            if (start.getZ() == end.getZ()) {
+                axis = end.getX() > start.getX() ? HighwayCandidate.Axis.PLUS_X : HighwayCandidate.Axis.MINUS_X;
+                side = start.getZ() > 0 ? HighwayCandidate.RingSide.SOUTH : HighwayCandidate.RingSide.NORTH;
+            } else if (start.getX() == end.getX()) {
+                axis = end.getZ() > start.getZ() ? HighwayCandidate.Axis.PLUS_Z : HighwayCandidate.Axis.MINUS_Z;
+                side = start.getX() > 0 ? HighwayCandidate.RingSide.EAST : HighwayCandidate.RingSide.WEST;
+            } else {
+                return List.of();
+            }
+            segments.add(new RingSegment(start, end, axis, side));
         }
-
-        if (start.getZ() == 0 && end.getZ() == 0) {
-            int sideZ = preferredRingZ(start, end, destination, ringRadius);
-            BlockPos sideA = new BlockPos(start.getX(), start.getY(), sideZ);
-            BlockPos sideB = new BlockPos(end.getX(), start.getY(), sideZ);
-            segments.add(new RingSegment(start, sideA, sideZ > 0 ? HighwayCandidate.Axis.PLUS_Z : HighwayCandidate.Axis.MINUS_Z,
-                    start.getX() >= 0 ? HighwayCandidate.RingSide.EAST : HighwayCandidate.RingSide.WEST));
-            segments.add(new RingSegment(sideA, sideB, sideZ > 0 ? HighwayCandidate.Axis.MINUS_X : HighwayCandidate.Axis.PLUS_X,
-                    sideZ > 0 ? HighwayCandidate.RingSide.SOUTH : HighwayCandidate.RingSide.NORTH));
-            segments.add(new RingSegment(sideB, end, end.getX() >= 0 ? HighwayCandidate.Axis.MINUS_Z : HighwayCandidate.Axis.PLUS_Z,
-                    end.getX() >= 0 ? HighwayCandidate.RingSide.EAST : HighwayCandidate.RingSide.WEST));
-            return compactSegments(segments);
-        }
-
-        if (start.getX() == end.getX()) {
-            segments.add(new RingSegment(start, end,
-                    Integer.compare(end.getZ(), start.getZ()) >= 0
-                            ? HighwayCandidate.Axis.PLUS_Z : HighwayCandidate.Axis.MINUS_Z,
-                    start.getX() > 0 ? HighwayCandidate.RingSide.EAST : HighwayCandidate.RingSide.WEST));
-            return segments;
-        }
-
-        if (start.getZ() == end.getZ()) {
-            segments.add(new RingSegment(start, end,
-                    Integer.compare(end.getX(), start.getX()) >= 0
-                            ? HighwayCandidate.Axis.PLUS_X : HighwayCandidate.Axis.MINUS_X,
-                    start.getZ() > 0 ? HighwayCandidate.RingSide.SOUTH : HighwayCandidate.RingSide.NORTH));
-            return segments;
-        }
-
-        BlockPos corner = new BlockPos(
-                start.getX() == 0 ? end.getX() : start.getX(),
-                start.getY(),
-                start.getZ() == 0 ? end.getZ() : start.getZ());
-        if (start.getX() == 0) {
-            segments.add(new RingSegment(start, corner,
-                    Integer.compare(corner.getX(), start.getX()) >= 0
-                            ? HighwayCandidate.Axis.PLUS_X : HighwayCandidate.Axis.MINUS_X,
-                    start.getZ() > 0 ? HighwayCandidate.RingSide.SOUTH : HighwayCandidate.RingSide.NORTH));
-            segments.add(new RingSegment(corner, end,
-                    Integer.compare(end.getZ(), corner.getZ()) >= 0
-                            ? HighwayCandidate.Axis.PLUS_Z : HighwayCandidate.Axis.MINUS_Z,
-                    corner.getX() > 0 ? HighwayCandidate.RingSide.EAST : HighwayCandidate.RingSide.WEST));
-        } else {
-            segments.add(new RingSegment(start, corner,
-                    Integer.compare(corner.getZ(), start.getZ()) >= 0
-                            ? HighwayCandidate.Axis.PLUS_Z : HighwayCandidate.Axis.MINUS_Z,
-                    start.getX() > 0 ? HighwayCandidate.RingSide.EAST : HighwayCandidate.RingSide.WEST));
-            segments.add(new RingSegment(corner, end,
-                    Integer.compare(end.getX(), corner.getX()) >= 0
-                            ? HighwayCandidate.Axis.PLUS_X : HighwayCandidate.Axis.MINUS_X,
-                    corner.getZ() > 0 ? HighwayCandidate.RingSide.SOUTH : HighwayCandidate.RingSide.NORTH));
-        }
-        return compactSegments(segments);
+        return segments;
     }
 
-    private static List<RingSegment> compactSegments(List<RingSegment> segments) {
-        List<RingSegment> compacted = new ArrayList<>();
-        for (RingSegment segment : segments) {
-            if (segment.start.getX() == segment.end.getX() && segment.start.getZ() == segment.end.getZ()) continue;
-            compacted.add(segment);
-        }
-        return compacted;
+    private static long ringOffset(BlockPos point, int ringRadius) {
+        int x = point.getX();
+        int z = point.getZ();
+        if (z == -ringRadius && x >= -ringRadius && x <= ringRadius) return x + (long) ringRadius;
+        if (x == ringRadius && z >= -ringRadius && z <= ringRadius) return 2L * ringRadius + z + ringRadius;
+        if (z == ringRadius && x >= -ringRadius && x <= ringRadius) return 4L * ringRadius + ringRadius - x;
+        if (x == -ringRadius && z >= -ringRadius && z <= ringRadius) return 6L * ringRadius + ringRadius - z;
+        return -1;
     }
 
-    private static int preferredRingX(BlockPos start, BlockPos end, BlockPos destination, int ringRadius) {
-        if (destination != null && destination.getX() != 0) {
-            return destination.getX() > 0 ? ringRadius : -ringRadius;
+    private static BlockPos ringPoint(long offset, int y, int ringRadius) {
+        long edgeLength = 2L * ringRadius;
+        if (offset < edgeLength) {
+            return new BlockPos((int) (offset - ringRadius), y, -ringRadius);
         }
-        if (start.getX() != 0) return start.getX() > 0 ? ringRadius : -ringRadius;
-        return end.getX() > 0 ? ringRadius : -ringRadius;
+        if (offset < edgeLength * 2) {
+            return new BlockPos(ringRadius, y, (int) (offset - edgeLength - ringRadius));
+        }
+        if (offset < edgeLength * 3) {
+            return new BlockPos((int) (ringRadius - (offset - edgeLength * 2)), y, ringRadius);
+        }
+        return new BlockPos(-ringRadius, y, (int) (ringRadius - (offset - edgeLength * 3)));
     }
 
-    private static int preferredRingZ(BlockPos start, BlockPos end, BlockPos destination, int ringRadius) {
-        if (destination != null && destination.getZ() != 0) {
-            return destination.getZ() > 0 ? ringRadius : -ringRadius;
-        }
-        if (start.getZ() != 0) return start.getZ() > 0 ? ringRadius : -ringRadius;
-        return end.getZ() > 0 ? ringRadius : -ringRadius;
+    private static boolean isValidRingSegment(RingSegment segment, int ringRadius) {
+        boolean cardinal = segment.start.getX() == segment.end.getX()
+                || segment.start.getZ() == segment.end.getZ();
+        if (!cardinal) return false;
+        if (ringOffset(segment.start, ringRadius) < 0 || ringOffset(segment.end, ringRadius) < 0) return false;
+        return segmentDistanceToPoint(
+                segment.start.getX(), segment.start.getZ(),
+                segment.end.getX(), segment.end.getZ(), 0, 0) >= ringRadius;
     }
 
     private static HighwayCandidate syntheticCandidate(HighwayCandidate.Axis axis,
@@ -879,13 +882,19 @@ public final class HighwayPlanner {
     private static int[] travelDirection(int[] onRampXZ,
                                          int[] exitXZ,
                                          HighwayCandidate.Axis axis) {
-        int tx = Integer.compare(exitXZ[0], onRampXZ[0]);
-        int tz = Integer.compare(exitXZ[1], onRampXZ[1]);
-        if (tx == 0 && tz == 0) {
-            tx = axis.stepDx;
-            tz = axis.stepDz;
-        }
-        return new int[]{tx, tz};
+        int dx = Integer.compare(exitXZ[0], onRampXZ[0]);
+        int dz = Integer.compare(exitXZ[1], onRampXZ[1]);
+        return normalizeTravelDirection(axis, dx, dz);
+    }
+
+    // Constrain movement to the selected highway axis.
+    private static int[] normalizeTravelDirection(HighwayCandidate.Axis axis,
+                                                  int requestedDx,
+                                                  int requestedDz) {
+        int projection = requestedDx * axis.stepDx + requestedDz * axis.stepDz;
+        int direction = Integer.compare(projection, 0);
+        if (direction == 0) direction = 1;
+        return new int[]{axis.stepDx * direction, axis.stepDz * direction};
     }
 
     private static HighwayGeometry.GeometryCandidate fallbackAxis(int ox, int oz, int dx, int dz) {

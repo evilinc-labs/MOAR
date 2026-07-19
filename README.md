@@ -3,7 +3,7 @@
 </p>
 
 <p align="center">
-    <img src="https://img.shields.io/badge/minecraft-1.21.4--1.21.11-green" alt="Minecraft">
+    <img src="https://img.shields.io/badge/minecraft-1.21.4--26.2-green" alt="Minecraft">
     <img src="https://img.shields.io/github/downloads/evilinc-labs/MOAR/total" alt="GitHub Downloads">
     <img src="https://img.shields.io/github/contributors/evilinc-labs/MOAR?color=blue" alt="GitHub Contributors">
     <img src="https://img.shields.io/github/stars/evilinc-labs/MOAR" alt="GitHub Repo Stars">
@@ -58,7 +58,7 @@
 ## Installation
 <a href="https://fabricmc.net/wiki/install"><img src="https://cdn.jonasjones.dev/mod-badges/support-fabric.png" width="150px" alt="Fabric Supported"></a>
 1. Install the Minecraft version corresponding to the mod release [(download)](https://www.minecraft.net/)
-2. Install [Fabric Loader](https://fabricmc.net/use/) ≥ 0.18.4
+2. Install the Fabric Loader version listed for your Minecraft release (26.2 requires 0.19.3+)
 3. Get the latest [Fabric API](https://modrinth.com/mod/fabric-api/) release for your MC version
 4. Get the latest MOAR version here [(download)](https://github.com/evilinc-labs/MOAR/releases/latest)
 5. *(Optional)* Get the corresponding [Baritone](https://github.com/cabaletta/baritone/releases) build for pathfinding
@@ -74,6 +74,7 @@
 | 1.21.9–1.21.10 | 0.138.4+1.21.10 | 21 |
 | 1.21.11 | 0.141.3+1.21.11 | 21 |
 | 26.1.1 (unobfuscated) | 0.145.4+26.1.1 | 25 |
+| 26.2 (unobfuscated) | 0.152.2+26.2 | 25 |
 
 ## Getting Started
 
@@ -334,12 +335,12 @@ All endpoints accept `Authorization: Bearer <api.key>` when `api.key` is set. Se
 
 ### Building from Source
 
-Requires **JDK 21+** for 1.21.x builds. The experimental 26.1.1 target requires **JDK 25+** and is only included when explicitly requested.
+Requires **JDK 21+** for 1.21.x builds. The 26.1.1 and 26.2 targets require **JDK 25+** and are included when explicitly requested.
 
 ```bash
 ./gradlew build                  # Build targets supported by the current JDK
 ./gradlew :1.21.8:build          # Build one version
-./gradlew -Pmoar.includeJava25Targets=true build  # Include 26.1.1 on JDK 25+
+./gradlew -Pmoar.includeJava25Targets=true build  # Include 26.1.1 and 26.2 on JDK 25+
 ./gradlew buildAndCollect        # Collect all JARs -> build/libs/<mod.version>/
 ```
 

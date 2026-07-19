@@ -1509,9 +1509,9 @@ public class SchematicPrinter {
     // block to reopen access) instead of digging through chat scrollback.
     public List<BlockPos> getAbandonedBuildTargets() {
         List<BlockPos> sorted = new ArrayList<>(abandonedBuildTargets);
-        sorted.sort(Comparator.comparingInt(BlockPos::getY)
-                .thenComparingInt(BlockPos::getX)
-                .thenComparingInt(BlockPos::getZ));
+        sorted.sort(Comparator.comparingInt((BlockPos pos) -> pos.getY())
+                .thenComparingInt(pos -> pos.getX())
+                .thenComparingInt(pos -> pos.getZ()));
         return sorted;
     }
 
@@ -1791,7 +1791,11 @@ public class SchematicPrinter {
                 if (dx * dx + dz * dz > radiusSq) {
                     continue;
                 }
+                /*? if >=26.1 {*//*
+                failedZones.add(center.offset(dx, 0, dz));
+                *//*?} else {*/
                 failedZones.add(center.add(dx, 0, dz));
+                /*?}*/
             }
         }
     }
@@ -3239,7 +3243,9 @@ public class SchematicPrinter {
         if (autoBuild) {
             tickAutoBuild(mc);
         } else {
-            /*? if >=26.1 {*//*
+            /*? if >=26.2 {*//*
+            if (mc.gui.screen() != null) return;
+            *//*?} else if >=26.1 {*//*
             if (mc.screen != null) return;
             *//*?} else {*/
             if (mc.currentScreen != null) return;
@@ -3347,7 +3353,9 @@ public class SchematicPrinter {
     *//*?} else {*/
     private void tickBuilding(MinecraftClient mc) {
     /*?}*/
-        /*? if >=26.1 {*//*
+        /*? if >=26.2 {*//*
+        if (mc.gui.screen() != null) return;
+        *//*?} else if >=26.1 {*//*
         if (mc.screen != null) return;
         *//*?} else {*/
         if (mc.currentScreen != null) return;
@@ -6763,7 +6771,9 @@ public class SchematicPrinter {
                         if (blockedDumpSlots.size() > blockedBefore) {
                             dumpShulkerTransferTimeouts++;
                             if (dumpShulkerTransferTimeouts >= MAX_DUMP_SHULKER_TRANSFER_TIMEOUTS) {
-                                /*? if >=26.1 {*//*
+                                /*? if >=26.2 {*//*
+                                if (mc.gui.screen() != null) player.clientSideCloseContainer();
+                                *//*?} else if >=26.1 {*//*
                                 if (mc.screen != null) player.clientSideCloseContainer();
                                 *//*?} else {*/
                                 if (mc.currentScreen != null) player.closeHandledScreen();
@@ -6836,7 +6846,9 @@ public class SchematicPrinter {
                 }
 
                 if (dumpWaitTicks >= MAX_SHULKER_PHASE_TICKS) {
-                    /*? if >=26.1 {*//*
+                    /*? if >=26.2 {*//*
+                    if (mc.gui.screen() != null) player.clientSideCloseContainer();
+                    *//*?} else if >=26.1 {*//*
                     if (mc.screen != null) player.clientSideCloseContainer();
                     *//*?} else {*/
                     if (mc.currentScreen != null) player.closeHandledScreen();
@@ -6851,7 +6863,12 @@ public class SchematicPrinter {
                 }
             }
             case 5 -> {
-                /*? if >=26.1 {*//*
+                /*? if >=26.2 {*//*
+                if (mc.gui.screen() != null) {
+                    player.clientSideCloseContainer();
+                    return;
+                }
+                *//*?} else if >=26.1 {*//*
                 if (mc.screen != null) {
                     player.clientSideCloseContainer();
                     return;
@@ -7396,7 +7413,9 @@ public class SchematicPrinter {
                 ChatHelper.info("§c⚠ Shulker unloading timed out — aborting.");
             }
             // Clean up: close any open screen, cancel breaking
-            /*? if >=26.1 {*//*
+            /*? if >=26.2 {*//*
+            if (mc.gui.screen() != null) player.clientSideCloseContainer();
+            *//*?} else if >=26.1 {*//*
             if (mc.screen != null) player.clientSideCloseContainer();
             *//*?} else {*/
             if (mc.currentScreen != null) player.closeHandledScreen();
@@ -7864,7 +7883,9 @@ public class SchematicPrinter {
 
                 // Screen not open yet — wait, then retry opening
                 if (shulkerUnloadTicks >= MAX_SHULKER_PHASE_TICKS) {
-                    /*? if >=26.1 {*//*
+                    /*? if >=26.2 {*//*
+                    if (mc.gui.screen() != null) player.clientSideCloseContainer();
+                    *//*?} else if >=26.1 {*//*
                     if (mc.screen != null) player.clientSideCloseContainer();
                     *//*?} else {*/
                     if (mc.currentScreen != null) player.closeHandledScreen();
@@ -7891,7 +7912,9 @@ public class SchematicPrinter {
             // Phase 6: Start breaking the placed shulker
             case 6 -> {
                 // Make sure screen is closed
-                /*? if >=26.1 {*//*
+                /*? if >=26.2 {*//*
+                if (mc.gui.screen() != null) {
+                *//*?} else if >=26.1 {*//*
                 if (mc.screen != null) {
                 *//*?} else {*/
                 if (mc.currentScreen != null) {
@@ -9906,8 +9929,13 @@ public class SchematicPrinter {
                 || "minecraft:powder_snow_bucket".equals(itemId)) {
             return 1;
         }
+        /*? if >=26.1 {*//*
+        int maxStackSize = item.getDefaultMaxStackSize();
+        *//*?} else {*/
+        int maxStackSize = defaultStack.getMaxCount();
+        /*?}*/
         return Math.min(desiredCount,
-                Math.max(1, defaultStack.getMaxCount() * RESTOCK_TARGET_STACKS_PER_ITEM));
+                Math.max(1, maxStackSize * RESTOCK_TARGET_STACKS_PER_ITEM));
     }
 
     /*? if >=26.1 {*//*
