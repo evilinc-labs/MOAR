@@ -193,7 +193,7 @@ public final class HighwayPlanner {
 
         for (HazardZone zone : HAZARD_ZONES) {
             if (segmentDistanceToPoint(ox, oz, onRampXZ[0], onRampXZ[1], zone.cx(), zone.cz()) < zone.radius()) {
-                int ringRadius = selectSafeRingDistance();
+                int ringRadius = selectSafeRingDistance(origin, detectOriginHighway(origin));
                 BlockPos boundary = nearestSafeRingPoint(origin, origin.getY(), ringRadius);
                 if (HighwayGeometry.horizontalDistance(
                         origin.getX(), origin.getZ(), boundary.getX(), boundary.getZ()) > 16.0) {
@@ -309,7 +309,7 @@ public final class HighwayPlanner {
         List<HighwayRoute.Leg> legs = new ArrayList<>();
         double totalCost = 0.0;
 
-        int ringRadius = selectSafeRingDistance();
+        int ringRadius = selectSafeRingDistance(origin, originHighway);
         BlockPos[] ringJunctions = chooseRingJunctions(origin, destination, floorYHint, ringRadius);
         BlockPos originJunction = ringJunctions[0];
         BlockPos destinationJunction = ringJunctions[1];
@@ -732,8 +732,25 @@ public final class HighwayPlanner {
                 scan.centerX(), scan.centerZ(), projection.getX(), projection.getZ()) <= tolerance;
     }
 
-    // Use the configured spawn boundary as the bypass ring.
-    private static int selectSafeRingDistance() {
+    // Keep a detected outer ring instead of returning to the default ring.
+    private static int selectSafeRingDistance(BlockPos origin, OriginHighway originHighway) {
+        if (origin == null || originHighway == null || originHighway.scan() == null) {
+            return HighwayRoute.SAFE_RING_RADIUS;
+        }
+        int fixedCoordinate = switch (originHighway.axis()) {
+            case PLUS_X, MINUS_X -> Math.abs(originHighway.scan().centerZ());
+            case PLUS_Z, MINUS_Z -> Math.abs(originHighway.scan().centerX());
+            default -> 0;
+        };
+        if (fixedCoordinate < HighwayRoute.SAFE_RING_RADIUS) {
+            return HighwayRoute.SAFE_RING_RADIUS;
+        }
+        for (double knownRing : HighwayGeometry.RING_DISTANCES) {
+            if (knownRing >= HighwayRoute.SAFE_RING_RADIUS
+                    && Math.abs(fixedCoordinate - knownRing) < HighwayGeometry.RING_DIAMOND_TOLERANCE) {
+                return fixedCoordinate;
+            }
+        }
         return HighwayRoute.SAFE_RING_RADIUS;
     }
 
