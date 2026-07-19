@@ -570,10 +570,11 @@ public final class BounceController {
         mc.options.jumpKey.setPressed(true);
         /*?}*/
         roofDetected = hasLowCeiling(mc);
+        double speed = horizontalSpeed();
         acceleratingArc = correctionRecoveryBounces == 0
-                && horizontalSpeed() < BounceTuning.TARGET_HORIZONTAL_SPEED;
+                && speed < BounceTuning.TARGET_HORIZONTAL_SPEED;
         arcPitch = acceleratingArc
-                ? BounceTuning.GLIDE_ACCEL_PITCH
+                ? accelerationPitch(speed, roofDetected)
                 : BounceTuning.GLIDE_CRUISE_PITCH;
         setPitch(BounceTuning.LAUNCH_PITCH);
         takeoffY = mc.player.getY();
@@ -582,6 +583,17 @@ public final class BounceController {
         launchArmed = false;
         LOGGER.debug("[Bounce] ground jump requested");
         return true;
+    }
+
+    private static float accelerationPitch(double speed, boolean lowRoof) {
+        if (lowRoof) return BounceTuning.GLIDE_ACCEL_PITCH;
+        if (speed < BounceTuning.ACCEL_LOW_SPEED_THRESHOLD) {
+            return BounceTuning.GLIDE_ACCEL_LOW_SPEED_PITCH;
+        }
+        if (speed < BounceTuning.ACCEL_MID_SPEED_THRESHOLD) {
+            return BounceTuning.GLIDE_ACCEL_MID_SPEED_PITCH;
+        }
+        return BounceTuning.GLIDE_ACCEL_PITCH;
     }
 
     // Arm flight at the first safe fractional launch point.
