@@ -36,8 +36,8 @@ public final class HighwayPlanner {
     private static final int FREENETHER_TAKEOFF_DISTANCE = 48;
     // Split off-ramp mining into short legs.
     private static final int FREENETHER_MINING_LEG_LENGTH = 12;
-    // Snap nearby roads directly onto the safe-ring boundary.
-    private static final int SAFE_RING_SNAP_DISTANCE = 128;
+    // Recover modest overshoots back to the safe ring.
+    private static final int SAFE_RING_RECOVERY_DISTANCE = 4_096;
 
     // Avoid direct routes through configured hazard zones.
     private record HazardZone(int cx, int cz, int radius) {}
@@ -316,7 +316,7 @@ public final class HighwayPlanner {
         BlockPos nearestOriginBoundary = nearestSafeRingPoint(origin, floorYHint, ringRadius);
         boolean originNearRing = HighwayGeometry.horizontalDistance(
                 origin.getX(), origin.getZ(),
-                nearestOriginBoundary.getX(), nearestOriginBoundary.getZ()) <= SAFE_RING_SNAP_DISTANCE;
+                nearestOriginBoundary.getX(), nearestOriginBoundary.getZ()) <= SAFE_RING_RECOVERY_DISTANCE;
         if (originNearRing) {
             originJunction = nearestOriginBoundary;
         }
@@ -576,6 +576,13 @@ public final class HighwayPlanner {
                                                   int[] onRampXZ,
                                                   int[] exitXZ) {
         if (isWithinSafeRing(origin) || isWithinSafeRing(destination)) return true;
+        BlockPos boundary = nearestSafeRingPoint(
+                origin, origin.getY(), HighwayRoute.SAFE_RING_RADIUS);
+        if (HighwayGeometry.horizontalDistance(
+                origin.getX(), origin.getZ(), boundary.getX(), boundary.getZ())
+                <= SAFE_RING_RECOVERY_DISTANCE) {
+            return true;
+        }
         for (HazardZone zone : HAZARD_ZONES) {
             if (segmentDistanceToPoint(onRampXZ[0], onRampXZ[1], exitXZ[0], exitXZ[1], zone.cx(), zone.cz())
                     < zone.radius()) {
@@ -691,22 +698,38 @@ public final class HighwayPlanner {
     private static Optional<HighwayDetectorBridge.ScanResult> confirmHighway(
             BlockPos origin, HighwayCandidate.Axis axis, BlockPos onRamp, int floorYHint) {
         HighwayDetectorBridge bridge = HighwayDetectorBridge.get();
-        Optional<HighwayDetectorBridge.ScanResult> scan = bridge.scanAt(origin, axis);
+        Optional<HighwayDetectorBridge.ScanResult> scan = compatibleScan(
+                bridge.scanAt(origin, axis), onRamp);
         if (scan.isPresent()) return scan;
         if (onRamp != null) {
-            scan = bridge.scanAt(onRamp, axis);
+            scan = compatibleScan(bridge.scanAt(onRamp, axis), onRamp);
             if (scan.isPresent()) return scan;
             BlockPos midpoint = new BlockPos(
                     (origin.getX() + onRamp.getX()) / 2, origin.getY(), (origin.getZ() + onRamp.getZ()) / 2);
-            scan = bridge.scanAt(midpoint, axis);
+            scan = compatibleScan(bridge.scanAt(midpoint, axis), onRamp);
             if (scan.isPresent()) return scan;
         }
         if (Math.abs(origin.getY() - floorYHint) > 4) {
-            scan = bridge.scanAt(new BlockPos(origin.getX(), floorYHint, origin.getZ()), axis);
-            if (scan.isPresent() || onRamp == null) return scan;
-            scan = bridge.scanAt(new BlockPos(onRamp.getX(), floorYHint, onRamp.getZ()), axis);
+            scan = compatibleScan(
+                    bridge.scanAt(new BlockPos(origin.getX(), floorYHint, origin.getZ()), axis), onRamp);
+            if (scan.isPresent()) return scan;
+            if (onRamp == null) return Optional.empty();
+            return compatibleScan(
+                    bridge.scanAt(new BlockPos(onRamp.getX(), floorYHint, onRamp.getZ()), axis), onRamp);
         }
-        return scan;
+        return Optional.empty();
+    }
+
+    private static Optional<HighwayDetectorBridge.ScanResult> compatibleScan(
+            Optional<HighwayDetectorBridge.ScanResult> scan, BlockPos projection) {
+        return scan.filter(result -> isScanNearProjection(result, projection));
+    }
+
+    private static boolean isScanNearProjection(HighwayDetectorBridge.ScanResult scan, BlockPos projection) {
+        if (scan == null || projection == null) return projection == null;
+        int tolerance = Math.max(16, scan.width() + 4);
+        return HighwayGeometry.horizontalDistance(
+                scan.centerX(), scan.centerZ(), projection.getX(), projection.getZ()) <= tolerance;
     }
 
     // Use the configured spawn boundary as the bypass ring.
