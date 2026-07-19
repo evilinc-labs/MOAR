@@ -421,7 +421,8 @@ public final class TravelManager {
         }
         // Detour around immediate obstacles.
         if (bounce.isWallAhead()) {
-            LOGGER.warn("[Travel] wall/obstacle ahead during bounce, triggering bypass");
+            LOGGER.warn("[Travel] wall/obstacle ahead during bounce, triggering bypass: {}",
+                    bounce.wallReason());
             if (state.mission == null || !state.mission.allowDetour) {
                 abort("wall ahead and detours disabled");
                 return;

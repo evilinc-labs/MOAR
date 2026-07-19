@@ -46,6 +46,7 @@ public final class BounceController {
     private boolean stuck;
     // Flag a wall ahead so TravelManager can detour without aborting.
     private boolean wallAhead;
+    private String wallReason;
     // Distinguish falls from generic no-progress stalls.
     private boolean stuckFromFall;
     private int     ticksActive;
@@ -101,6 +102,7 @@ public final class BounceController {
         arrived        = false;
         stuck          = false;
         wallAhead      = false;
+        wallReason     = "none";
         stuckFromFall  = false;
         ticksActive    = 0;
         launchPhase    = LaunchPhase.GROUNDED;
@@ -139,6 +141,7 @@ public final class BounceController {
     public boolean isStuck()     { return stuck; }
     // Check whether a wall was seen this tick.
     public boolean isWallAhead()     { return wallAhead; }
+    public String wallReason()       { return wallReason; }
     // Check whether the stuck state came from a fall.
     public boolean isStuckFromFall() { return stuckFromFall; }
     public int     ticksActive() { return ticksActive; }
@@ -192,13 +195,12 @@ public final class BounceController {
         }
 
         // ── Wall / obstruction detection ─────────────────────────
-        // Check horizontalCollision and scan 2-6 blocks ahead at
-        // player-body height.  TravelManager reads isWallAhead() to
-        // trigger a detour walk rather than a hard abort.
-        if (detectWallOrCollision(mc)) {
+        // Confirm a blocked corridor before requesting a detour.
+        if (detectBlockedCorridor(mc)) {
             wallObservationTicks++;
         } else {
             wallObservationTicks = 0;
+            wallReason = "none";
         }
         wallAhead = wallObservationTicks >= BounceTuning.WALL_CONFIRM_TICKS;
         if (wallAhead) return; // skip stuck-detection this tick
@@ -455,10 +457,9 @@ public final class BounceController {
     }
 
     // Find a blocked body-height corridor ahead.
-    private boolean detectWallOrCollision(
+    private boolean detectBlockedCorridor(
             /*? if >=26.1 {*//* Minecraft mc *//*?} else {*/ MinecraftClient mc /*?}*/) {
-        if (mc.player == null || highway == null) return false;
-        if (mc.player.horizontalCollision) return true;
+        if (mc.player == null || highway == null || exitColumn == null) return false;
 
         /*? if >=26.1 {*//*
         if (mc.level == null) return false;
@@ -466,7 +467,11 @@ public final class BounceController {
         if (mc.world == null) return false;
         /*?}*/
 
-        int hwY   = highway.floorY + 1;  // player feet level
+        /*? if >=26.1 {*//*
+        int feetY = mc.player.blockPosition().getY();
+        *//*?} else {*/
+        int feetY = mc.player.getBlockPos().getY();
+        /*?}*/
         float yaw = yawForDirection(travelDx, travelDz);
         double yawRad = Math.toRadians(yaw);
         double dirX   = -Math.sin(yawRad);
@@ -474,17 +479,22 @@ public final class BounceController {
         double px = mc.player.getX();
         double pz = mc.player.getZ();
 
+        long playerProjection = (long) Math.floor(px) * travelDx + (long) Math.floor(pz) * travelDz;
+        long exitProjection = (long) exitColumn.getX() * travelDx + (long) exitColumn.getZ() * travelDz;
+        int maxAhead = (int) Math.min(6L, exitProjection - playerProjection - 1L);
+        if (maxAhead < 2) return false;
+
         int perpX = highway.axis.perpDx();
         int perpZ = highway.axis.perpDz();
-        for (int d = 2; d <= 6; d++) {
+        for (int d = 2; d <= maxAhead; d++) {
             int centerX = (int) Math.floor(px + dirX * d);
             int centerZ = (int) Math.floor(pz + dirZ * d);
             boolean corridorBlocked = true;
             for (int lane = -1; lane <= 1; lane++) {
                 int bx = centerX + perpX * lane;
                 int bz = centerZ + perpZ * lane;
-                BlockPos feet = new BlockPos(bx, hwY, bz);
-                BlockPos head = new BlockPos(bx, hwY + 1, bz);
+                BlockPos feet = new BlockPos(bx, feetY, bz);
+                BlockPos head = new BlockPos(bx, feetY + 1, bz);
                 /*? if >=26.1 {*//*
                 boolean laneBlocked = isImpassable(mc.level.getBlockState(feet).getBlock())
                         || isImpassable(mc.level.getBlockState(head).getBlock());
@@ -497,7 +507,10 @@ public final class BounceController {
                     break;
                 }
             }
-            if (corridorBlocked) return true;
+            if (corridorBlocked) {
+                wallReason = "corridor@" + centerX + "," + feetY + "," + centerZ + " d=" + d;
+                return true;
+            }
         }
         return false;
     }
