@@ -12,8 +12,13 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 // Plan highway, mining, and optional flight legs.
 public final class HighwayPlanner {
+
+    private static final Logger LOGGER = LoggerFactory.getLogger("MOAR/HighwayPlanner");
 
     // Default highway floor Y before runtime refinement.
     private static final int DEFAULT_NETHER_FLOOR_Y = 120;
@@ -81,6 +86,8 @@ public final class HighwayPlanner {
                                HighwayCandidate.Axis axis,
                                HighwayCandidate.RingSide side) {}
 
+    private record RouteSafety(boolean safe, String reason) {}
+
     public Optional<HighwayRoute> plan(BlockPos origin, BlockPos destination, Options opts) {
         if (origin == null || destination == null) return Optional.empty();
         if (opts == null) opts = new Options();
@@ -133,11 +140,17 @@ public final class HighwayPlanner {
         if (plan == null || plan.primary == null || plan.legs.isEmpty()) return Optional.empty();
 
         // Enforce the spawn boundary against the route that will execute.
-        if (!isWithinSafeRing(origin) && !isWithinSafeRing(destination)
-                && !routeClearsAllHazards(origin, plan)) {
+        RouteSafety safety = inspectRouteSafety(origin, plan);
+        if (!isWithinSafeRing(origin) && !isWithinSafeRing(destination) && !safety.safe()) {
+            LOGGER.warn("[Travel] rejected unsafe direct route: {}", safety.reason());
             plan = buildSafeRingRoute(origin, destination, opts, floorY, originHighway);
-            if (plan == null || plan.primary == null || plan.legs.isEmpty()
-                    || !routeClearsAllHazards(origin, plan)) {
+            if (plan == null || plan.primary == null || plan.legs.isEmpty()) {
+                LOGGER.warn("[Travel] safe-ring route construction failed");
+                return Optional.empty();
+            }
+            safety = inspectRouteSafety(origin, plan);
+            if (!safety.safe()) {
+                LOGGER.warn("[Travel] rejected unsafe safe-ring route: {} route={}", safety.reason(), plan.legs());
                 return Optional.empty();
             }
         }
@@ -179,7 +192,15 @@ public final class HighwayPlanner {
         for (HazardZone zone : HAZARD_ZONES) {
             if (segmentDistanceToPoint(ox, oz, onRampXZ[0], onRampXZ[1], zone.cx(), zone.cz()) < zone.radius()) {
                 int ringRadius = selectSafeRingDistance();
-                return chooseRingJunctions(origin, destination, origin.getY(), ringRadius)[0];
+                BlockPos boundary = nearestSafeRingPoint(origin, origin.getY(), ringRadius);
+                if (HighwayGeometry.horizontalDistance(
+                        origin.getX(), origin.getZ(), boundary.getX(), boundary.getZ()) > 16.0) {
+                    return boundary;
+                }
+                BlockPos destinationJunction = chooseRingJunctions(
+                        origin, destination, origin.getY(), ringRadius)[1];
+                List<RingSegment> segments = planRingSegments(boundary, destinationJunction, ringRadius);
+                return segments.isEmpty() ? boundary : segments.get(0).end();
             }
         }
         return new BlockPos(onRampXZ[0], origin.getY(), onRampXZ[1]);
@@ -555,43 +576,50 @@ public final class HighwayPlanner {
         return false;
     }
 
-    private static boolean routeClearsAllHazards(BlockPos origin, RoutePlan route) {
+    private static RouteSafety inspectRouteSafety(BlockPos origin, RoutePlan route) {
         BlockPos cursor = origin;
         for (HighwayRoute.Leg leg : route.legs) {
             if (leg instanceof HighwayRoute.ApproachLeg approach) {
-                if (!segmentClearsAllHazards(cursor, approach.onRamp())) return false;
+                RouteSafety safety = inspectSegment(cursor, approach.onRamp(), "approach");
+                if (!safety.safe()) return safety;
                 cursor = approach.onRamp();
             } else if (leg instanceof HighwayRoute.BounceLeg bounce) {
-                if (!segmentClearsAllHazards(cursor, bounce.highway().entry)
-                        || !segmentClearsAllHazards(bounce.highway().entry, bounce.exitColumn())) {
-                    return false;
-                }
+                RouteSafety safety = inspectSegment(cursor, bounce.highway().entry, "bounce-ingress");
+                if (!safety.safe()) return safety;
+                safety = inspectSegment(bounce.highway().entry, bounce.exitColumn(), "bounce");
+                if (!safety.safe()) return safety;
                 cursor = bounce.exitColumn();
             } else if (leg instanceof HighwayRoute.TurnLeg turn) {
-                if (!segmentClearsAllHazards(cursor, turn.branchTarget())) return false;
+                RouteSafety safety = inspectSegment(cursor, turn.branchTarget(), "turn");
+                if (!safety.safe()) return safety;
                 cursor = turn.branchTarget();
             } else if (leg instanceof HighwayRoute.OffRampLeg offRamp) {
-                if (!segmentClearsAllHazards(cursor, offRamp.handoffPoint())) return false;
+                RouteSafety safety = inspectSegment(cursor, offRamp.handoffPoint(), "offramp");
+                if (!safety.safe()) return safety;
                 cursor = offRamp.handoffPoint();
             } else if (leg instanceof HighwayRoute.MineLeg mine) {
-                if (!segmentClearsAllHazards(cursor, mine.freeNetherTarget())) return false;
+                RouteSafety safety = inspectSegment(cursor, mine.freeNetherTarget(), "mine");
+                if (!safety.safe()) return safety;
                 cursor = mine.freeNetherTarget();
             } else if (leg instanceof HighwayRoute.FlightLeg flight) {
-                if (!segmentClearsAllHazards(cursor, flight.destination())) return false;
+                RouteSafety safety = inspectSegment(cursor, flight.destination(), "flight");
+                if (!safety.safe()) return safety;
                 cursor = flight.destination();
             }
         }
-        return true;
+        return new RouteSafety(true, "clear");
     }
 
-    private static boolean segmentClearsAllHazards(BlockPos from, BlockPos to) {
+    private static RouteSafety inspectSegment(BlockPos from, BlockPos to, String kind) {
         for (HazardZone zone : HAZARD_ZONES) {
-            if (segmentDistanceToPoint(
-                    from.getX(), from.getZ(), to.getX(), to.getZ(), zone.cx(), zone.cz()) < zone.radius()) {
-                return false;
+            double clearance = segmentDistanceToPoint(
+                    from.getX(), from.getZ(), to.getX(), to.getZ(), zone.cx(), zone.cz());
+            if (clearance < zone.radius()) {
+                return new RouteSafety(false, kind + " " + from.toShortString() + " -> "
+                        + to.toShortString() + " clearance=" + String.format("%.1f", clearance));
             }
         }
-        return true;
+        return new RouteSafety(true, "clear");
     }
 
     private static boolean isWithinSafeRing(BlockPos pos) {
@@ -684,6 +712,17 @@ public final class HighwayPlanner {
         }
         int sz = point.getZ() >= 0 ? ringRadius : -ringRadius;
         return new BlockPos(0, floorY, sz);
+    }
+
+    private static BlockPos nearestSafeRingPoint(BlockPos point, int floorY, int ringRadius) {
+        int x = point.getX();
+        int z = point.getZ();
+        if (Math.abs(x) >= Math.abs(z)) {
+            int boundaryX = x >= 0 ? ringRadius : -ringRadius;
+            return new BlockPos(boundaryX, floorY, Math.max(-ringRadius, Math.min(ringRadius, z)));
+        }
+        int boundaryZ = z >= 0 ? ringRadius : -ringRadius;
+        return new BlockPos(Math.max(-ringRadius, Math.min(ringRadius, x)), floorY, boundaryZ);
     }
 
     // Measure travel between square-ring junctions.
