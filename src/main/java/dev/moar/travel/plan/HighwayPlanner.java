@@ -36,6 +36,8 @@ public final class HighwayPlanner {
     private static final int FREENETHER_TAKEOFF_DISTANCE = 48;
     // Split off-ramp mining into short legs.
     private static final int FREENETHER_MINING_LEG_LENGTH = 12;
+    // Snap nearby roads directly onto the safe-ring boundary.
+    private static final int SAFE_RING_SNAP_DISTANCE = 128;
 
     // Avoid direct routes through configured hazard zones.
     private record HazardZone(int cx, int cz, int radius) {}
@@ -311,8 +313,15 @@ public final class HighwayPlanner {
         BlockPos[] ringJunctions = chooseRingJunctions(origin, destination, floorYHint, ringRadius);
         BlockPos originJunction = ringJunctions[0];
         BlockPos destinationJunction = ringJunctions[1];
+        BlockPos nearestOriginBoundary = nearestSafeRingPoint(origin, floorYHint, ringRadius);
+        boolean originNearRing = HighwayGeometry.horizontalDistance(
+                origin.getX(), origin.getZ(),
+                nearestOriginBoundary.getX(), nearestOriginBoundary.getZ()) <= SAFE_RING_SNAP_DISTANCE;
+        if (originNearRing) {
+            originJunction = nearestOriginBoundary;
+        }
         boolean preserveOriginHighway = canRideOriginHighwayToRing(origin, originHighway);
-        if (preserveOriginHighway) {
+        if (preserveOriginHighway && !originNearRing) {
             originJunction = ringIntersection(originHighway.axis(), origin, floorYHint, ringRadius);
         }
 
@@ -321,7 +330,7 @@ public final class HighwayPlanner {
         int primaryDz = 0;
         int floorY = floorYHint;
 
-        if (!isWithinSafeRing(origin)) {
+        if (!isWithinSafeRing(origin) && !originNearRing) {
             HighwayCandidate.Axis originAxis = preserveOriginHighway
                     ? originHighway.axis()
                     : spokeAxisForJunction(originJunction);
