@@ -63,7 +63,7 @@ public final class TravelManager {
     private int  settleYawDx  = 0;
     private int  settleYawDz  = 0;
 
-    // ── Auto-resume ────────────────────────────────────────────────
+    // Retry aborted missions after a short delay.
     private int autoResumeTicks    = 0; // ticks until next re-plan; 0 = none pending
     private int autoResumeAttempts = 0; // consecutive retries since mission start
     private static final int AUTO_RESUME_DELAY_TICKS = 100; // 5 s between retries
@@ -90,6 +90,9 @@ public final class TravelManager {
     private int miningRetargetAttempts = 0;
     private MiningTraversal miningTraversal = MiningTraversal.NONE;
     private BlockPos activeMineTarget;
+    private BlockPos activeTurnBranchTarget;
+    private BlockPos activeTurnTarget;
+    private int turnRetargetAttempts;
     private TravelPhase resupplyResumePhase;
     private BlockPos resupplyResumeTarget;
 
@@ -103,10 +106,6 @@ public final class TravelManager {
     }
 
     private TravelManager() {}
-
-    // ──────────────────────────────────────────────────────────────
-    // Public API
-    // ──────────────────────────────────────────────────────────────
 
     public synchronized boolean start(TravelMission mission) {
         if (state.phase != TravelPhase.IDLE) {
@@ -129,6 +128,7 @@ public final class TravelManager {
         miningRetargetAttempts = 0;
         miningTraversal = MiningTraversal.NONE;
         activeMineTarget = null;
+        clearTurnHandoff();
         resupplyResumePhase = null;
         resupplyResumeTarget = null;
         transition(TravelPhase.PLANNING, "user start: " + mission);
@@ -144,6 +144,7 @@ public final class TravelManager {
         miningRetargetAttempts = 0;
         miningTraversal = MiningTraversal.NONE;
         activeMineTarget = null;
+        clearTurnHandoff();
         if (state.phase == TravelPhase.ELYTRA_RESUPPLY) {
             elytra.pause();
         } else {
@@ -238,24 +239,19 @@ public final class TravelManager {
 
     public synchronized TravelPhase currentPhase() { return state.phase; }
 
-    // ──────────────────────────────────────────────────────────────
-    // Tick
-    // ──────────────────────────────────────────────────────────────
-
-    // Pre-physics tick: drives BounceController before tickMovement().
+    // Drive bounce before movement physics.
     public synchronized void preTick(Object client) {
         if (state.phase == TravelPhase.BOUNCING) {
             bounce.preTick();
         } else if (state.phase == TravelPhase.SETTLE) {
-            // Hold the travel yaw during the grace window so the player
-            // faces correctly when the bounce loop restarts.
+            // Hold travel yaw while bounce settles.
             setPlayerYaw(yawForDir(settleYawDx, settleYawDz));
         }
     }
 
     public synchronized void tick(Object client) {
         if (state.phase == TravelPhase.IDLE) {
-            // Count down auto-resume delay and re-plan when it expires.
+            // Replan when the retry delay expires.
             if (autoResumeTicks > 0) {
                 autoResumeTicks--;
                 if (autoResumeTicks == 0 && state.mission != null) {
@@ -267,6 +263,7 @@ public final class TravelManager {
                     state.mission = m;
                     currentLegIndex = -1;
                     detourResumeExit = null;
+                    clearTurnHandoff();
                     transition(TravelPhase.PLANNING, "auto-resume after abort (attempt " + autoResumeAttempts + ")");
                 }
             }
@@ -318,10 +315,6 @@ public final class TravelManager {
         }
     }
 
-    // ──────────────────────────────────────────────────────────────
-    // Phase handlers
-    // ──────────────────────────────────────────────────────────────
-
     private void tickPlanning() {
         if (state.route != null) return;
 
@@ -336,10 +329,7 @@ public final class TravelManager {
 
         Optional<HighwayRoute> planned = planner.plan(origin, state.mission.destination, opts);
         if (planned.isEmpty()) {
-            // Nothing confirmable from here — head toward the nearest
-            // plausible highway instead of flying all the way to the final
-            // destination in one uninterrupted hop. Incremental replanning
-            // (see advanceLeg()) re-evaluates once we arrive.
+            // Approach a plausible highway before replanning.
             if (tryStartDirectFlightFallback(origin, opts)) return;
             abort("planner returned no route");
             return;
@@ -347,17 +337,12 @@ public final class TravelManager {
 
         state.route = planned.get();
         currentLegIndex = -1;
+        clearTurnHandoff();
         LOGGER.info("[Travel] planned {}", state.route);
         advanceLeg("planning complete");
     }
 
-    // Attempts to start a direct open-nether flight toward the nearest
-    // plausible highway when no route could be planned. If the player's
-    // exact position doesn't have safe takeoff footing (common over lava
-    // lakes or open water, where the immediate spot is often unsuitable even
-    // though a good one is nearby), first walks to a nearby launch anchor via
-    // Baritone using the same search already used for mining-takeoff — rather
-    // than giving up immediately.
+    // Fly toward a plausible highway when no route is confirmed.
     private boolean tryStartDirectFlightFallback(BlockPos origin, HighwayPlanner.Options opts) {
         if (state.mission == null || !state.mission.useElytra) return false;
         if (horizontalDistance(origin, state.mission.destination) < state.mission.freeNetherFlightThreshold) {
@@ -379,6 +364,7 @@ public final class TravelManager {
 
         state.route = new HighwayRoute(null, legs, dist, 0, 0);
         currentLegIndex = -1;
+        clearTurnHandoff();
         LOGGER.info("[Travel] planner returned no highway route; flying toward nearest plausible highway at {}",
                 flightTarget.toShortString());
         advanceLeg("planning complete");
@@ -388,14 +374,13 @@ public final class TravelManager {
     private void tickApproach() {
         if (bridge.isArrived()) { advanceLeg("approach arrived"); return; }
         if (bridge.isStuck()) {
-            // Wither knockback or similar — abort and let auto-resume retry.
-            // Do NOT escalate to nether-elytra on a confined highway.
+            // Retry confined-highway knockback through replanning.
             abort("approach stuck — wither/knockback? auto-resume will retry");
         }
     }
 
     private void tickBouncing() {
-        // ── Elytra durability check ───────────────────────────────────
+        // Repair the elytra before continuing.
         /*? if >=26.1 {*//*
         Minecraft mc = Minecraft.getInstance();
         *//*?} else {*/
@@ -411,17 +396,15 @@ public final class TravelManager {
             return;
         }
 
-        // ── Stuck / fall — checked before grief so that a fall inside a grief
-        //    zone (e.g. wither blast + multi-chunk void) takes the elytra-escape
-        //    path rather than starting a ground detour with the player mid-air.
+        // Handle falls before planning ground detours.
         if (bounce.isStuck()) {
-            // No nether-elytra escalation: corridor too confined; auto-resume retries.
+            // Replan instead of launching inside a tunnel.
             abort(bounce.isStuckFromFall() ? "bounce: fell off highway, gliding to safety"
                                            : "bounce stuck");
             return;
         }
 
-        // ── Grief check: interrupt and plan detour ────────────────
+        // Detour around damaged highway sections.
         IntegrityReport rep = verifier.lastReport();
         if (rep.status() == IntegrityReport.Status.GRIEFED
                 && rep.confidence() >= DetourPlanner.MIN_CONFIDENCE) {
@@ -436,7 +419,7 @@ public final class TravelManager {
             transition(TravelPhase.VERIFYING_DETOUR, "grief detected: " + rep);
             return;
         }
-        // ── Wall / obstacle ahead: short forward detour ───────────
+        // Detour around immediate obstacles.
         if (bounce.isWallAhead()) {
             LOGGER.warn("[Travel] wall/obstacle ahead during bounce, triggering bypass");
             if (state.mission == null || !state.mission.allowDetour) {
@@ -446,7 +429,7 @@ public final class TravelManager {
             triggerWallBypass();
             return;
         }
-        // ── Knockback / lateral displacement ────────────────────
+        // Recover lateral highway displacement.
         if (isPlayerKnockedOffHighway()) {
             if (state.mission == null || !state.mission.allowDetour) {
                 abort("knocked off highway and detours disabled");
@@ -528,7 +511,7 @@ public final class TravelManager {
 
     // Resume bounce when Baritone finishes the detour.
     private void tickDetouring() {
-        // Fall detection: abort if below highway floor; auto-resume re-plans.
+        // Replan after falling below the highway.
         if (state.route != null && state.route.primary != null) {
             BlockPos pos = currentPlayerPos();
             if (pos != null && pos.getY() < state.route.primary.floorY - 2) {
@@ -536,7 +519,7 @@ public final class TravelManager {
                 return;
             }
         }
-        // If Baritone escalated to elytra during ground detour, follow its lead.
+        // Follow Baritone if it starts elytra flight.
         if (bridge.isElytraOwning()) {
             LOGGER.info("[Travel] DETOURING: Baritone switched to elytra — upgrading to ELYTRA_CRUISE");
             transition(TravelPhase.ELYTRA_CRUISE, "Baritone elytra took over during ground detour");
@@ -581,7 +564,7 @@ public final class TravelManager {
             if (detourResumeExit != null && state.route != null && resumeCurrentBounce()) {
                 LOGGER.info("[Travel] SETTLE done after {}t (grounded={}t), resuming bounce to {}",
                         settleTicks, settleGroundedTicks, detourResumeExit);
-                // Clear stale report without re-arming the scan timer.
+                // Clear stale integrity data.
                 verifier.resetLastReport();
                 detourResumeExit = null;
                 settleTicks = 0;
@@ -673,10 +656,22 @@ public final class TravelManager {
 
     private void tickOffRampHandoff() {
         if (bridge.isArrived()) {
+            clearTurnHandoff();
             advanceLeg("handoff complete");
             return;
         }
         if (bridge.isStuck()) {
+            if (turnRetargetAttempts == 0 && activeTurnBranchTarget != null) {
+                BlockPos replacement = resolveTurnTarget(activeTurnBranchTarget, activeTurnTarget);
+                if (replacement != null && !replacement.equals(activeTurnTarget)) {
+                    turnRetargetAttempts++;
+                    activeTurnTarget = replacement;
+                    LOGGER.info("[Travel] turn handoff retargeted to {}", replacement.toShortString());
+                    startBaritoneWalk(replacement, 2, TravelPhase.OFFRAMP_HANDOFF,
+                            "junction handoff retarget");
+                    return;
+                }
+            }
             abort("junction handoff stuck");
         }
     }
@@ -687,7 +682,7 @@ public final class TravelManager {
             String savedAbortReason = state.abortReason;
             releaseOwner(state.owner);
             verifier.clear();
-            // Keep mission so resume() can restart after stop.
+            // Preserve the mission for resume.
             TravelMission lastMission = state.mission;
             state.reset();
             state.mission = lastMission;
@@ -695,9 +690,10 @@ public final class TravelManager {
             detourResumeExit = null;
             miningTraversal = MiningTraversal.NONE;
             activeMineTarget = null;
+            clearTurnHandoff();
             TravelLog.get().recordTransition(0, 0, from, TravelPhase.IDLE, "terminal cleanup");
 
-            // Schedule automatic re-plan for non-user aborts when the mission allows it.
+            // Schedule eligible aborts for replanning.
             if (from == TravelPhase.ABORTED
                     && !"user stop".equals(savedAbortReason)
                     && lastMission != null && lastMission.autoResume
@@ -711,7 +707,7 @@ public final class TravelManager {
         }
     }
 
-    // Poll until Baritone elytra takes ownership; re-issue command each tick. Abort on timeout.
+    // Wait for Baritone to claim elytra movement.
     private void tickLaunch() {
         /*? if >=26.1 {*//*
         Minecraft mc = Minecraft.getInstance();
@@ -743,7 +739,7 @@ public final class TravelManager {
             return;
         }
 
-        // Re-issue pathTo every tick until Baritone acknowledges ownership.
+        // Reissue the flight goal until Baritone claims it.
         BlockPos dest = currentFlightDestination();
         if (dest == null && state.mission != null) dest = state.mission.destination;
         if (bridge.isAvailable() && dest != null) bridge.startElytraFlight(dest);
@@ -758,7 +754,7 @@ public final class TravelManager {
         }
     }
 
-    // Baritone nether-elytra owns movement; re-request on ownership loss.
+    // Restore Baritone flight ownership when lost.
     private void tickElytraCruise() {
         if (bridge.isElytraArrived()) {
             advanceLeg("elytra cruise arrived");
@@ -781,7 +777,7 @@ public final class TravelManager {
         }
     }
 
-    // Manual flight fallback while Baritone elytra is unavailable or never claims ownership.
+    // Fly manually when Baritone cannot claim elytra movement.
     private void tickElytraFallback() {
         if (bridge.isElytraOwning()) {
             LOGGER.info("[Travel] ELYTRA_FALLBACK -> ELYTRA_CRUISE (Baritone took over mid-flight)");
@@ -804,13 +800,13 @@ public final class TravelManager {
         }
     }
 
-    // FlightLeg destination from the current route, or null.
+    // Return the active flight destination.
     private BlockPos currentFlightDestination() {
         HighwayRoute.FlightLeg flightLeg = currentFlightLeg();
         return flightLeg != null ? flightLeg.destination() : null;
     }
 
-    // Nearest current-or-upcoming FlightLeg destination from the route, or null.
+    // Return the nearest remaining flight destination.
     private BlockPos plannedFlightDestination() {
         if (state.route == null) return null;
         int start = Math.max(currentLegIndex, 0);
@@ -821,16 +817,7 @@ public final class TravelManager {
         return null;
     }
 
-    // ──────────────────────────────────────────────────────────────
-    // Leg advancement
-    // ──────────────────────────────────────────────────────────────
-
-    // Legs run out short of the destination when a route only covered the
-    // portion HighwayPlanner could actually confirm from the previous origin
-    // (see HighwayPlanner's per-hop verification) — replan the remaining
-    // distance from here instead of declaring arrival early. This is what
-    // makes travel incremental/GPS-style: each planning pass only commits to
-    // what it can verify, and the mission naturally recalculates as it goes.
+    // Replan when confirmed legs end before the destination.
     private static final int FINAL_ARRIVAL_RADIUS = 32;
 
     private boolean isNearMissionDestination() {
@@ -877,8 +864,19 @@ public final class TravelManager {
                     bounceLeg.travelDx(), bounceLeg.travelDz());
             transition(TravelPhase.BOUNCING, reason + " -> bouncing to " + bounceLeg.exitColumn().toShortString());
         } else if (leg instanceof HighwayRoute.TurnLeg turnLeg) {
-            startBaritoneWalk(turnLeg.branchTarget(), 1, TravelPhase.OFFRAMP_HANDOFF,
-                    reason + " -> turn to " + turnLeg.branchTarget().toShortString());
+            activeTurnBranchTarget = turnLeg.branchTarget();
+            activeTurnTarget = resolveTurnTarget(activeTurnBranchTarget, null);
+            turnRetargetAttempts = 0;
+            if (activeTurnTarget == null) {
+                abort("junction handoff has no walkable branch target");
+                return;
+            }
+            if (!activeTurnTarget.equals(activeTurnBranchTarget)) {
+                LOGGER.info("[Travel] turn target normalized {} -> {}",
+                        activeTurnBranchTarget.toShortString(), activeTurnTarget.toShortString());
+            }
+            startBaritoneWalk(activeTurnTarget, 2, TravelPhase.OFFRAMP_HANDOFF,
+                    reason + " -> turn to " + activeTurnTarget.toShortString());
         } else if (leg instanceof HighwayRoute.OffRampLeg) {
             advanceLeg("offramp leg");
         } else if (leg instanceof HighwayRoute.MineLeg mine) {
@@ -888,10 +886,7 @@ public final class TravelManager {
         } else if (leg instanceof HighwayRoute.FlightLeg flightLeg) {
             BlockPos pos = currentPlayerPos();
             if (pos != null && isMostlyVerticalHop(pos, flightLeg.destination())) {
-                // Elytra flight only steers by horizontal yaw — a target that's
-                // nearly straight up/down gives an unstable/arbitrary heading
-                // and a blind dive into whatever's in the way (e.g. the
-                // highway tunnel's own roof). Baritone can path this safely.
+                // Walk steep vertical hops instead of flying blindly.
                 startBaritoneWalk(flightLeg.destination(), 2, TravelPhase.APPROACH_ONRAMP,
                         reason + " -> mostly-vertical hop, walking instead of flying");
                 return;
@@ -912,6 +907,77 @@ public final class TravelManager {
         acquireOwner(MovementOwner.BARITONE);
         bridge.walkNear(target, radius);
         transition(phase, reason + " -> walk to " + target.toShortString());
+    }
+
+    private BlockPos resolveTurnTarget(BlockPos requested, BlockPos excluded) {
+        HighwayRoute.BounceLeg nextBounce = nextBounceLeg();
+        BlockPos best = null;
+        int bestScore = Integer.MIN_VALUE;
+
+        for (int radius = 0; radius <= 6; radius++) {
+            for (int dx = -radius; dx <= radius; dx++) {
+                for (int dz = -radius; dz <= radius; dz++) {
+                    if (Math.max(Math.abs(dx), Math.abs(dz)) != radius) continue;
+                    for (int yOffset = 1; yOffset <= 3; yOffset++) {
+                        BlockPos candidate = new BlockPos(
+                                requested.getX() + dx,
+                                requested.getY() + yOffset,
+                                requested.getZ() + dz);
+                        if (candidate.equals(excluded) || !isWalkableFeetPosition(candidate)) continue;
+                        if (nextBounce != null && !isAlignedWithBounceLane(candidate, nextBounce)) continue;
+
+                        int score = 200
+                                - (Math.abs(dx) + Math.abs(dz)) * 12
+                                - Math.abs(yOffset - 1) * 8;
+                        if (nextBounce != null) {
+                            int laneDx = candidate.getX() - nextBounce.highway().entry.getX();
+                            int laneDz = candidate.getZ() - nextBounce.highway().entry.getZ();
+                            score -= Math.abs(laneDx * nextBounce.highway().axis.perpDx()
+                                    + laneDz * nextBounce.highway().axis.perpDz()) * 4;
+                        }
+                        if (score > bestScore) {
+                            bestScore = score;
+                            best = candidate;
+                        }
+                    }
+                }
+            }
+        }
+        return best;
+    }
+
+    private HighwayRoute.BounceLeg nextBounceLeg() {
+        if (state.route == null) return null;
+        for (int i = currentLegIndex + 1; i < state.route.legs.size(); i++) {
+            HighwayRoute.Leg leg = state.route.legs.get(i);
+            if (leg instanceof HighwayRoute.BounceLeg bounceLeg) return bounceLeg;
+            if (!(leg instanceof HighwayRoute.TurnLeg)) break;
+        }
+        return null;
+    }
+
+    private static boolean isAlignedWithBounceLane(BlockPos candidate, HighwayRoute.BounceLeg bounceLeg) {
+        HighwayCandidate highway = bounceLeg.highway();
+        int dx = candidate.getX() - highway.entry.getX();
+        int dz = candidate.getZ() - highway.entry.getZ();
+        int perpendicular = dx * highway.axis.perpDx() + dz * highway.axis.perpDz();
+        int limit = highway.axis.diagonal ? 4 : 3;
+        return Math.abs(perpendicular) <= limit;
+    }
+
+    private static boolean isWalkableFeetPosition(BlockPos feet) {
+        BlockPos floor = new BlockPos(feet.getX(), feet.getY() - 1, feet.getZ());
+        BlockPos head = new BlockPos(feet.getX(), feet.getY() + 1, feet.getZ());
+        return isChunkLoaded(floor)
+                && hasCollision(floor)
+                && isAirLike(feet)
+                && isAirLike(head);
+    }
+
+    private void clearTurnHandoff() {
+        activeTurnBranchTarget = null;
+        activeTurnTarget = null;
+        turnRetargetAttempts = 0;
     }
 
     private void startMiningTraversal(BlockPos target, String reason) {
@@ -1012,7 +1078,7 @@ public final class TravelManager {
         transition(TravelPhase.DETOURING, "wall bypass: goal=" + goal.toShortString());
     }
 
-    // True when the player's perp offset from the highway axis exceeds KNOCKBACK_PERP_THRESHOLD.
+    // Detect displacement beyond the highway lane.
     private boolean isPlayerKnockedOffHighway() {
         HighwayRoute.BounceLeg bounceLeg = currentBounceLeg();
         if (bounceLeg == null) return false;
@@ -1023,13 +1089,13 @@ public final class TravelManager {
         int perpDx = hw.axis.perpDx();
         int perpDz = hw.axis.perpDz();
         int perpSq = perpDx * perpDx + perpDz * perpDz; // 1 cardinal, 2 diagonal
-        // Avoid floating-point division: scale threshold by perpSq instead.
+        // Compare squared offsets without division.
         int dot = (pos.getX() - hw.entry.getX()) * perpDx
                 + (pos.getZ() - hw.entry.getZ()) * perpDz;
         return Math.abs(dot) > KNOCKBACK_PERP_THRESHOLD * perpSq;
     }
 
-    // Project player onto travel axis and walk back; reuses DETOURING → SETTLE → BOUNCING.
+    // Walk back to the active highway axis.
     private void triggerKnockbackRecovery() {
         BlockPos pos = currentPlayerPos();
         HighwayRoute.BounceLeg bounceLeg = currentBounceLeg();
@@ -1052,7 +1118,7 @@ public final class TravelManager {
                 return;
             }
         }
-        // Project player onto travel axis from the highway entry point.
+        // Project the player onto the highway axis.
         int ex = hw.entry.getX(), ez = hw.entry.getZ();
         int dx = bounceLeg.travelDx(), dz = bounceLeg.travelDz();
         int dSq = dx * dx + dz * dz;
@@ -1071,10 +1137,6 @@ public final class TravelManager {
         transition(TravelPhase.ABORTED, reason);
     }
 
-    // ──────────────────────────────────────────────────────────────
-    // Ownership
-    // ──────────────────────────────────────────────────────────────
-
     private void acquireOwner(MovementOwner next) {
         if (state.owner == next) return;
         releaseOwner(state.owner);
@@ -1089,10 +1151,6 @@ public final class TravelManager {
             case NONE            -> { /* nothing */ }
         }
     }
-
-    // ──────────────────────────────────────────────────────────────
-    // Transition
-    // ──────────────────────────────────────────────────────────────
 
     private void transition(TravelPhase next, String reason) {
         TravelPhase from = state.phase;
@@ -1477,10 +1535,7 @@ public final class TravelManager {
         return Math.max(Math.abs(a.getX() - b.getX()), Math.abs(a.getZ() - b.getZ()));
     }
 
-    // True when a hop is mostly a vertical climb/descent rather than a real
-    // horizontal glide — elytra flight only steers by yaw and can't aim at a
-    // target that's nearly straight up/down, so this must route through
-    // Baritone instead (see the FlightLeg handling in advanceLeg()).
+    // Route steep vertical hops through Baritone.
     private static boolean isMostlyVerticalHop(BlockPos pos, BlockPos target) {
         int horiz = horizontalDistance(pos, target);
         int vert = Math.abs(target.getY() - pos.getY());
@@ -1530,10 +1585,6 @@ public final class TravelManager {
         if (!hasCollision(below)) return false;
         return isAirLike(pos) && isAirLike(head) && isAirLike(above);
     }
-
-    // ──────────────────────────────────────────────────────────────
-    // Stonecutter-quarantined helpers
-    // ──────────────────────────────────────────────────────────────
 
     private static BlockPos currentPlayerPos() {
         /*? if >=26.1 {*//*
