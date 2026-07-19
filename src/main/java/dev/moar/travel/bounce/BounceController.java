@@ -574,7 +574,7 @@ public final class BounceController {
         acceleratingArc = correctionRecoveryBounces == 0
                 && speed < BounceTuning.TARGET_HORIZONTAL_SPEED;
         arcPitch = acceleratingArc
-                ? accelerationPitch(speed, roofDetected)
+                ? accelerationPitch(speed)
                 : BounceTuning.GLIDE_CRUISE_PITCH;
         setPitch(BounceTuning.LAUNCH_PITCH);
         takeoffY = mc.player.getY();
@@ -585,8 +585,7 @@ public final class BounceController {
         return true;
     }
 
-    private static float accelerationPitch(double speed, boolean lowRoof) {
-        if (lowRoof) return BounceTuning.GLIDE_ACCEL_PITCH;
+    private static float accelerationPitch(double speed) {
         if (speed < BounceTuning.ACCEL_LOW_SPEED_THRESHOLD) {
             return BounceTuning.GLIDE_ACCEL_LOW_SPEED_PITCH;
         }
