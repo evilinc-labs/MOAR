@@ -38,6 +38,8 @@ public final class HighwayPlanner {
     private static final int FREENETHER_MINING_LEG_LENGTH = 12;
     // Recover modest overshoots back to the safe ring.
     private static final int SAFE_RING_RECOVERY_DISTANCE = 4_096;
+    // Walk short corner approaches instead of starting a bounce.
+    private static final int MIN_RING_BOUNCE_LENGTH = 16;
 
     // Avoid direct routes through configured hazard zones.
     private record HazardZone(int cx, int cz, int radius) {}
@@ -390,6 +392,18 @@ public final class HighwayPlanner {
         for (int i = 0; i < ringSegments.size(); i++) {
             RingSegment segment = ringSegments.get(i);
             if (!isValidRingSegment(segment, ringRadius)) return null;
+            double segmentLength = HighwayGeometry.horizontalDistance(
+                    segment.start.getX(), segment.start.getZ(), segment.end.getX(), segment.end.getZ());
+            if (i == 0 && ringSegments.size() > 1 && segmentLength < MIN_RING_BOUNCE_LENGTH) {
+                RingSegment next = ringSegments.get(1);
+                int[] nextDir = travelDirection(point(next.start), point(next.end), next.axis);
+                BlockPos branchEntry = directionalAnchor(segment.end, nextDir[0], nextDir[1]);
+                legs.add(new HighwayRoute.TurnLeg(branchEntry));
+                totalCost += segmentLength;
+                LOGGER.info("[Travel] short ring corner approach {} blocks; turning toward {}",
+                        (int) Math.round(segmentLength), branchEntry.toShortString());
+                continue;
+            }
             int[] travelDir = travelDirection(point(segment.start), point(segment.end), segment.axis);
             BlockPos segmentEntry = segment.start;
             if (i > 0 || isWithinSafeRing(origin)) {
@@ -405,8 +419,7 @@ public final class HighwayPlanner {
                     segment.axis, HighwayCandidate.Category.RING, floorY,
                     segmentEntry, segment.end, segment.side, ringRadius);
             appendBounceLeg(legs, ring, travelDir[0], travelDir[1]);
-            totalCost += HighwayGeometry.horizontalDistance(
-                    ring.entry.getX(), ring.entry.getZ(), ring.exit.getX(), ring.exit.getZ());
+            totalCost += segmentLength;
             if (primary == null) {
                 primary = ring;
                 primaryDx = travelDir[0];
