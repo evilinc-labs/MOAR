@@ -18,7 +18,7 @@ import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 
-// Legacy guard; normal flying packets should stay alive for strict server validation.
+// Keep normal movement packets available for server validation.
 /*? if >=26.1 {*//*
 @Mixin(LocalPlayer.class)
 public abstract class PlacementMovementSuppressMixin extends AbstractClientPlayer {
@@ -96,8 +96,7 @@ public abstract class PlacementMovementSuppressMixin extends AbstractClientPlaye
         /*?}*/
     }
 
-    // Decoupled camera: swap the aim in only while the flying packet builds,
-    // then restore the view. Server gets real rotation, our screen doesn't move.
+    // Apply server aim only while the movement packet is built.
     @Unique private boolean moar$aimSwapped;
     @Unique private float moar$savedYaw;
     @Unique private float moar$savedPitch;
@@ -110,9 +109,7 @@ public abstract class PlacementMovementSuppressMixin extends AbstractClientPlaye
     private void moar$suppressPlacementMovementPacket(CallbackInfo ci) {
         if (PlacementEngine.consumeSuppressVanillaMove()
                 || PlacementEngine.shouldSuppressVanillaMovementPackets()) {
-            if (!this.isCamera()) {
-                return;
-            }
+            if (!this.isCamera()) return;
             ci.cancel();
             this.moar$setLastXYZ(this.getX(), this.getY(), this.getZ());
             /*? if >=26.1 {*//*
@@ -133,7 +130,6 @@ public abstract class PlacementMovementSuppressMixin extends AbstractClientPlaye
             /*?}*/
             return;
         }
-        // Not suppressed - inject the placement aim for the decoupled camera.
         if (PlacementEngine.hasServerAimOverride() && this.isCamera()) {
             /*? if >=26.1 {*//*
             this.moar$savedYaw = this.getYRot();

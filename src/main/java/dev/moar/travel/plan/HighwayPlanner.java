@@ -636,7 +636,6 @@ public final class HighwayPlanner {
             }
         };
     }
-
     private static double segmentDistanceToPoint(int x1, int z1, int x2, int z2, int px, int pz) {
         double dx = x2 - x1;
         double dz = z2 - z1;
