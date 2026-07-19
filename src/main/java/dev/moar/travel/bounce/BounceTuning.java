@@ -57,7 +57,7 @@ public final class BounceTuning {
     public static int CORRECTIONS_DISABLE_JUMP = 4;
 
     // Keep launch acknowledgement on the proven posture.
-    public static float LAUNCH_PITCH = 68.0f;
+    public static float LAUNCH_PITCH = 64.0f;
 
     // Stabilize speed after reaching the target.
     public static float GLIDE_CRUISE_PITCH = 60.0f;
@@ -65,9 +65,9 @@ public final class BounceTuning {
     // Accelerate only after the server accepts gliding.
     public static float GLIDE_ACCEL_PITCH = 40.0f;
 
-    // Build horizontal momentum before raising the glide pitch.
-    public static float GLIDE_ACCEL_LOW_SPEED_PITCH = 32.0f;
-    public static float GLIDE_ACCEL_MID_SPEED_PITCH = 36.0f;
+    // Hold the stable glide angle throughout acceleration.
+    public static float GLIDE_ACCEL_LOW_SPEED_PITCH = 40.0f;
+    public static float GLIDE_ACCEL_MID_SPEED_PITCH = 40.0f;
     public static double ACCEL_LOW_SPEED_THRESHOLD = 1.25;
     public static double ACCEL_MID_SPEED_THRESHOLD = 1.70;
 
