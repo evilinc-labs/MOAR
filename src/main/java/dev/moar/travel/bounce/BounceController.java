@@ -77,7 +77,7 @@ public final class BounceController {
     private boolean elytraLaunchEnabled;
     private boolean jumpingEnabled;
     private int wallObservationTicks;
-    private int correctionBaseline;
+    private int correctionEpisodeBaseline;
     private double lastPerpOffset;
     private float lastPerpCorrection;
 
@@ -122,7 +122,7 @@ public final class BounceController {
         elytraLaunchEnabled = true;
         jumpingEnabled = true;
         wallObservationTicks = 0;
-        correctionBaseline = SetbackMonitor.get().totalServerCorrections();
+        correctionEpisodeBaseline = SetbackMonitor.get().totalCorrectionEpisodes();
         lastPerpOffset = 0.0;
         lastPerpCorrection = 0.0f;
         noProgressTicks = 0;
@@ -673,17 +673,17 @@ public final class BounceController {
 
     private void applyCorrectionFallbacks() {
         SetbackMonitor monitor = SetbackMonitor.get();
-        int sessionCorrections = Math.max(0,
-                monitor.totalServerCorrections() - correctionBaseline);
-        int corrections = Math.min(sessionCorrections,
-                monitor.recentSetbackCount(BounceTuning.CORRECTION_STORM_WINDOW_TICKS));
-        if (elytraLaunchEnabled && corrections >= BounceTuning.CORRECTIONS_DISABLE_ELYTRA) {
+        int sessionEpisodes = Math.max(0,
+                monitor.totalCorrectionEpisodes() - correctionEpisodeBaseline);
+        int episodes = Math.min(sessionEpisodes,
+                monitor.recentCorrectionEpisodeCount(BounceTuning.CORRECTION_STORM_WINDOW_TICKS));
+        if (elytraLaunchEnabled && episodes >= BounceTuning.CORRECTIONS_DISABLE_ELYTRA) {
             elytraLaunchEnabled = false;
-            LOGGER.warn("[Bounce] {} server corrections; falling back to sprint-jump", corrections);
+            LOGGER.warn("[Bounce] {} correction episodes; falling back to sprint-jump", episodes);
         }
-        if (jumpingEnabled && corrections >= BounceTuning.CORRECTIONS_DISABLE_JUMP) {
+        if (jumpingEnabled && episodes >= BounceTuning.CORRECTIONS_DISABLE_JUMP) {
             jumpingEnabled = false;
-            LOGGER.warn("[Bounce] {} server corrections; falling back to plain highway sprint", corrections);
+            LOGGER.warn("[Bounce] {} correction episodes; falling back to plain highway sprint", episodes);
         }
     }
 

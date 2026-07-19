@@ -44,14 +44,14 @@ public final class BounceTuning {
     // Stop waiting for a rejected launch before landing.
     public static int LAUNCH_ACK_TIMEOUT_TICKS = 8;
 
-    // Fall back to sprint-jump after repeated correction packets.
-    public static int CORRECTIONS_DISABLE_ELYTRA = 3;
+    // Fall back after repeated correction episodes.
+    public static int CORRECTIONS_DISABLE_ELYTRA = 2;
 
-    // Count only correction storms, not mission-lifetime corrections.
-    public static int CORRECTION_STORM_WINDOW_TICKS = 60;
+    // Forget isolated correction episodes after this window.
+    public static int CORRECTION_STORM_WINDOW_TICKS = 400;
 
-    // Fall back to plain sprint if jumping is also rejected.
-    public static int CORRECTIONS_DISABLE_JUMP = 6;
+    // Fall back to plain sprint after persistent episodes.
+    public static int CORRECTIONS_DISABLE_JUMP = 4;
 
     // Keep launch acknowledgement on the proven posture.
     public static float LAUNCH_PITCH = 68.0f;
