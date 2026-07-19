@@ -73,6 +73,8 @@ public final class BounceController {
     private int correctionRecoveryBounces;
     private float launchPitch;
     private float arcPitch;
+    private float activeGlidePitch;
+    private int diveTicks;
     private boolean launchArmed;
     private boolean setbackHolding;
     private boolean elytraLaunchEnabled;
@@ -119,6 +121,8 @@ public final class BounceController {
         correctionRecoveryBounces = 0;
         launchPitch = BounceTuning.LAUNCH_PITCH;
         arcPitch = BounceTuning.GLIDE_ACCEL_PITCH;
+        activeGlidePitch = arcPitch;
+        diveTicks = 0;
         launchArmed = false;
         setbackHolding = false;
         elytraLaunchEnabled = true;
@@ -359,9 +363,16 @@ public final class BounceController {
                 ceilingContact = true;
             }
         }
+        activeGlidePitch = launchPhase == LaunchPhase.GLIDING
+                ? glidePitchForArc(rise, velocityY)
+                : arcPitch;
         float commandedPitch = launchPhase == LaunchPhase.GLIDING
-                ? arcPitch
+                ? activeGlidePitch
                 : launchPitch;
+        if (launchPhase == LaunchPhase.GLIDING
+                && activeGlidePitch == BounceTuning.GLIDE_ACCEL_DIVE_PITCH) {
+            diveTicks++;
+        }
         setPitch(elytraLaunchEnabled ? commandedPitch : 0.0f);
 
         switch (launchPhase) {
@@ -417,7 +428,7 @@ public final class BounceController {
                     if (completedBounces <= 3 || completedBounces % 10 == 0) {
                         double peakRise = Double.isNaN(peakY) || Double.isNaN(takeoffY)
                                 ? 0.0 : peakY - takeoffY;
-                        LOGGER.info("[Bounce] touchdown #{} speed={} peakRise={} ceiling={} roof={} mode={} launchPitch={} glidePitch={} offset={} steer={}",
+                        LOGGER.info("[Bounce] touchdown #{} speed={} peakRise={} ceiling={} roof={} mode={} launchPitch={} glidePitch={} diveTicks={} offset={} steer={}",
                                 completedBounces, String.format("%.3f", horizontalSpeed()),
                                 String.format("%.3f", peakRise), ceilingContact,
                                 roofDetected,
@@ -426,6 +437,7 @@ public final class BounceController {
                                         : acceleratingArc ? "ACCEL" : "CRUISE",
                                 String.format("%.1f", launchPitch),
                                 String.format("%.1f", arcPitch),
+                                diveTicks,
                                 String.format("%.3f", lastPerpOffset),
                                 String.format("%.2f", lastPerpCorrection));
                     }
@@ -585,6 +597,8 @@ public final class BounceController {
         arcPitch = acceleratingArc
                 ? accelerationPitch(speed)
                 : BounceTuning.GLIDE_CRUISE_PITCH;
+        activeGlidePitch = arcPitch;
+        diveTicks = 0;
         setPitch(launchPitch);
         takeoffY = mc.player.getY();
         peakY = takeoffY;
@@ -612,6 +626,16 @@ public final class BounceController {
             return BounceTuning.LAUNCH_ACCEL_MID_SPEED_PITCH;
         }
         return BounceTuning.LAUNCH_PITCH;
+    }
+
+    private float glidePitchForArc(double rise, double velocityY) {
+        if (acceleratingArc
+                && correctionRecoveryBounces == 0
+                && velocityY <= 0.0
+                && rise >= BounceTuning.GLIDE_ACCEL_DIVE_MIN_RISE) {
+            return BounceTuning.GLIDE_ACCEL_DIVE_PITCH;
+        }
+        return arcPitch;
     }
 
     // Arm flight at the first safe fractional launch point.

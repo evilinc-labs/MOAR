@@ -72,6 +72,8 @@ public final class BounceTuning {
     // Hold the stable glide angle throughout acceleration.
     public static float GLIDE_ACCEL_LOW_SPEED_PITCH = 40.0f;
     public static float GLIDE_ACCEL_MID_SPEED_PITCH = 40.0f;
+    public static float GLIDE_ACCEL_DIVE_PITCH = 56.0f;
+    public static double GLIDE_ACCEL_DIVE_MIN_RISE = 0.55;
     public static double ACCEL_LOW_SPEED_THRESHOLD = 1.25;
     public static double ACCEL_MID_SPEED_THRESHOLD = 1.70;
 
