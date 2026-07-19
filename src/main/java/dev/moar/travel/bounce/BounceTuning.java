@@ -63,12 +63,12 @@ public final class BounceTuning {
     public static float GLIDE_CRUISE_PITCH = 60.0f;
 
     // Accelerate only after the server accepts gliding.
-    public static float GLIDE_ACCEL_PITCH = 48.0f;
+    public static float GLIDE_ACCEL_PITCH = 40.0f;
 
-    // Extend low-speed glides to build horizontal momentum.
-    public static float GLIDE_ACCEL_LOW_SPEED_PITCH = 40.0f;
-    public static float GLIDE_ACCEL_MID_SPEED_PITCH = 44.0f;
-    public static double ACCEL_LOW_SPEED_THRESHOLD = 1.20;
+    // Build horizontal momentum before raising the glide pitch.
+    public static float GLIDE_ACCEL_LOW_SPEED_PITCH = 32.0f;
+    public static float GLIDE_ACCEL_MID_SPEED_PITCH = 36.0f;
+    public static double ACCEL_LOW_SPEED_THRESHOLD = 1.25;
     public static double ACCEL_MID_SPEED_THRESHOLD = 1.70;
 
     // Accelerate until reaching 40 blocks per second.
