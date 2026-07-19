@@ -75,6 +75,7 @@ public final class BounceController {
     private float arcPitch;
     private float activeGlidePitch;
     private int diveTicks;
+    private double peakHorizontalSpeed;
     private boolean launchArmed;
     private boolean setbackHolding;
     private boolean elytraLaunchEnabled;
@@ -123,6 +124,7 @@ public final class BounceController {
         arcPitch = BounceTuning.GLIDE_ACCEL_PITCH;
         activeGlidePitch = arcPitch;
         diveTicks = 0;
+        peakHorizontalSpeed = 0.0;
         launchArmed = false;
         setbackHolding = false;
         elytraLaunchEnabled = true;
@@ -357,6 +359,7 @@ public final class BounceController {
         double velocityY = mc.player.getVelocity().y;
         /*?}*/
         double rise = Double.isNaN(takeoffY) ? 0.0 : mc.player.getY() - takeoffY;
+        peakHorizontalSpeed = Math.max(peakHorizontalSpeed, horizontalSpeed());
         if (!Double.isNaN(takeoffY)) {
             peakY = Double.isNaN(peakY) ? mc.player.getY() : Math.max(peakY, mc.player.getY());
             if (!onGround && mc.player.verticalCollision) {
@@ -364,7 +367,7 @@ public final class BounceController {
             }
         }
         activeGlidePitch = launchPhase == LaunchPhase.GLIDING
-                ? glidePitchForArc(rise, velocityY)
+                ? glidePitchForArc(rise)
                 : arcPitch;
         float commandedPitch = launchPhase == LaunchPhase.GLIDING
                 ? activeGlidePitch
@@ -428,8 +431,9 @@ public final class BounceController {
                     if (completedBounces <= 3 || completedBounces % 10 == 0) {
                         double peakRise = Double.isNaN(peakY) || Double.isNaN(takeoffY)
                                 ? 0.0 : peakY - takeoffY;
-                        LOGGER.info("[Bounce] touchdown #{} speed={} peakRise={} ceiling={} roof={} mode={} launchPitch={} glidePitch={} diveTicks={} offset={} steer={}",
+                        LOGGER.info("[Bounce] touchdown #{} speed={} peakSpeed={} peakRise={} ceiling={} roof={} mode={} launchPitch={} glidePitch={} diveTicks={} offset={} steer={}",
                                 completedBounces, String.format("%.3f", horizontalSpeed()),
+                                String.format("%.3f", peakHorizontalSpeed),
                                 String.format("%.3f", peakRise), ceilingContact,
                                 roofDetected,
                                 correctionRecoveryBounces > 0
@@ -599,6 +603,7 @@ public final class BounceController {
                 : BounceTuning.GLIDE_CRUISE_PITCH;
         activeGlidePitch = arcPitch;
         diveTicks = 0;
+        peakHorizontalSpeed = speed;
         setPitch(launchPitch);
         takeoffY = mc.player.getY();
         peakY = takeoffY;
@@ -628,10 +633,9 @@ public final class BounceController {
         return BounceTuning.LAUNCH_PITCH;
     }
 
-    private float glidePitchForArc(double rise, double velocityY) {
+    private float glidePitchForArc(double rise) {
         if (acceleratingArc
                 && correctionRecoveryBounces == 0
-                && velocityY <= 0.0
                 && rise >= BounceTuning.GLIDE_ACCEL_DIVE_MIN_RISE) {
             return BounceTuning.GLIDE_ACCEL_DIVE_PITCH;
         }

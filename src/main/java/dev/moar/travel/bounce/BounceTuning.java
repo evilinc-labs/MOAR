@@ -60,8 +60,8 @@ public final class BounceTuning {
     public static float LAUNCH_PITCH = 68.0f;
 
     // Taper launch pitch as horizontal speed rises.
-    public static float LAUNCH_ACCEL_LOW_SPEED_PITCH = 72.0f;
-    public static float LAUNCH_ACCEL_MID_SPEED_PITCH = 70.0f;
+    public static float LAUNCH_ACCEL_LOW_SPEED_PITCH = 68.0f;
+    public static float LAUNCH_ACCEL_MID_SPEED_PITCH = 68.0f;
 
     // Stabilize speed after reaching the target.
     public static float GLIDE_CRUISE_PITCH = 60.0f;
@@ -73,7 +73,7 @@ public final class BounceTuning {
     public static float GLIDE_ACCEL_LOW_SPEED_PITCH = 40.0f;
     public static float GLIDE_ACCEL_MID_SPEED_PITCH = 40.0f;
     public static float GLIDE_ACCEL_DIVE_PITCH = 56.0f;
-    public static double GLIDE_ACCEL_DIVE_MIN_RISE = 0.55;
+    public static double GLIDE_ACCEL_DIVE_MIN_RISE = 0.25;
     public static double ACCEL_LOW_SPEED_THRESHOLD = 1.25;
     public static double ACCEL_MID_SPEED_THRESHOLD = 1.70;
 
