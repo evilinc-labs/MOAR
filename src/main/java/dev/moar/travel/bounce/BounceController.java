@@ -71,6 +71,7 @@ public final class BounceController {
     private boolean roofDetected;
     private boolean acceleratingArc;
     private int correctionRecoveryBounces;
+    private float launchPitch;
     private float arcPitch;
     private boolean launchArmed;
     private boolean setbackHolding;
@@ -116,6 +117,7 @@ public final class BounceController {
         roofDetected = false;
         acceleratingArc = true;
         correctionRecoveryBounces = 0;
+        launchPitch = BounceTuning.LAUNCH_PITCH;
         arcPitch = BounceTuning.GLIDE_ACCEL_PITCH;
         launchArmed = false;
         setbackHolding = false;
@@ -359,7 +361,7 @@ public final class BounceController {
         }
         float commandedPitch = launchPhase == LaunchPhase.GLIDING
                 ? arcPitch
-                : BounceTuning.LAUNCH_PITCH;
+                : launchPitch;
         setPitch(elytraLaunchEnabled ? commandedPitch : 0.0f);
 
         switch (launchPhase) {
@@ -422,7 +424,7 @@ public final class BounceController {
                                 correctionRecoveryBounces > 0
                                         ? "RECOVERY"
                                         : acceleratingArc ? "ACCEL" : "CRUISE",
-                                String.format("%.1f", BounceTuning.LAUNCH_PITCH),
+                                String.format("%.1f", launchPitch),
                                 String.format("%.1f", arcPitch),
                                 String.format("%.3f", lastPerpOffset),
                                 String.format("%.2f", lastPerpCorrection));
@@ -577,10 +579,13 @@ public final class BounceController {
         double speed = horizontalSpeed();
         acceleratingArc = correctionRecoveryBounces == 0
                 && speed < BounceTuning.TARGET_HORIZONTAL_SPEED;
+        launchPitch = acceleratingArc
+                ? accelerationLaunchPitch(speed)
+                : BounceTuning.LAUNCH_PITCH;
         arcPitch = acceleratingArc
                 ? accelerationPitch(speed)
                 : BounceTuning.GLIDE_CRUISE_PITCH;
-        setPitch(BounceTuning.LAUNCH_PITCH);
+        setPitch(launchPitch);
         takeoffY = mc.player.getY();
         peakY = takeoffY;
         ceilingContact = false;
@@ -597,6 +602,16 @@ public final class BounceController {
             return BounceTuning.GLIDE_ACCEL_MID_SPEED_PITCH;
         }
         return BounceTuning.GLIDE_ACCEL_PITCH;
+    }
+
+    private static float accelerationLaunchPitch(double speed) {
+        if (speed < BounceTuning.ACCEL_LOW_SPEED_THRESHOLD) {
+            return BounceTuning.LAUNCH_ACCEL_LOW_SPEED_PITCH;
+        }
+        if (speed < BounceTuning.ACCEL_MID_SPEED_THRESHOLD) {
+            return BounceTuning.LAUNCH_ACCEL_MID_SPEED_PITCH;
+        }
+        return BounceTuning.LAUNCH_PITCH;
     }
 
     // Arm flight at the first safe fractional launch point.

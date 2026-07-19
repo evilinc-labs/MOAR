@@ -57,7 +57,11 @@ public final class BounceTuning {
     public static int CORRECTIONS_DISABLE_JUMP = 4;
 
     // Keep launch acknowledgement on the proven posture.
-    public static float LAUNCH_PITCH = 64.0f;
+    public static float LAUNCH_PITCH = 68.0f;
+
+    // Taper launch pitch as horizontal speed rises.
+    public static float LAUNCH_ACCEL_LOW_SPEED_PITCH = 72.0f;
+    public static float LAUNCH_ACCEL_MID_SPEED_PITCH = 70.0f;
 
     // Stabilize speed after reaching the target.
     public static float GLIDE_CRUISE_PITCH = 60.0f;
