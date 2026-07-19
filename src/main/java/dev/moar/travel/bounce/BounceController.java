@@ -481,7 +481,9 @@ public final class BounceController {
 
         long playerProjection = (long) Math.floor(px) * travelDx + (long) Math.floor(pz) * travelDz;
         long exitProjection = (long) exitColumn.getX() * travelDx + (long) exitColumn.getZ() * travelDz;
-        int maxAhead = (int) Math.min(6L, exitProjection - playerProjection - 1L);
+        int maxAhead = (int) Math.min(
+                BounceTuning.OBSTACLE_SCAN_AHEAD,
+                exitProjection - playerProjection - 1L);
         if (maxAhead < 2) return false;
 
         int perpX = highway.axis.perpDx();
@@ -489,7 +491,8 @@ public final class BounceController {
         for (int d = 2; d <= maxAhead; d++) {
             int centerX = (int) Math.floor(px + dirX * d);
             int centerZ = (int) Math.floor(pz + dirZ * d);
-            boolean corridorBlocked = true;
+            boolean centerBlocked = false;
+            int blockedLanes = 0;
             for (int lane = -1; lane <= 1; lane++) {
                 int bx = centerX + perpX * lane;
                 int bz = centerZ + perpZ * lane;
@@ -502,13 +505,14 @@ public final class BounceController {
                 boolean laneBlocked = isImpassable(mc.world.getBlockState(feet).getBlock())
                         || isImpassable(mc.world.getBlockState(head).getBlock());
                 /*?}*/
-                if (!laneBlocked) {
-                    corridorBlocked = false;
-                    break;
+                if (laneBlocked) {
+                    blockedLanes++;
+                    if (lane == 0) centerBlocked = true;
                 }
             }
-            if (corridorBlocked) {
-                wallReason = "corridor@" + centerX + "," + feetY + "," + centerZ + " d=" + d;
+            if (centerBlocked) {
+                String kind = blockedLanes == 3 ? "corridor" : "center-lane";
+                wallReason = kind + "@" + centerX + "," + feetY + "," + centerZ + " d=" + d;
                 return true;
             }
         }
