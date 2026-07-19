@@ -734,7 +734,12 @@ public final class HighwayPlanner {
 
     // Keep a detected outer ring instead of returning to the default ring.
     private static int selectSafeRingDistance(BlockPos origin, OriginHighway originHighway) {
-        if (origin == null || originHighway == null || originHighway.scan() == null) {
+        if (origin == null) {
+            return HighwayRoute.SAFE_RING_RADIUS;
+        }
+        int coordinateRing = knownRingRadiusAt(origin);
+        if (coordinateRing > 0) return coordinateRing;
+        if (originHighway == null || originHighway.scan() == null) {
             return HighwayRoute.SAFE_RING_RADIUS;
         }
         int fixedCoordinate = switch (originHighway.axis()) {
@@ -752,6 +757,18 @@ public final class HighwayPlanner {
             }
         }
         return HighwayRoute.SAFE_RING_RADIUS;
+    }
+
+    private static int knownRingRadiusAt(BlockPos origin) {
+        int boundaryCoordinate = Math.max(Math.abs(origin.getX()), Math.abs(origin.getZ()));
+        if (boundaryCoordinate < HighwayRoute.SAFE_RING_RADIUS) return 0;
+        for (double knownRing : HighwayGeometry.RING_DISTANCES) {
+            if (knownRing >= HighwayRoute.SAFE_RING_RADIUS
+                    && Math.abs(boundaryCoordinate - knownRing) < HighwayGeometry.RING_DIAMOND_TOLERANCE) {
+                return boundaryCoordinate;
+            }
+        }
+        return 0;
     }
 
     private static BlockPos ringJunctionOnAxis(BlockPos point, boolean xAxis, int floorY, int ringRadius) {
