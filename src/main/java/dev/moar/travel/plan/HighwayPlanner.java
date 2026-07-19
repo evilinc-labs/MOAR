@@ -115,7 +115,9 @@ public final class HighwayPlanner {
         if (bestFallback == null) bestFallback = fallbackAxis(ox, oz, dx, dz);
 
         CandidateRoute bestDirect = null;
+        CandidateRoute currentHighwayDirect = null;
         double bestScore = Double.POSITIVE_INFINITY;
+        double currentHighwayScore = Double.POSITIVE_INFINITY;
         for (HighwayGeometry.GeometryCandidate candidate : candidates) {
             int[] onRampXZ = HighwayGeometry.projectOnto(candidate, ox, oz);
             int[] exitXZ   = HighwayGeometry.projectOnto(candidate, dx, dz);
@@ -127,6 +129,13 @@ public final class HighwayPlanner {
                 bestScore = score;
                 bestDirect = new CandidateRoute(candidate, route, onRampXZ, exitXZ);
             }
+            if (originHighway != null
+                    && candidate.axis == originHighway.axis()
+                    && startsOutwardOnHighway(origin, route)
+                    && score < currentHighwayScore) {
+                currentHighwayScore = score;
+                currentHighwayDirect = new CandidateRoute(candidate, route, onRampXZ, exitXZ);
+            }
         }
 
         if (bestDirect == null) {
@@ -137,8 +146,15 @@ public final class HighwayPlanner {
             bestDirect = new CandidateRoute(bestFallback, route, onRampXZ, exitXZ);
         }
 
+        if (currentHighwayDirect != null
+                && inspectRouteSafety(origin, currentHighwayDirect.route()).safe()) {
+            bestDirect = currentHighwayDirect;
+            LOGGER.info("[Travel] retaining detected {} highway for outward route",
+                    originHighway.axis());
+        }
+
         RoutePlan plan = shouldUseSafeRingRoute(origin, destination,
-                bestDirect.onRampXZ(), bestDirect.exitXZ())
+                bestDirect.onRampXZ(), bestDirect.exitXZ(), bestDirect.route())
                 ? buildSafeRingRoute(origin, destination, opts, floorY, originHighway)
                 : bestDirect.route();
         if (plan == null || plan.primary == null || plan.legs.isEmpty()) return Optional.empty();
@@ -587,7 +603,12 @@ public final class HighwayPlanner {
     private static boolean shouldUseSafeRingRoute(BlockPos origin,
                                                   BlockPos destination,
                                                   int[] onRampXZ,
-                                                  int[] exitXZ) {
+                                                  int[] exitXZ,
+                                                  RoutePlan directRoute) {
+        if (startsOutwardOnHighway(origin, directRoute)
+                && inspectRouteSafety(origin, directRoute).safe()) {
+            return false;
+        }
         if (isWithinSafeRing(origin) || isWithinSafeRing(destination)) return true;
         BlockPos boundary = nearestSafeRingPoint(
                 origin, origin.getY(), HighwayRoute.SAFE_RING_RADIUS);
@@ -603,6 +624,15 @@ public final class HighwayPlanner {
             }
         }
         return false;
+    }
+
+    private static boolean startsOutwardOnHighway(BlockPos origin, RoutePlan route) {
+        if (origin == null || route == null || route.legs().isEmpty()) return false;
+        if (!(route.legs().get(0) instanceof HighwayRoute.BounceLeg bounce)) return false;
+        int before = Math.max(Math.abs(origin.getX()), Math.abs(origin.getZ()));
+        int nextX = origin.getX() + bounce.travelDx() * 16;
+        int nextZ = origin.getZ() + bounce.travelDz() * 16;
+        return Math.max(Math.abs(nextX), Math.abs(nextZ)) > before;
     }
 
     private static RouteSafety inspectRouteSafety(BlockPos origin, RoutePlan route) {
