@@ -127,10 +127,20 @@ public final class HighwayPlanner {
         }
 
         RoutePlan plan = shouldUseSafeRingRoute(origin, destination,
-                bestDirect.geometry(), bestDirect.onRampXZ(), bestDirect.exitXZ())
+                bestDirect.onRampXZ(), bestDirect.exitXZ())
                 ? buildSafeRingRoute(origin, destination, opts, floorY, originHighway)
                 : bestDirect.route();
         if (plan == null || plan.primary == null || plan.legs.isEmpty()) return Optional.empty();
+
+        // Enforce the spawn boundary against the route that will execute.
+        if (!isWithinSafeRing(origin) && !isWithinSafeRing(destination)
+                && !routeClearsAllHazards(origin, plan)) {
+            plan = buildSafeRingRoute(origin, destination, opts, floorY, originHighway);
+            if (plan == null || plan.primary == null || plan.legs.isEmpty()
+                    || !routeClearsAllHazards(origin, plan)) {
+                return Optional.empty();
+            }
+        }
 
         return Optional.of(new HighwayRoute(
                 plan.primary, plan.legs, plan.totalCost, plan.travelDx, plan.travelDz));
@@ -533,10 +543,8 @@ public final class HighwayPlanner {
 
     private static boolean shouldUseSafeRingRoute(BlockPos origin,
                                                   BlockPos destination,
-                                                  HighwayGeometry.GeometryCandidate best,
                                                   int[] onRampXZ,
                                                   int[] exitXZ) {
-        if (candidateClearsAllHazards(best)) return false;
         if (isWithinSafeRing(origin) || isWithinSafeRing(destination)) return true;
         for (HazardZone zone : HAZARD_ZONES) {
             if (segmentDistanceToPoint(onRampXZ[0], onRampXZ[1], exitXZ[0], exitXZ[1], zone.cx(), zone.cz())
@@ -547,17 +555,41 @@ public final class HighwayPlanner {
         return false;
     }
 
-    // Require ring and diamond routes to clear every hazard zone.
-    private static boolean candidateClearsAllHazards(HighwayGeometry.GeometryCandidate best) {
-        if (best.category != HighwayCandidate.Category.RING
-                && best.category != HighwayCandidate.Category.DIAMOND) {
-            return false;
+    private static boolean routeClearsAllHazards(BlockPos origin, RoutePlan route) {
+        BlockPos cursor = origin;
+        for (HighwayRoute.Leg leg : route.legs) {
+            if (leg instanceof HighwayRoute.ApproachLeg approach) {
+                if (!segmentClearsAllHazards(cursor, approach.onRamp())) return false;
+                cursor = approach.onRamp();
+            } else if (leg instanceof HighwayRoute.BounceLeg bounce) {
+                if (!segmentClearsAllHazards(cursor, bounce.highway().entry)
+                        || !segmentClearsAllHazards(bounce.highway().entry, bounce.exitColumn())) {
+                    return false;
+                }
+                cursor = bounce.exitColumn();
+            } else if (leg instanceof HighwayRoute.TurnLeg turn) {
+                if (!segmentClearsAllHazards(cursor, turn.branchTarget())) return false;
+                cursor = turn.branchTarget();
+            } else if (leg instanceof HighwayRoute.OffRampLeg offRamp) {
+                if (!segmentClearsAllHazards(cursor, offRamp.handoffPoint())) return false;
+                cursor = offRamp.handoffPoint();
+            } else if (leg instanceof HighwayRoute.MineLeg mine) {
+                if (!segmentClearsAllHazards(cursor, mine.freeNetherTarget())) return false;
+                cursor = mine.freeNetherTarget();
+            } else if (leg instanceof HighwayRoute.FlightLeg flight) {
+                if (!segmentClearsAllHazards(cursor, flight.destination())) return false;
+                cursor = flight.destination();
+            }
         }
-        double effectiveDist = best.category == HighwayCandidate.Category.DIAMOND
-                ? best.ringOrDiamondDist / 2.0
-                : best.ringOrDiamondDist;
+        return true;
+    }
+
+    private static boolean segmentClearsAllHazards(BlockPos from, BlockPos to) {
         for (HazardZone zone : HAZARD_ZONES) {
-            if (effectiveDist < zone.radius()) return false;
+            if (segmentDistanceToPoint(
+                    from.getX(), from.getZ(), to.getX(), to.getZ(), zone.cx(), zone.cz()) < zone.radius()) {
+                return false;
+            }
         }
         return true;
     }
