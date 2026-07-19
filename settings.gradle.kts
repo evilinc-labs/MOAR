@@ -16,7 +16,7 @@ val javaMajor = JavaVersion.current().majorVersion.toInt()
 val includeJava25Targets = providers.gradleProperty("moar.includeJava25Targets")
     .orNull
     ?.toBooleanStrictOrNull()
-    ?: false
+    ?: (javaMajor >= 25)
 
 if (includeJava25Targets && javaMajor < 25) {
     throw GradleException("Minecraft 26.x requires JDK 25+. "
