@@ -79,6 +79,7 @@ public final class BounceController {
     private double filteredTangentialAcceleration;
     private double filteredNormalAcceleration;
     private double requiredNormalAcceleration;
+    private double lastFlightPathAngle;
     private double apexHorizontalSpeed;
     private boolean apexPassed;
     private int tangentialDecelerationTicks;
@@ -412,7 +413,9 @@ public final class BounceController {
             }
             case GROUND_JUMP_REQUESTED -> {
                 if (!onGround) {
-                    setLaunchPhase(LaunchPhase.ASCENDING);
+                    if (!tryRequestLaunch(mc.player.getY(), velocityY, rise)) {
+                        setLaunchPhase(LaunchPhase.ASCENDING);
+                    }
                 } else if (launchPhaseTicks >= BounceTuning.GROUND_JUMP_TIMEOUT_TICKS) {
                     setLaunchPhase(LaunchPhase.GROUNDED);
                 }
@@ -468,7 +471,7 @@ public final class BounceController {
                                 formatArcValue(filteredNormalAcceleration),
                                 formatArcValue(requiredVerticalAcceleration),
                                 formatArcValue(requiredNormalAcceleration),
-                                formatArcValue(flightPathAngleDegrees()),
+                                formatArcValue(lastFlightPathAngle),
                                 formatArcValue(predictedLandingTicks),
                                 String.format("%.3f", lastPerpOffset),
                                 String.format("%.2f", lastPerpCorrection));
@@ -691,6 +694,7 @@ public final class BounceController {
 
     private void updateArcModel(double velocityX, double velocityY, double velocityZ) {
         double horizontalSpeed = Math.hypot(velocityX, velocityZ);
+        lastFlightPathAngle = Math.toDegrees(Math.atan2(velocityY, horizontalSpeed));
         if (!apexPassed && Double.isFinite(previousVerticalVelocity)
                 && previousVerticalVelocity > 0.0 && velocityY <= 0.0) {
             apexPassed = true;
@@ -742,6 +746,7 @@ public final class BounceController {
         previousVelocityZ = Double.NaN;
         filteredTangentialAcceleration = Double.NaN;
         filteredNormalAcceleration = Double.NaN;
+        lastFlightPathAngle = Double.NaN;
         apexHorizontalSpeed = Double.NaN;
         apexPassed = false;
         tangentialDecelerationTicks = 0;
@@ -790,24 +795,6 @@ public final class BounceController {
         double speed = Math.hypot(horizontalSpeed, velocityY);
         double alongPath = Double.isFinite(tangential) ? tangential : 0.0;
         return (requiredVertical * speed - alongPath * velocityY) / horizontalSpeed;
-    }
-
-    private static double flightPathAngleDegrees() {
-        /*? if >=26.1 {*//*
-        Minecraft mc = Minecraft.getInstance();
-        if (mc.player == null) return Double.NaN;
-        double horizontalSpeed = Math.hypot(
-                mc.player.getDeltaMovement().x,
-                mc.player.getDeltaMovement().z);
-        return Math.toDegrees(Math.atan2(mc.player.getDeltaMovement().y, horizontalSpeed));
-        *//*?} else {*/
-        MinecraftClient mc = MinecraftClient.getInstance();
-        if (mc.player == null) return Double.NaN;
-        double horizontalSpeed = Math.hypot(
-                mc.player.getVelocity().x,
-                mc.player.getVelocity().z);
-        return Math.toDegrees(Math.atan2(mc.player.getVelocity().y, horizontalSpeed));
-        /*?}*/
     }
 
     private record FlightFrameAcceleration(double tangential, double normal) {}
