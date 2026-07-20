@@ -56,6 +56,7 @@ public final class BounceController {
 
     private LaunchPhase launchPhase = LaunchPhase.GROUNDED;
     private int launchPhaseTicks;
+    private int airborneLaunchTicks;
     private int launchRequests;
     private int completedBounces;
     private int consecutiveLaunchFailures;
@@ -120,6 +121,7 @@ public final class BounceController {
         ticksActive    = 0;
         launchPhase    = LaunchPhase.GROUNDED;
         launchPhaseTicks = 0;
+        airborneLaunchTicks = 0;
         launchRequests = 0;
         completedBounces = 0;
         consecutiveLaunchFailures = 0;
@@ -376,6 +378,12 @@ public final class BounceController {
         double velocityX = mc.player.getVelocity().x;
         double velocityZ = mc.player.getVelocity().z;
         /*?}*/
+        if (onGround) {
+            airborneLaunchTicks = 0;
+        } else if (launchPhase == LaunchPhase.GROUND_JUMP_REQUESTED
+                || launchPhase == LaunchPhase.ASCENDING) {
+            airborneLaunchTicks++;
+        }
         double rise = Double.isNaN(takeoffY) ? 0.0 : mc.player.getY() - takeoffY;
         peakHorizontalSpeed = Math.max(peakHorizontalSpeed, horizontalSpeed());
         if (!Double.isNaN(takeoffY)) {
@@ -615,6 +623,7 @@ public final class BounceController {
         peakY = takeoffY;
         ceilingContact = false;
         launchArmed = false;
+        airborneLaunchTicks = 0;
         LOGGER.debug("[Bounce] ground jump requested");
         return true;
     }
@@ -854,8 +863,9 @@ public final class BounceController {
 
     // Arm flight at the first safe fractional launch point.
     private boolean tryRequestLaunch(double y, double velocityY, double rise) {
-        boolean reachedLaunchPoint = velocityY <= BounceTuning.ELYTRA_ACTIVATE_VY_THRESHOLD
-                || rise >= BounceTuning.ELYTRA_ACTIVATE_MAX_RISE;
+        boolean reachedLaunchPoint = airborneLaunchTicks >= 2
+                && (velocityY <= BounceTuning.ELYTRA_ACTIVATE_VY_THRESHOLD
+                || rise >= BounceTuning.ELYTRA_ACTIVATE_MAX_RISE);
         if (!elytraLaunchEnabled || !reachedLaunchPoint
                 || !requestStartFlying(y, velocityY, rise)) {
             return false;
