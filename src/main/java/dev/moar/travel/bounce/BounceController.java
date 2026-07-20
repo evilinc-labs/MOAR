@@ -10,11 +10,15 @@ import net.minecraft.client.Options;
 import net.minecraft.core.BlockPos;
 import net.minecraft.network.protocol.game.ServerboundPlayerCommandPacket;
 import net.minecraft.util.Mth;
+import net.minecraft.world.entity.decoration.ItemFrame;
+import net.minecraft.world.phys.AABB;
 *//*?} else {*/
 import net.minecraft.client.MinecraftClient;
 import net.minecraft.client.option.GameOptions;
+import net.minecraft.entity.decoration.ItemFrameEntity;
 import net.minecraft.network.packet.c2s.play.ClientCommandC2SPacket;
 import net.minecraft.util.math.BlockPos;
+import net.minecraft.util.math.Box;
 import net.minecraft.util.math.MathHelper;
 /*?}*/
 /*? if >=26.1 {*//*
@@ -63,7 +67,6 @@ public final class BounceController {
     private LaunchPhase launchPhase = LaunchPhase.GROUNDED;
     private int launchPhaseTicks;
     private int launchRequests;
-    private int launchAttemptsThisJump;
     private int completedBounces;
     private int consecutiveLaunchFailures;
     private double takeoffY;
@@ -125,7 +128,6 @@ public final class BounceController {
         launchPhase    = LaunchPhase.GROUNDED;
         launchPhaseTicks = 0;
         launchRequests = 0;
-        launchAttemptsThisJump = 0;
         completedBounces = 0;
         consecutiveLaunchFailures = 0;
         takeoffY = Double.NaN;
@@ -373,6 +375,7 @@ public final class BounceController {
         boolean gliding = mc.player.isGliding();
         double velocityY = mc.player.getVelocity().y;
         /*?}*/
+        boolean decorationAhead = hasDecorationAhead(mc);
         double rise = Double.isNaN(takeoffY) ? 0.0 : mc.player.getY() - takeoffY;
         peakHorizontalSpeed = Math.max(peakHorizontalSpeed, horizontalSpeed());
         if (!Double.isNaN(takeoffY)) {
@@ -404,15 +407,16 @@ public final class BounceController {
                 if (!jumpingEnabled) {
                     return;
                 }
+                if (decorationAhead) {
+                    return;
+                }
                 if (requestGroundJump()) {
                     setLaunchPhase(LaunchPhase.GROUND_JUMP_REQUESTED);
                 }
             }
             case GROUND_JUMP_REQUESTED -> {
-                if (!onGround || rise >= BounceTuning.ELYTRA_ACTIVATE_MAX_RISE) {
-                    if (!tryRequestLaunch(mc.player.getY(), velocityY, rise)) {
-                        setLaunchPhase(LaunchPhase.ASCENDING);
-                    }
+                if (!onGround) {
+                    setLaunchPhase(LaunchPhase.ASCENDING);
                 } else if (launchPhaseTicks >= BounceTuning.GROUND_JUMP_TIMEOUT_TICKS) {
                     setLaunchPhase(LaunchPhase.GROUNDED);
                 }
@@ -421,6 +425,8 @@ public final class BounceController {
                 if (launchArmed && gliding && !onGround) {
                     recordLaunchAccepted();
                     setLaunchPhase(LaunchPhase.GLIDING);
+                } else if (decorationAhead) {
+                    setLaunchPhase(LaunchPhase.LANDING);
                 } else if (!onGround || rise >= BounceTuning.ELYTRA_ACTIVATE_MAX_RISE) {
                     tryRequestLaunch(mc.player.getY(), velocityY, rise);
                 } else if (onGround && launchPhaseTicks > 2) {
@@ -434,9 +440,6 @@ public final class BounceController {
                 } else if (onGround) {
                     recordLaunchRejected();
                     setLaunchPhase(LaunchPhase.GROUNDED);
-                } else if (launchAttemptsThisJump < BounceTuning.LAUNCH_RETRIES_PER_JUMP
-                        && launchPhaseTicks % BounceTuning.LAUNCH_RETRY_INTERVAL_TICKS == 0) {
-                    retryStartFlying(mc.player.getY(), velocityY, rise);
                 } else if (launchPhaseTicks >= BounceTuning.LAUNCH_ACK_TIMEOUT_TICKS) {
                     recordLaunchRejected();
                     setLaunchPhase(LaunchPhase.LANDING);
@@ -474,7 +477,7 @@ public final class BounceController {
                                 String.format("%.3f", lastPerpOffset),
                                 String.format("%.2f", lastPerpCorrection));
                     }
-                    if (jumpingEnabled && requestGroundJump()) {
+                    if (jumpingEnabled && !decorationAhead && requestGroundJump()) {
                         setLaunchPhase(LaunchPhase.GROUND_JUMP_REQUESTED);
                     } else {
                         setLaunchPhase(LaunchPhase.GROUNDED);
@@ -505,6 +508,44 @@ public final class BounceController {
 
     private static float yawForDirection(int dx, int dz) {
         return (float) Math.toDegrees(Math.atan2(-dx, dz));
+    }
+
+    // Find decoration entities in the immediate roadway corridor.
+    private boolean hasDecorationAhead(
+            /*? if >=26.1 {*//* Minecraft mc *//*?} else {*/ MinecraftClient mc /*?}*/) {
+        if (mc.player == null || highway == null) return false;
+        /*? if >=26.1 {*//*
+        if (mc.level == null) return false;
+        *//*?} else {*/
+        if (mc.world == null) return false;
+        /*?}*/
+
+        double startX = mc.player.getX();
+        double startZ = mc.player.getZ();
+        double endX = startX + travelDx * BounceTuning.DECORATION_SCAN_AHEAD;
+        double endZ = startZ + travelDz * BounceTuning.DECORATION_SCAN_AHEAD;
+        double minY = highway.floorY + 0.5;
+        double maxY = highway.floorY + 3.0;
+        /*? if >=26.1 {*//*
+        AABB corridor = new AABB(
+                Math.min(startX, endX) - BounceTuning.DECORATION_CORRIDOR_RADIUS,
+                minY,
+                Math.min(startZ, endZ) - BounceTuning.DECORATION_CORRIDOR_RADIUS,
+                Math.max(startX, endX) + BounceTuning.DECORATION_CORRIDOR_RADIUS,
+                maxY,
+                Math.max(startZ, endZ) + BounceTuning.DECORATION_CORRIDOR_RADIUS);
+        return !mc.level.getEntitiesOfClass(ItemFrame.class, corridor).isEmpty();
+        *//*?} else {*/
+        Box corridor = new Box(
+                Math.min(startX, endX) - BounceTuning.DECORATION_CORRIDOR_RADIUS,
+                minY,
+                Math.min(startZ, endZ) - BounceTuning.DECORATION_CORRIDOR_RADIUS,
+                Math.max(startX, endX) + BounceTuning.DECORATION_CORRIDOR_RADIUS,
+                maxY,
+                Math.max(startZ, endZ) + BounceTuning.DECORATION_CORRIDOR_RADIUS);
+        return !mc.world.getEntitiesByClass(
+                ItemFrameEntity.class, corridor, entity -> true).isEmpty();
+        /*?}*/
     }
 
     // Find a blocked body-height corridor ahead.
@@ -646,7 +687,6 @@ public final class BounceController {
         peakY = takeoffY;
         ceilingContact = false;
         launchArmed = false;
-        launchAttemptsThisJump = 0;
         LOGGER.debug("[Bounce] ground jump requested");
         return true;
     }
@@ -827,23 +867,9 @@ public final class BounceController {
             return false;
         }
         launchRequests++;
-        launchAttemptsThisJump++;
         launchArmed = true;
         setLaunchPhase(LaunchPhase.LAUNCH_REQUESTED);
         return true;
-    }
-
-    private void retryStartFlying(double y, double velocityY, double rise) {
-        if (!sendStartFlyingPacket()) return;
-        launchRequests++;
-        launchAttemptsThisJump++;
-        if (launchAttemptsThisJump <= BounceTuning.LAUNCH_RETRIES_PER_JUMP) {
-            LOGGER.info("[Bounce] launch retry {}/{} rise={} vy={}",
-                    launchAttemptsThisJump,
-                    BounceTuning.LAUNCH_RETRIES_PER_JUMP,
-                    String.format("%.3f", rise),
-                    String.format("%.3f", velocityY));
-        }
     }
 
     // Pulse vanilla jump input after reaching a server-valid airborne state.
@@ -872,28 +898,22 @@ public final class BounceController {
 
     // Make one best-effort recovery request after leaving the highway surface.
     private void sendEmergencyStartFlying() {
-        sendStartFlyingPacket();
-    }
-
-    // Send the vanilla flight command through the movement lane.
-    private boolean sendStartFlyingPacket() {
         if (!MoarNetworkManager.tryAcquire(
                 MoarNetworkManager.Lane.MOVEMENT,
                 MoarNetworkManager.OWNER_BOUNCE, 1, 2)) {
-            return false;
+            return;
         }
         /*? if >=26.1 {*//*
         Minecraft mc = Minecraft.getInstance();
-        if (mc.player == null) return false;
+        if (mc.player == null) return;
         mc.getConnection().send(new ServerboundPlayerCommandPacket(
                 mc.player, ServerboundPlayerCommandPacket.Action.START_FALL_FLYING));
         *//*?} else {*/
         MinecraftClient mc = MinecraftClient.getInstance();
-        if (mc.player == null) return false;
+        if (mc.player == null) return;
         mc.player.networkHandler.sendPacket(new ClientCommandC2SPacket(
                 mc.player, ClientCommandC2SPacket.Mode.START_FALL_FLYING));
         /*?}*/
-        return true;
     }
 
     private void recordLaunchAccepted() {

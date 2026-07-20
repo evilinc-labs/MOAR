@@ -47,9 +47,9 @@ public final class BounceTuning {
     // Stop waiting for a rejected launch before landing.
     public static int LAUNCH_ACK_TIMEOUT_TICKS = 8;
 
-    // Retry missed airborne launch handshakes.
-    public static int LAUNCH_RETRY_INTERVAL_TICKS = 2;
-    public static int LAUNCH_RETRIES_PER_JUMP = 3;
+    // Coast through decoration entities before launching again.
+    public static double DECORATION_SCAN_AHEAD = 5.0;
+    public static double DECORATION_CORRIDOR_RADIUS = 1.0;
 
     // Fall back after repeated correction episodes.
     public static int CORRECTIONS_DISABLE_ELYTRA = 2;
