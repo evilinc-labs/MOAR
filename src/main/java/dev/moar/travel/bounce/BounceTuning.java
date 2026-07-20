@@ -45,15 +45,11 @@ public final class BounceTuning {
     public static int GROUND_JUMP_TIMEOUT_TICKS = 3;
 
     // Stop waiting for a rejected launch before landing.
-    public static int LAUNCH_ACK_TIMEOUT_TICKS = 10;
+    public static int LAUNCH_ACK_TIMEOUT_TICKS = 8;
 
-    // Retry missed launches near the apex instead of during ascent.
-    public static double LAUNCH_RETRY_MAX_ASCENT_VELOCITY = 0.02;
+    // Retry missed airborne launch handshakes.
     public static int LAUNCH_RETRY_INTERVAL_TICKS = 2;
     public static int LAUNCH_RETRIES_PER_JUMP = 3;
-
-    // Reject elevated entity contacts as highway touchdowns.
-    public static double HIGHWAY_CONTACT_Y_TOLERANCE = 0.03125;
 
     // Fall back after repeated correction episodes.
     public static int CORRECTIONS_DISABLE_ELYTRA = 2;

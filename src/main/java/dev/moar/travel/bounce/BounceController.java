@@ -373,7 +373,6 @@ public final class BounceController {
         boolean gliding = mc.player.isGliding();
         double velocityY = mc.player.getVelocity().y;
         /*?}*/
-        boolean highwayFloorContact = onGround && isHighwayFloorContact(mc.player.getY());
         double rise = Double.isNaN(takeoffY) ? 0.0 : mc.player.getY() - takeoffY;
         peakHorizontalSpeed = Math.max(peakHorizontalSpeed, horizontalSpeed());
         if (!Double.isNaN(takeoffY)) {
@@ -402,9 +401,6 @@ public final class BounceController {
                     setLaunchPhase(LaunchPhase.LANDING);
                     return;
                 }
-                if (!highwayFloorContact) {
-                    return;
-                }
                 if (!jumpingEnabled) {
                     return;
                 }
@@ -428,8 +424,7 @@ public final class BounceController {
                 } else if (!onGround || rise >= BounceTuning.ELYTRA_ACTIVATE_MAX_RISE) {
                     tryRequestLaunch(mc.player.getY(), velocityY, rise);
                 } else if (onGround && launchPhaseTicks > 2) {
-                    setLaunchPhase(highwayFloorContact
-                            ? LaunchPhase.GROUNDED : LaunchPhase.LANDING);
+                    setLaunchPhase(LaunchPhase.GROUNDED);
                 }
             }
             case LAUNCH_REQUESTED -> {
@@ -438,10 +433,8 @@ public final class BounceController {
                     setLaunchPhase(LaunchPhase.GLIDING);
                 } else if (onGround) {
                     recordLaunchRejected();
-                    setLaunchPhase(highwayFloorContact
-                            ? LaunchPhase.GROUNDED : LaunchPhase.LANDING);
+                    setLaunchPhase(LaunchPhase.GROUNDED);
                 } else if (launchAttemptsThisJump < BounceTuning.LAUNCH_RETRIES_PER_JUMP
-                        && velocityY <= BounceTuning.LAUNCH_RETRY_MAX_ASCENT_VELOCITY
                         && launchPhaseTicks % BounceTuning.LAUNCH_RETRY_INTERVAL_TICKS == 0) {
                     retryStartFlying(mc.player.getY(), velocityY, rise);
                 } else if (launchPhaseTicks >= BounceTuning.LAUNCH_ACK_TIMEOUT_TICKS) {
@@ -451,10 +444,6 @@ public final class BounceController {
             }
             case GLIDING -> {
                 if (onGround) {
-                    if (!highwayFloorContact) {
-                        setLaunchPhase(LaunchPhase.LANDING);
-                        return;
-                    }
                     completedBounces++;
                     if (correctionRecoveryBounces > 0) {
                         correctionRecoveryBounces--;
@@ -495,7 +484,7 @@ public final class BounceController {
                 }
             }
             case LANDING -> {
-                if (highwayFloorContact) {
+                if (onGround) {
                     setLaunchPhase(LaunchPhase.GROUNDED);
                 }
             }
@@ -516,13 +505,6 @@ public final class BounceController {
 
     private static float yawForDirection(int dx, int dz) {
         return (float) Math.toDegrees(Math.atan2(-dx, dz));
-    }
-
-    // Accept touchdowns only on the highway block surface.
-    private boolean isHighwayFloorContact(double playerY) {
-        if (highway == null || highway.floorY == Integer.MIN_VALUE) return true;
-        double expectedY = highway.floorY + 1.0;
-        return Math.abs(playerY - expectedY) <= BounceTuning.HIGHWAY_CONTACT_Y_TOLERANCE;
     }
 
     // Find a blocked body-height corridor ahead.
@@ -852,7 +834,7 @@ public final class BounceController {
     }
 
     private void retryStartFlying(double y, double velocityY, double rise) {
-        if (!requestStartFlying(y, velocityY, rise)) return;
+        if (!sendStartFlyingPacket()) return;
         launchRequests++;
         launchAttemptsThisJump++;
         if (launchAttemptsThisJump <= BounceTuning.LAUNCH_RETRIES_PER_JUMP) {
@@ -890,22 +872,28 @@ public final class BounceController {
 
     // Make one best-effort recovery request after leaving the highway surface.
     private void sendEmergencyStartFlying() {
+        sendStartFlyingPacket();
+    }
+
+    // Send the vanilla flight command through the movement lane.
+    private boolean sendStartFlyingPacket() {
         if (!MoarNetworkManager.tryAcquire(
                 MoarNetworkManager.Lane.MOVEMENT,
                 MoarNetworkManager.OWNER_BOUNCE, 1, 2)) {
-            return;
+            return false;
         }
         /*? if >=26.1 {*//*
         Minecraft mc = Minecraft.getInstance();
-        if (mc.player == null) return;
+        if (mc.player == null) return false;
         mc.getConnection().send(new ServerboundPlayerCommandPacket(
                 mc.player, ServerboundPlayerCommandPacket.Action.START_FALL_FLYING));
         *//*?} else {*/
         MinecraftClient mc = MinecraftClient.getInstance();
-        if (mc.player == null) return;
+        if (mc.player == null) return false;
         mc.player.networkHandler.sendPacket(new ClientCommandC2SPacket(
                 mc.player, ClientCommandC2SPacket.Mode.START_FALL_FLYING));
         /*?}*/
+        return true;
     }
 
     private void recordLaunchAccepted() {
