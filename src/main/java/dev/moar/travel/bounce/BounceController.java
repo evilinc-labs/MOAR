@@ -84,6 +84,8 @@ public final class BounceController {
     private double requiredNormalAcceleration;
     private double lastFlightPathAngle;
     private double apexHorizontalSpeed;
+    private double targetSpeedDemand;
+    private float targetSpeedBias;
     private boolean apexPassed;
     private int tangentialDecelerationTicks;
     private float minimumGlidePitch;
@@ -137,6 +139,8 @@ public final class BounceController {
         launchPitch = BounceTuning.LAUNCH_PITCH;
         arcPitch = BounceTuning.GLIDE_ACCEL_PITCH;
         activeGlidePitch = arcPitch;
+        targetSpeedDemand = 0.0;
+        targetSpeedBias = 0.0f;
         diveTicks = 0;
         peakHorizontalSpeed = 0.0;
         resetArcModel();
@@ -474,11 +478,13 @@ public final class BounceController {
                     if (completedBounces <= 3 || completedBounces % 10 == 0) {
                         double peakRise = Double.isNaN(peakY) || Double.isNaN(takeoffY)
                                 ? 0.0 : peakY - takeoffY;
-                        LOGGER.info("[Bounce] touchdown #{} speed={} peakSpeed={} apexSpeed={} speedLoss={} peakRise={} ceiling={} mode={} launchPitch={} glidePitch={} activePitch={} pitchRange={}-{} diveTicks={} ay={} at={} an={} requiredAy={} requiredAn={} pathAngle={} landingTicks={} offset={} steer={}",
+                        LOGGER.info("[Bounce] touchdown #{} speed={} peakSpeed={} apexSpeed={} speedLoss={} targetDemand={} targetBias={} peakRise={} ceiling={} mode={} launchPitch={} glidePitch={} activePitch={} pitchRange={}-{} diveTicks={} ay={} at={} an={} requiredAy={} requiredAn={} pathAngle={} landingTicks={} offset={} steer={}",
                                 completedBounces, String.format("%.3f", horizontalSpeed()),
                                 String.format("%.3f", peakHorizontalSpeed),
                                 formatArcValue(apexHorizontalSpeed),
                                 String.format("%.3f", maximumHorizontalSpeedLoss),
+                                String.format("%.3f", targetSpeedDemand),
+                                String.format("%.2f", targetSpeedBias),
                                 String.format("%.3f", peakRise), ceilingContact,
                                 correctionRecoveryBounces > 0
                                         ? "RECOVERY"
@@ -618,8 +624,12 @@ public final class BounceController {
         mc.options.jumpKey.setPressed(true);
         /*?}*/
         double speed = horizontalSpeed();
+        double accelerationThreshold = acceleratingArc
+                ? BounceTuning.TARGET_HORIZONTAL_SPEED
+                : BounceTuning.TARGET_HORIZONTAL_SPEED
+                        - BounceTuning.TARGET_HORIZONTAL_SPEED_HYSTERESIS;
         acceleratingArc = correctionRecoveryBounces == 0
-                && speed < BounceTuning.TARGET_HORIZONTAL_SPEED;
+                && speed < accelerationThreshold;
         launchPitch = acceleratingArc
                 ? accelerationLaunchPitch(speed)
                 : BounceTuning.LAUNCH_PITCH;
@@ -669,6 +679,8 @@ public final class BounceController {
         if (!isAdaptiveDive(rise, velocityY)) {
             requiredVerticalAcceleration = Double.NaN;
             predictedLandingTicks = Double.NaN;
+            targetSpeedDemand = 0.0;
+            targetSpeedBias = 0.0f;
             return approachPitch(activeGlidePitch, arcPitch);
         }
 
@@ -704,10 +716,15 @@ public final class BounceController {
         float speedCompensation = (float) Math.min(
                 BounceTuning.GLIDE_ACCEL_SPEED_COMPENSATION_MAX,
                 tangentialLoss * BounceTuning.GLIDE_ACCEL_TANGENTIAL_LOSS_GAIN);
+        double targetSpeed = Math.max(1.0E-6, BounceTuning.TARGET_HORIZONTAL_SPEED);
+        targetSpeedDemand = clamp((targetSpeed - horizontalSpeed()) / targetSpeed, 0.0, 1.0);
+        targetSpeedBias = (float) (targetSpeedDemand
+                * BounceTuning.GLIDE_ACCEL_TARGET_SPEED_BIAS_MAX);
         float targetPitch = (float) (BounceTuning.GLIDE_ACCEL_DIVE_PITCH
                 + normalAccelerationError
                 * BounceTuning.GLIDE_ACCEL_PITCH_GAIN)
-                + speedCompensation;
+                + speedCompensation
+                + targetSpeedBias;
         targetPitch = clamp(targetPitch,
                 BounceTuning.GLIDE_ACCEL_DIVE_MIN_PITCH,
                 BounceTuning.GLIDE_ACCEL_DIVE_MAX_PITCH);

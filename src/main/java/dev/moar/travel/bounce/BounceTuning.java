@@ -99,11 +99,13 @@ public final class BounceTuning {
     public static double GLIDE_ACCEL_TANGENTIAL_LOSS_DEADZONE = 0.005;
     public static double GLIDE_ACCEL_TANGENTIAL_LOSS_GAIN = 80.0;
     public static float GLIDE_ACCEL_SPEED_COMPENSATION_MAX = 3.0f;
+    public static float GLIDE_ACCEL_TARGET_SPEED_BIAS_MAX = 5.0f;
     public static double ACCEL_LOW_SPEED_THRESHOLD = 1.25;
     public static double ACCEL_MID_SPEED_THRESHOLD = 1.70;
 
-    // Accelerate until reaching 40 blocks per second.
-    public static double TARGET_HORIZONTAL_SPEED = 2.0;
+    // Accelerate until reaching 80 blocks per second.
+    public static double TARGET_HORIZONTAL_SPEED = 4.0;
+    public static double TARGET_HORIZONTAL_SPEED_HYSTERESIS = 0.15;
 
     // Stabilize several bounces after a server correction.
     public static int CORRECTION_RECOVERY_BOUNCES = 8;
