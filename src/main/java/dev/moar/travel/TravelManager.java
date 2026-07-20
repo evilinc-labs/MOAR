@@ -34,6 +34,7 @@ import net.minecraft.util.math.BlockPos;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
 
@@ -421,7 +422,8 @@ public final class TravelManager {
         }
         // Detour around immediate obstacles.
         if (bounce.isWallAhead()) {
-            LOGGER.warn("[Travel] wall/obstacle ahead during bounce, triggering bypass");
+            LOGGER.warn("[Travel] wall/obstacle ahead during bounce, triggering bypass: {}",
+                    bounce.wallReason());
             if (state.mission == null || !state.mission.allowDetour) {
                 abort("wall ahead and detours disabled");
                 return;
@@ -580,7 +582,7 @@ public final class TravelManager {
         } else if (settleTicks >= SETTLE_TIMEOUT_TICKS) {
             settleTicks = 0;
             settleGroundedTicks = 0;
-            abort("detour settle timed out before stable ground contact");
+            abort("settle timed out before stable ground contact");
         }
     }
 
@@ -656,8 +658,25 @@ public final class TravelManager {
 
     private void tickOffRampHandoff() {
         if (bridge.isArrived()) {
+            HighwayRoute.BounceLeg nextBounce = nextBounceLeg();
+            BlockPos pos = currentPlayerPos();
+            if (nextBounce == null || pos == null) {
+                abort("junction handoff completed without a bounce target");
+                return;
+            }
+            if (isWalkableFeetPosition(pos)) {
+                alignNextBounceFloor(pos.getY() - 1);
+                nextBounce = nextBounceLeg();
+            }
+            settleYawDx = nextBounce.travelDx();
+            settleYawDz = nextBounce.travelDz();
+            settleTicks = 0;
+            settleGroundedTicks = 0;
+            detourResumeExit = null;
             clearTurnHandoff();
-            advanceLeg("handoff complete");
+            releaseOwner(state.owner);
+            state.owner = MovementOwner.NONE;
+            transition(TravelPhase.SETTLE, "junction handoff arrived; settling before bounce");
             return;
         }
         if (bridge.isStuck()) {
@@ -956,6 +975,39 @@ public final class TravelManager {
         return null;
     }
 
+    private void alignNextBounceFloor(int floorY) {
+        if (state.route == null) return;
+        for (int i = currentLegIndex + 1; i < state.route.legs.size(); i++) {
+            HighwayRoute.Leg leg = state.route.legs.get(i);
+            if (!(leg instanceof HighwayRoute.BounceLeg bounceLeg)) {
+                if (!(leg instanceof HighwayRoute.TurnLeg)) return;
+                continue;
+            }
+            HighwayCandidate highway = bounceLeg.highway();
+            if (highway.floorY == floorY
+                    && highway.entry.getY() == floorY
+                    && bounceLeg.exitColumn().getY() == floorY) {
+                return;
+            }
+            HighwayCandidate aligned = new HighwayCandidate(
+                    highway.axis, highway.category, floorY,
+                    withY(highway.entry, floorY), withY(highway.exit, floorY), highway.confidence,
+                    highway.ringOrDiamondDist, highway.ringSide, highway.diamondSegment,
+                    highway.width, highway.hasLeftRail, highway.hasRightRail);
+            List<HighwayRoute.Leg> legs = new ArrayList<>(state.route.legs);
+            legs.set(i, new HighwayRoute.BounceLeg(
+                    aligned, withY(bounceLeg.exitColumn(), floorY),
+                    bounceLeg.travelDx(), bounceLeg.travelDz()));
+            HighwayCandidate primary = state.route.primary == highway ? aligned : state.route.primary;
+            state.route = new HighwayRoute(
+                    primary, legs, state.route.estimatedCost,
+                    state.route.travelDx, state.route.travelDz);
+            LOGGER.info("[Travel] aligned next highway floor {} -> {} at junction",
+                    highway.floorY, floorY);
+            return;
+        }
+    }
+
     private static boolean isAlignedWithBounceLane(BlockPos candidate, HighwayRoute.BounceLeg bounceLeg) {
         HighwayCandidate highway = bounceLeg.highway();
         int dx = candidate.getX() - highway.entry.getX();
@@ -963,6 +1015,10 @@ public final class TravelManager {
         int perpendicular = dx * highway.axis.perpDx() + dz * highway.axis.perpDz();
         int limit = highway.axis.diagonal ? 4 : 3;
         return Math.abs(perpendicular) <= limit;
+    }
+
+    private static BlockPos withY(BlockPos pos, int y) {
+        return new BlockPos(pos.getX(), y, pos.getZ());
     }
 
     private static boolean isWalkableFeetPosition(BlockPos feet) {

@@ -46,6 +46,7 @@ public final class BounceController {
     private boolean stuck;
     // Flag a wall ahead so TravelManager can detour without aborting.
     private boolean wallAhead;
+    private String wallReason;
     // Distinguish falls from generic no-progress stalls.
     private boolean stuckFromFall;
     private int     ticksActive;
@@ -70,13 +71,17 @@ public final class BounceController {
     private boolean roofDetected;
     private boolean acceleratingArc;
     private int correctionRecoveryBounces;
+    private float launchPitch;
     private float arcPitch;
+    private float activeGlidePitch;
+    private int diveTicks;
+    private double peakHorizontalSpeed;
     private boolean launchArmed;
     private boolean setbackHolding;
     private boolean elytraLaunchEnabled;
     private boolean jumpingEnabled;
     private int wallObservationTicks;
-    private int correctionBaseline;
+    private int correctionEpisodeBaseline;
     private double lastPerpOffset;
     private float lastPerpCorrection;
 
@@ -101,6 +106,7 @@ public final class BounceController {
         arrived        = false;
         stuck          = false;
         wallAhead      = false;
+        wallReason     = "none";
         stuckFromFall  = false;
         ticksActive    = 0;
         launchPhase    = LaunchPhase.GROUNDED;
@@ -114,13 +120,17 @@ public final class BounceController {
         roofDetected = false;
         acceleratingArc = true;
         correctionRecoveryBounces = 0;
+        launchPitch = BounceTuning.LAUNCH_PITCH;
         arcPitch = BounceTuning.GLIDE_ACCEL_PITCH;
+        activeGlidePitch = arcPitch;
+        diveTicks = 0;
+        peakHorizontalSpeed = 0.0;
         launchArmed = false;
         setbackHolding = false;
         elytraLaunchEnabled = true;
         jumpingEnabled = true;
         wallObservationTicks = 0;
-        correctionBaseline = SetbackMonitor.get().totalServerCorrections();
+        correctionEpisodeBaseline = SetbackMonitor.get().totalCorrectionEpisodes();
         lastPerpOffset = 0.0;
         lastPerpCorrection = 0.0f;
         noProgressTicks = 0;
@@ -139,6 +149,7 @@ public final class BounceController {
     public boolean isStuck()     { return stuck; }
     // Check whether a wall was seen this tick.
     public boolean isWallAhead()     { return wallAhead; }
+    public String wallReason()       { return wallReason; }
     // Check whether the stuck state came from a fall.
     public boolean isStuckFromFall() { return stuckFromFall; }
     public int     ticksActive() { return ticksActive; }
@@ -192,13 +203,12 @@ public final class BounceController {
         }
 
         // ── Wall / obstruction detection ─────────────────────────
-        // Check horizontalCollision and scan 2-6 blocks ahead at
-        // player-body height.  TravelManager reads isWallAhead() to
-        // trigger a detour walk rather than a hard abort.
-        if (detectWallOrCollision(mc)) {
+        // Confirm a blocked corridor before requesting a detour.
+        if (detectBlockedCorridor(mc)) {
             wallObservationTicks++;
         } else {
             wallObservationTicks = 0;
+            wallReason = "none";
         }
         wallAhead = wallObservationTicks >= BounceTuning.WALL_CONFIRM_TICKS;
         if (wallAhead) return; // skip stuck-detection this tick
@@ -349,15 +359,23 @@ public final class BounceController {
         double velocityY = mc.player.getVelocity().y;
         /*?}*/
         double rise = Double.isNaN(takeoffY) ? 0.0 : mc.player.getY() - takeoffY;
+        peakHorizontalSpeed = Math.max(peakHorizontalSpeed, horizontalSpeed());
         if (!Double.isNaN(takeoffY)) {
             peakY = Double.isNaN(peakY) ? mc.player.getY() : Math.max(peakY, mc.player.getY());
             if (!onGround && mc.player.verticalCollision) {
                 ceilingContact = true;
             }
         }
+        activeGlidePitch = launchPhase == LaunchPhase.GLIDING
+                ? glidePitchForArc(rise)
+                : arcPitch;
         float commandedPitch = launchPhase == LaunchPhase.GLIDING
-                ? arcPitch
-                : BounceTuning.LAUNCH_PITCH;
+                ? activeGlidePitch
+                : launchPitch;
+        if (launchPhase == LaunchPhase.GLIDING
+                && activeGlidePitch == BounceTuning.GLIDE_ACCEL_DIVE_PITCH) {
+            diveTicks++;
+        }
         setPitch(elytraLaunchEnabled ? commandedPitch : 0.0f);
 
         switch (launchPhase) {
@@ -413,15 +431,17 @@ public final class BounceController {
                     if (completedBounces <= 3 || completedBounces % 10 == 0) {
                         double peakRise = Double.isNaN(peakY) || Double.isNaN(takeoffY)
                                 ? 0.0 : peakY - takeoffY;
-                        LOGGER.info("[Bounce] touchdown #{} speed={} peakRise={} ceiling={} roof={} mode={} launchPitch={} glidePitch={} offset={} steer={}",
+                        LOGGER.info("[Bounce] touchdown #{} speed={} peakSpeed={} peakRise={} ceiling={} roof={} mode={} launchPitch={} glidePitch={} diveTicks={} offset={} steer={}",
                                 completedBounces, String.format("%.3f", horizontalSpeed()),
+                                String.format("%.3f", peakHorizontalSpeed),
                                 String.format("%.3f", peakRise), ceilingContact,
                                 roofDetected,
                                 correctionRecoveryBounces > 0
                                         ? "RECOVERY"
                                         : acceleratingArc ? "ACCEL" : "CRUISE",
-                                String.format("%.1f", BounceTuning.LAUNCH_PITCH),
+                                String.format("%.1f", launchPitch),
                                 String.format("%.1f", arcPitch),
+                                diveTicks,
                                 String.format("%.3f", lastPerpOffset),
                                 String.format("%.2f", lastPerpCorrection));
                     }
@@ -455,10 +475,9 @@ public final class BounceController {
     }
 
     // Find a blocked body-height corridor ahead.
-    private boolean detectWallOrCollision(
+    private boolean detectBlockedCorridor(
             /*? if >=26.1 {*//* Minecraft mc *//*?} else {*/ MinecraftClient mc /*?}*/) {
-        if (mc.player == null || highway == null) return false;
-        if (mc.player.horizontalCollision) return true;
+        if (mc.player == null || highway == null || exitColumn == null) return false;
 
         /*? if >=26.1 {*//*
         if (mc.level == null) return false;
@@ -466,7 +485,11 @@ public final class BounceController {
         if (mc.world == null) return false;
         /*?}*/
 
-        int hwY   = highway.floorY + 1;  // player feet level
+        /*? if >=26.1 {*//*
+        int feetY = mc.player.blockPosition().getY();
+        *//*?} else {*/
+        int feetY = mc.player.getBlockPos().getY();
+        /*?}*/
         float yaw = yawForDirection(travelDx, travelDz);
         double yawRad = Math.toRadians(yaw);
         double dirX   = -Math.sin(yawRad);
@@ -474,17 +497,25 @@ public final class BounceController {
         double px = mc.player.getX();
         double pz = mc.player.getZ();
 
+        long playerProjection = (long) Math.floor(px) * travelDx + (long) Math.floor(pz) * travelDz;
+        long exitProjection = (long) exitColumn.getX() * travelDx + (long) exitColumn.getZ() * travelDz;
+        int maxAhead = (int) Math.min(
+                BounceTuning.OBSTACLE_SCAN_AHEAD,
+                exitProjection - playerProjection - 1L);
+        if (maxAhead < 2) return false;
+
         int perpX = highway.axis.perpDx();
         int perpZ = highway.axis.perpDz();
-        for (int d = 2; d <= 6; d++) {
+        for (int d = 2; d <= maxAhead; d++) {
             int centerX = (int) Math.floor(px + dirX * d);
             int centerZ = (int) Math.floor(pz + dirZ * d);
-            boolean corridorBlocked = true;
+            boolean centerBlocked = false;
+            int blockedLanes = 0;
             for (int lane = -1; lane <= 1; lane++) {
                 int bx = centerX + perpX * lane;
                 int bz = centerZ + perpZ * lane;
-                BlockPos feet = new BlockPos(bx, hwY, bz);
-                BlockPos head = new BlockPos(bx, hwY + 1, bz);
+                BlockPos feet = new BlockPos(bx, feetY, bz);
+                BlockPos head = new BlockPos(bx, feetY + 1, bz);
                 /*? if >=26.1 {*//*
                 boolean laneBlocked = isImpassable(mc.level.getBlockState(feet).getBlock())
                         || isImpassable(mc.level.getBlockState(head).getBlock());
@@ -492,12 +523,16 @@ public final class BounceController {
                 boolean laneBlocked = isImpassable(mc.world.getBlockState(feet).getBlock())
                         || isImpassable(mc.world.getBlockState(head).getBlock());
                 /*?}*/
-                if (!laneBlocked) {
-                    corridorBlocked = false;
-                    break;
+                if (laneBlocked) {
+                    blockedLanes++;
+                    if (lane == 0) centerBlocked = true;
                 }
             }
-            if (corridorBlocked) return true;
+            if (centerBlocked) {
+                String kind = blockedLanes == 3 ? "corridor" : "center-lane";
+                wallReason = kind + "@" + centerX + "," + feetY + "," + centerZ + " d=" + d;
+                return true;
+            }
         }
         return false;
     }
@@ -557,18 +592,54 @@ public final class BounceController {
         mc.options.jumpKey.setPressed(true);
         /*?}*/
         roofDetected = hasLowCeiling(mc);
+        double speed = horizontalSpeed();
         acceleratingArc = correctionRecoveryBounces == 0
-                && horizontalSpeed() < BounceTuning.TARGET_HORIZONTAL_SPEED;
+                && speed < BounceTuning.TARGET_HORIZONTAL_SPEED;
+        launchPitch = acceleratingArc
+                ? accelerationLaunchPitch(speed)
+                : BounceTuning.LAUNCH_PITCH;
         arcPitch = acceleratingArc
-                ? BounceTuning.GLIDE_ACCEL_PITCH
+                ? accelerationPitch(speed)
                 : BounceTuning.GLIDE_CRUISE_PITCH;
-        setPitch(BounceTuning.LAUNCH_PITCH);
+        activeGlidePitch = arcPitch;
+        diveTicks = 0;
+        peakHorizontalSpeed = speed;
+        setPitch(launchPitch);
         takeoffY = mc.player.getY();
         peakY = takeoffY;
         ceilingContact = false;
         launchArmed = false;
         LOGGER.debug("[Bounce] ground jump requested");
         return true;
+    }
+
+    private static float accelerationPitch(double speed) {
+        if (speed < BounceTuning.ACCEL_LOW_SPEED_THRESHOLD) {
+            return BounceTuning.GLIDE_ACCEL_LOW_SPEED_PITCH;
+        }
+        if (speed < BounceTuning.ACCEL_MID_SPEED_THRESHOLD) {
+            return BounceTuning.GLIDE_ACCEL_MID_SPEED_PITCH;
+        }
+        return BounceTuning.GLIDE_ACCEL_PITCH;
+    }
+
+    private static float accelerationLaunchPitch(double speed) {
+        if (speed < BounceTuning.ACCEL_LOW_SPEED_THRESHOLD) {
+            return BounceTuning.LAUNCH_ACCEL_LOW_SPEED_PITCH;
+        }
+        if (speed < BounceTuning.ACCEL_MID_SPEED_THRESHOLD) {
+            return BounceTuning.LAUNCH_ACCEL_MID_SPEED_PITCH;
+        }
+        return BounceTuning.LAUNCH_PITCH;
+    }
+
+    private float glidePitchForArc(double rise) {
+        if (acceleratingArc
+                && correctionRecoveryBounces == 0
+                && rise >= BounceTuning.GLIDE_ACCEL_DIVE_MIN_RISE) {
+            return BounceTuning.GLIDE_ACCEL_DIVE_PITCH;
+        }
+        return arcPitch;
     }
 
     // Arm flight at the first safe fractional launch point.
@@ -660,17 +731,17 @@ public final class BounceController {
 
     private void applyCorrectionFallbacks() {
         SetbackMonitor monitor = SetbackMonitor.get();
-        int sessionCorrections = Math.max(0,
-                monitor.totalServerCorrections() - correctionBaseline);
-        int corrections = Math.min(sessionCorrections,
-                monitor.recentSetbackCount(BounceTuning.CORRECTION_STORM_WINDOW_TICKS));
-        if (elytraLaunchEnabled && corrections >= BounceTuning.CORRECTIONS_DISABLE_ELYTRA) {
+        int sessionEpisodes = Math.max(0,
+                monitor.totalCorrectionEpisodes() - correctionEpisodeBaseline);
+        int episodes = Math.min(sessionEpisodes,
+                monitor.recentCorrectionEpisodeCount(BounceTuning.CORRECTION_STORM_WINDOW_TICKS));
+        if (elytraLaunchEnabled && episodes >= BounceTuning.CORRECTIONS_DISABLE_ELYTRA) {
             elytraLaunchEnabled = false;
-            LOGGER.warn("[Bounce] {} server corrections; falling back to sprint-jump", corrections);
+            LOGGER.warn("[Bounce] {} correction episodes; falling back to sprint-jump", episodes);
         }
-        if (jumpingEnabled && corrections >= BounceTuning.CORRECTIONS_DISABLE_JUMP) {
+        if (jumpingEnabled && episodes >= BounceTuning.CORRECTIONS_DISABLE_JUMP) {
             jumpingEnabled = false;
-            LOGGER.warn("[Bounce] {} server corrections; falling back to plain highway sprint", corrections);
+            LOGGER.warn("[Bounce] {} correction episodes; falling back to plain highway sprint", episodes);
         }
     }
 

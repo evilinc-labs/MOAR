@@ -27,7 +27,7 @@ import java.util.Set;
 public final class PacketTelemetry {
 
     private static final Logger LOGGER = LoggerFactory.getLogger("MOAR/Packets");
-    private static final String TRACE_BUILD = "fix64-correction-sensor";
+    private static final String TRACE_BUILD = "fix65-correction-episodes";
     private static final int MAX_EVENTS = 768;
     private static final int MAX_FIELDS = 14;
     private static final int MAX_VALUE_LENGTH = 220;

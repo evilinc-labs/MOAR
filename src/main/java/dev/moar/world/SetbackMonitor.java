@@ -52,10 +52,13 @@ public final class SetbackMonitor {
     // Total setbacks observed since join.
     private int totalSetbacks;
     private int totalServerCorrections;
+    private int totalCorrectionEpisodes;
 
     // Tick timestamps of recent setbacks (newest first), capped to HISTORY_SIZE.
     private final long[] setbackTicks = new long[HISTORY_SIZE];
+    private final long[] correctionEpisodeTicks = new long[HISTORY_SIZE];
     private int historyHead;
+    private int correctionEpisodeHead;
     private long currentTick;
 
     // Singleton — there's only one local player.
@@ -136,12 +139,23 @@ public final class SetbackMonitor {
         }
 
         if (correctionCount > 0) {
+            if (ticksSinceSetback >= CALM_WINDOW_TICKS) {
+                recordCorrectionEpisode(correctionCount);
+            }
             for (int i = 0; i < correctionCount; i++) {
                 recordSetback("server-correction");
             }
         } else if (ticksSinceSetback < CALM_WINDOW_TICKS) {
             ticksSinceSetback++;
         }
+    }
+
+    private void recordCorrectionEpisode(int packetCount) {
+        totalCorrectionEpisodes++;
+        correctionEpisodeTicks[correctionEpisodeHead] = currentTick;
+        correctionEpisodeHead = (correctionEpisodeHead + 1) % HISTORY_SIZE;
+        LOGGER.warn("[Setback] correction episode #{} started with {} packet(s)",
+                totalCorrectionEpisodes, packetCount);
     }
 
     private void recordSetback(String source) {
@@ -171,12 +185,25 @@ public final class SetbackMonitor {
 
     public int totalServerCorrections() { return totalServerCorrections; }
 
+    public int totalCorrectionEpisodes() { return totalCorrectionEpisodes; }
+
     // Setbacks within the last windowTicks client ticks.
     public int recentSetbackCount(int windowTicks) {
         if (windowTicks <= 0) return 0;
         long cutoff = currentTick - windowTicks;
         int count = 0;
         for (long t : setbackTicks) {
+            if (t > cutoff && t > 0) count++;
+        }
+        return count;
+    }
+
+    // Correction episodes within the last windowTicks client ticks.
+    public int recentCorrectionEpisodeCount(int windowTicks) {
+        if (windowTicks <= 0) return 0;
+        long cutoff = currentTick - windowTicks;
+        int count = 0;
+        for (long t : correctionEpisodeTicks) {
             if (t > cutoff && t > 0) count++;
         }
         return count;
@@ -194,11 +221,14 @@ public final class SetbackMonitor {
         ticksSinceSetback = CALM_WINDOW_TICKS;
         totalSetbacks = 0;
         totalServerCorrections = 0;
+        totalCorrectionEpisodes = 0;
         stationaryTicks = 0;
         currentTick = 0;
         historyHead = 0;
+        correctionEpisodeHead = 0;
         pendingCorrections.set(0);
         pendingAcknowledgements.set(0);
         for (int i = 0; i < setbackTicks.length; i++) setbackTicks[i] = 0;
+        for (int i = 0; i < correctionEpisodeTicks.length; i++) correctionEpisodeTicks[i] = 0;
     }
 }

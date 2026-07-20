@@ -86,8 +86,16 @@ public final class HighwayVerifier {
 
         int total = 0, griefed = 0, unloaded = 0;
         int griefStart = -1, griefEnd = -1;
+        int sampleLimit = LOOK_AHEAD_BLOCKS;
+        if (highway.exit != null) {
+            int exitDx = highway.exit.getX() - ox;
+            int exitDz = highway.exit.getZ() - oz;
+            int directionDot = exitDx * travelDx + exitDz * travelDz;
+            if (directionDot <= 0) return IntegrityReport.insufficient();
+            sampleLimit = Math.min(sampleLimit, Math.max(Math.abs(exitDx), Math.abs(exitDz)));
+        }
 
-        for (int step = 1; step <= LOOK_AHEAD_BLOCKS; step++) {
+        for (int step = 1; step <= sampleLimit; step++) {
             int bx = ox + travelDx * step;
             int bz = oz + travelDz * step;
 

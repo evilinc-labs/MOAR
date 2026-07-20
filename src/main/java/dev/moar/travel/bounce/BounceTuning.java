@@ -32,6 +32,9 @@ public final class BounceTuning {
     // Require a persistent blocked corridor before detouring.
     public static int WALL_CONFIRM_TICKS = 3;
 
+    // Leave enough stopping distance at full bounce speed.
+    public static int OBSTACLE_SCAN_AHEAD = 10;
+
     // Activate only after the jump apex.
     public static double ELYTRA_ACTIVATE_VY_THRESHOLD = -0.04;
 
@@ -44,26 +47,38 @@ public final class BounceTuning {
     // Stop waiting for a rejected launch before landing.
     public static int LAUNCH_ACK_TIMEOUT_TICKS = 8;
 
-    // Fall back to sprint-jump after repeated correction packets.
-    public static int CORRECTIONS_DISABLE_ELYTRA = 3;
+    // Fall back after repeated correction episodes.
+    public static int CORRECTIONS_DISABLE_ELYTRA = 2;
 
-    // Count only correction storms, not mission-lifetime corrections.
-    public static int CORRECTION_STORM_WINDOW_TICKS = 60;
+    // Forget isolated correction episodes after this window.
+    public static int CORRECTION_STORM_WINDOW_TICKS = 400;
 
-    // Fall back to plain sprint if jumping is also rejected.
-    public static int CORRECTIONS_DISABLE_JUMP = 6;
+    // Fall back to plain sprint after persistent episodes.
+    public static int CORRECTIONS_DISABLE_JUMP = 4;
 
     // Keep launch acknowledgement on the proven posture.
     public static float LAUNCH_PITCH = 68.0f;
+
+    // Taper launch pitch as horizontal speed rises.
+    public static float LAUNCH_ACCEL_LOW_SPEED_PITCH = 68.0f;
+    public static float LAUNCH_ACCEL_MID_SPEED_PITCH = 68.0f;
 
     // Stabilize speed after reaching the target.
     public static float GLIDE_CRUISE_PITCH = 60.0f;
 
     // Accelerate only after the server accepts gliding.
-    public static float GLIDE_ACCEL_PITCH = 52.0f;
+    public static float GLIDE_ACCEL_PITCH = 40.0f;
 
-    // Aim just below 40 blocks per second before cruising.
-    public static double TARGET_HORIZONTAL_SPEED = 1.9;
+    // Hold the stable glide angle throughout acceleration.
+    public static float GLIDE_ACCEL_LOW_SPEED_PITCH = 40.0f;
+    public static float GLIDE_ACCEL_MID_SPEED_PITCH = 40.0f;
+    public static float GLIDE_ACCEL_DIVE_PITCH = 56.0f;
+    public static double GLIDE_ACCEL_DIVE_MIN_RISE = 0.25;
+    public static double ACCEL_LOW_SPEED_THRESHOLD = 1.25;
+    public static double ACCEL_MID_SPEED_THRESHOLD = 1.70;
+
+    // Accelerate until reaching 40 blocks per second.
+    public static double TARGET_HORIZONTAL_SPEED = 2.0;
 
     // Stabilize several bounces after a server correction.
     public static int CORRECTION_RECOVERY_BOUNCES = 8;
