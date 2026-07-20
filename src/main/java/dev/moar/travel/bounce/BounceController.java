@@ -57,6 +57,7 @@ public final class BounceController {
     private LaunchPhase launchPhase = LaunchPhase.GROUNDED;
     private int launchPhaseTicks;
     private int airborneLaunchTicks;
+    private int glideConfirmationTicks;
     private int launchRequests;
     private int completedBounces;
     private int consecutiveLaunchFailures;
@@ -122,6 +123,7 @@ public final class BounceController {
         launchPhase    = LaunchPhase.GROUNDED;
         launchPhaseTicks = 0;
         airborneLaunchTicks = 0;
+        glideConfirmationTicks = 0;
         launchRequests = 0;
         completedBounces = 0;
         consecutiveLaunchFailures = 0;
@@ -440,14 +442,20 @@ public final class BounceController {
             }
             case LAUNCH_REQUESTED -> {
                 if (gliding && !onGround) {
-                    recordLaunchAccepted();
-                    setLaunchPhase(LaunchPhase.GLIDING);
+                    glideConfirmationTicks++;
+                    if (glideConfirmationTicks >= BounceTuning.LAUNCH_CONFIRM_TICKS) {
+                        recordLaunchAccepted();
+                        setLaunchPhase(LaunchPhase.GLIDING);
+                    }
                 } else if (onGround) {
                     recordLaunchRejected("grounded-before-ack", mc.player.getY(), velocityY, rise);
                     setLaunchPhase(LaunchPhase.GROUNDED);
-                } else if (launchPhaseTicks >= BounceTuning.LAUNCH_ACK_TIMEOUT_TICKS) {
-                    recordLaunchRejected("ack-timeout", mc.player.getY(), velocityY, rise);
-                    setLaunchPhase(LaunchPhase.LANDING);
+                } else {
+                    glideConfirmationTicks = 0;
+                    if (launchPhaseTicks >= BounceTuning.LAUNCH_ACK_TIMEOUT_TICKS) {
+                        recordLaunchRejected("ack-timeout", mc.player.getY(), velocityY, rise);
+                        setLaunchPhase(LaunchPhase.LANDING);
+                    }
                 }
             }
             case GLIDING -> {
@@ -624,6 +632,7 @@ public final class BounceController {
         ceilingContact = false;
         launchArmed = false;
         airborneLaunchTicks = 0;
+        glideConfirmationTicks = 0;
         LOGGER.debug("[Bounce] ground jump requested");
         return true;
     }
@@ -872,11 +881,12 @@ public final class BounceController {
         }
         launchRequests++;
         launchArmed = true;
+        glideConfirmationTicks = 0;
         setLaunchPhase(LaunchPhase.LAUNCH_REQUESTED);
         return true;
     }
 
-    // Pulse vanilla jump input after reaching a server-valid airborne state.
+    // Send one vanilla flight command for this jump arc.
     private boolean requestStartFlying(double y, double velocityY, double rise) {
         if (!MoarNetworkManager.tryAcquire(
                 MoarNetworkManager.Lane.MOVEMENT,
@@ -886,11 +896,15 @@ public final class BounceController {
         /*? if >=26.1 {*//*
         Minecraft mc = Minecraft.getInstance();
         if (mc.player == null) return false;
-        mc.options.keyJump.setDown(true);
+        mc.player.startFallFlying();
+        mc.getConnection().send(new ServerboundPlayerCommandPacket(
+                mc.player, ServerboundPlayerCommandPacket.Action.START_FALL_FLYING));
         *//*?} else {*/
         MinecraftClient mc = MinecraftClient.getInstance();
         if (mc.player == null) return false;
-        mc.options.jumpKey.setPressed(true);
+        mc.player.startGliding();
+        mc.player.networkHandler.sendPacket(new ClientCommandC2SPacket(
+                mc.player, ClientCommandC2SPacket.Mode.START_FALL_FLYING));
         /*?}*/
         if (launchRequests < 3) {
             LOGGER.info("[Bounce] launch request #{} y={} rise={} vy={}", launchRequests + 1,

@@ -47,6 +47,9 @@ public final class BounceTuning {
     // Stop waiting for a rejected launch before landing.
     public static int LAUNCH_ACK_TIMEOUT_TICKS = 8;
 
+    // Confirm glide before advancing the launch phase.
+    public static int LAUNCH_CONFIRM_TICKS = 3;
+
     // Fall back after repeated correction episodes.
     public static int CORRECTIONS_DISABLE_ELYTRA = 4;
 
