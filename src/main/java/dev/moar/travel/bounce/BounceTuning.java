@@ -32,8 +32,8 @@ public final class BounceTuning {
     // Require a persistent blocked corridor before detouring.
     public static int WALL_CONFIRM_TICKS = 3;
 
-    // Leave enough stopping distance at full bounce speed.
-    public static int OBSTACLE_SCAN_AHEAD = 10;
+    // Leave enough landing distance at full bounce speed.
+    public static int OBSTACLE_SCAN_AHEAD = 24;
 
     // Activate only after the jump apex.
     public static double ELYTRA_ACTIVATE_VY_THRESHOLD = -0.04;

@@ -17,12 +17,6 @@ import net.minecraft.network.packet.c2s.play.ClientCommandC2SPacket;
 import net.minecraft.util.math.BlockPos;
 import net.minecraft.util.math.MathHelper;
 /*?}*/
-/*? if >=26.1 {*//*
-import net.minecraft.world.level.block.Blocks;
-*//*?} else {*/
-import net.minecraft.block.Blocks;
-/*?}*/
-
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -224,7 +218,12 @@ public final class BounceController {
             wallObservationTicks = 0;
             wallReason = "none";
         }
-        wallAhead = wallObservationTicks >= BounceTuning.WALL_CONFIRM_TICKS;
+        /*? if >=26.1 {*//*
+        boolean grounded = mc.player.onGround();
+        *//*?} else {*/
+        boolean grounded = mc.player.isOnGround();
+        /*?}*/
+        wallAhead = grounded && wallObservationTicks >= BounceTuning.WALL_CONFIRM_TICKS;
         if (wallAhead) return; // skip stuck-detection this tick
 
         // ── Exit check ───────────────────────────────────────────
@@ -510,7 +509,8 @@ public final class BounceController {
     // Find a blocked body-height corridor ahead.
     private boolean detectBlockedCorridor(
             /*? if >=26.1 {*//* Minecraft mc *//*?} else {*/ MinecraftClient mc /*?}*/) {
-        if (mc.player == null || highway == null || exitColumn == null) return false;
+        if (mc.player == null || highway == null || exitColumn == null
+                || highway.floorY == Integer.MIN_VALUE) return false;
 
         /*? if >=26.1 {*//*
         if (mc.level == null) return false;
@@ -518,11 +518,7 @@ public final class BounceController {
         if (mc.world == null) return false;
         /*?}*/
 
-        /*? if >=26.1 {*//*
-        int feetY = mc.player.blockPosition().getY();
-        *//*?} else {*/
-        int feetY = mc.player.getBlockPos().getY();
-        /*?}*/
+        int feetY = highway.floorY + 1;
         float yaw = yawForDirection(travelDx, travelDz);
         double yawRad = Math.toRadians(yaw);
         double dirX   = -Math.sin(yawRad);
@@ -549,36 +545,31 @@ public final class BounceController {
                 int bz = centerZ + perpZ * lane;
                 BlockPos feet = new BlockPos(bx, feetY, bz);
                 BlockPos head = new BlockPos(bx, feetY + 1, bz);
-                /*? if >=26.1 {*//*
-                boolean laneBlocked = isImpassable(mc.level.getBlockState(feet).getBlock())
-                        || isImpassable(mc.level.getBlockState(head).getBlock());
-                *//*?} else {*/
-                boolean laneBlocked = isImpassable(mc.world.getBlockState(feet).getBlock())
-                        || isImpassable(mc.world.getBlockState(head).getBlock());
-                /*?}*/
+                boolean laneBlocked = hasCollision(mc, feet) || hasCollision(mc, head);
                 if (laneBlocked) {
                     blockedLanes++;
                     if (lane == 0) centerBlocked = true;
                 }
             }
-            if (centerBlocked) {
-                String kind = blockedLanes == 3 ? "corridor" : "center-lane";
-                wallReason = kind + "@" + centerX + "," + feetY + "," + centerZ + " d=" + d;
+            if (centerBlocked && blockedLanes == 3) {
+                wallReason = "corridor@" + centerX + "," + feetY + "," + centerZ + " d=" + d;
                 return true;
             }
         }
         return false;
     }
 
-    // Treat air and portals as passable; everything else blocks the corridor.
-    /*? if >=26.1 {*//*
-    private static boolean isImpassable(net.minecraft.world.level.block.Block b) {
-    *//*?} else {*/
-    private static boolean isImpassable(net.minecraft.block.Block b) {
-    /*?}*/
-        if (b == Blocks.AIR || b == Blocks.CAVE_AIR || b == Blocks.VOID_AIR) return false;
-        if (b == Blocks.NETHER_PORTAL) return false;
-        return true;
+    // Ignore decorations without collision geometry.
+    private static boolean hasCollision(
+            /*? if >=26.1 {*//* Minecraft mc, *//*?} else {*/ MinecraftClient mc, /*?}*/
+            BlockPos pos) {
+        /*? if >=26.1 {*//*
+        if (mc.level == null) return false;
+        return !mc.level.getBlockState(pos).getCollisionShape(mc.level, pos).isEmpty();
+        *//*?} else {*/
+        if (mc.world == null) return false;
+        return !mc.world.getBlockState(pos).getCollisionShape(mc.world, pos).isEmpty();
+        /*?}*/
     }
 
     // Pulse vanilla jump input and let normal movement create the jump.
