@@ -1,13 +1,27 @@
-# ── Build outputs ────────────────────────────────────────────────
+# Build outputs
 build/
-versions/*/build/
-versions/*/bin/
+bin/
+out/
+remappedSrc/
+run/
+.fabric/
 
-# ── Gradle ───────────────────────────────────────────────────────
+# Gradle
 .gradle/
-versions/*/.gradle/
+**/.gradle/
 
-# ── IDE ──────────────────────────────────────────────────────────
+# Track only Stonecutter target descriptors.
+versions/*
+!versions/*/
+versions/*/*
+!versions/*/gradle.properties
+
+# Local tooling
+.agents/
+.codex
+.codex-tmp/
+
+# IDE
 .idea/
 *.iml
 *.ipr
@@ -17,25 +31,19 @@ versions/*/.gradle/
 .project
 .classpath
 .factorypath
-bin/
-out/
 
-# ── Fabric / Loom ────────────────────────────────────────────────
-run/
-remappedSrc/
-.fabric/
-
-# ── Java ─────────────────────────────────────────────────────────
+# Java archives
 *.class
 *.jar
 *.war
 *.nar
 *.ear
+!gradle/wrapper/gradle-wrapper.jar
 
-# ── Snyk ──────────────────────────────────────────────────────────
+# Security tooling
 .snyk
 
-# ── OS / misc ────────────────────────────────────────────────────
+# OS and runtime files
 .DS_Store
 Thumbs.db
 *.log
