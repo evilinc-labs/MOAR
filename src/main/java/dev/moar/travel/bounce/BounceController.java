@@ -10,15 +10,11 @@ import net.minecraft.client.Options;
 import net.minecraft.core.BlockPos;
 import net.minecraft.network.protocol.game.ServerboundPlayerCommandPacket;
 import net.minecraft.util.Mth;
-import net.minecraft.world.entity.decoration.ItemFrame;
-import net.minecraft.world.phys.AABB;
 *//*?} else {*/
 import net.minecraft.client.MinecraftClient;
 import net.minecraft.client.option.GameOptions;
-import net.minecraft.entity.decoration.ItemFrameEntity;
 import net.minecraft.network.packet.c2s.play.ClientCommandC2SPacket;
 import net.minecraft.util.math.BlockPos;
-import net.minecraft.util.math.Box;
 import net.minecraft.util.math.MathHelper;
 /*?}*/
 /*? if >=26.1 {*//*
@@ -72,7 +68,6 @@ public final class BounceController {
     private double takeoffY;
     private double peakY;
     private boolean ceilingContact;
-    private boolean roofDetected;
     private boolean acceleratingArc;
     private int correctionRecoveryBounces;
     private float launchPitch;
@@ -85,11 +80,14 @@ public final class BounceController {
     private double requiredVerticalAcceleration;
     private double predictedLandingTicks;
     private double maximumHorizontalSpeedLoss;
-    private double previousHorizontalSpeed;
-    private double filteredHorizontalAcceleration;
+    private double previousVelocityX;
+    private double previousVelocityZ;
+    private double filteredTangentialAcceleration;
+    private double filteredNormalAcceleration;
+    private double requiredNormalAcceleration;
     private double apexHorizontalSpeed;
     private boolean apexPassed;
-    private int horizontalDecelerationTicks;
+    private int tangentialDecelerationTicks;
     private float minimumGlidePitch;
     private float maximumGlidePitch;
     private boolean launchArmed;
@@ -133,7 +131,6 @@ public final class BounceController {
         takeoffY = Double.NaN;
         peakY = Double.NaN;
         ceilingContact = false;
-        roofDetected = false;
         acceleratingArc = true;
         correctionRecoveryBounces = 0;
         launchPitch = BounceTuning.LAUNCH_PITCH;
@@ -366,6 +363,8 @@ public final class BounceController {
         boolean onGround = mc.player.onGround();
         boolean gliding = mc.player.isFallFlying();
         double velocityY = mc.player.getDeltaMovement().y;
+        double velocityX = mc.player.getDeltaMovement().x;
+        double velocityZ = mc.player.getDeltaMovement().z;
         *//*?} else {*/
         GameOptions opts = mc.options;
         opts.forwardKey.setPressed(true);
@@ -374,8 +373,9 @@ public final class BounceController {
         boolean onGround = mc.player.isOnGround();
         boolean gliding = mc.player.isGliding();
         double velocityY = mc.player.getVelocity().y;
+        double velocityX = mc.player.getVelocity().x;
+        double velocityZ = mc.player.getVelocity().z;
         /*?}*/
-        boolean decorationAhead = hasDecorationAhead(mc);
         double rise = Double.isNaN(takeoffY) ? 0.0 : mc.player.getY() - takeoffY;
         peakHorizontalSpeed = Math.max(peakHorizontalSpeed, horizontalSpeed());
         if (!Double.isNaN(takeoffY)) {
@@ -385,7 +385,7 @@ public final class BounceController {
             }
         }
         if (launchPhase == LaunchPhase.GLIDING && gliding && !onGround) {
-            updateArcModel(velocityY, horizontalSpeed());
+            updateArcModel(velocityX, velocityY, velocityZ);
             activeGlidePitch = glidePitchForArc(rise, velocityY);
             minimumGlidePitch = Math.min(minimumGlidePitch, activeGlidePitch);
             maximumGlidePitch = Math.max(maximumGlidePitch, activeGlidePitch);
@@ -407,9 +407,6 @@ public final class BounceController {
                 if (!jumpingEnabled) {
                     return;
                 }
-                if (decorationAhead) {
-                    return;
-                }
                 if (requestGroundJump()) {
                     setLaunchPhase(LaunchPhase.GROUND_JUMP_REQUESTED);
                 }
@@ -425,8 +422,6 @@ public final class BounceController {
                 if (launchArmed && gliding && !onGround) {
                     recordLaunchAccepted();
                     setLaunchPhase(LaunchPhase.GLIDING);
-                } else if (decorationAhead) {
-                    setLaunchPhase(LaunchPhase.LANDING);
                 } else if (!onGround || rise >= BounceTuning.ELYTRA_ACTIVATE_MAX_RISE) {
                     tryRequestLaunch(mc.player.getY(), velocityY, rise);
                 } else if (onGround && launchPhaseTicks > 2) {
@@ -454,13 +449,12 @@ public final class BounceController {
                     if (completedBounces <= 3 || completedBounces % 10 == 0) {
                         double peakRise = Double.isNaN(peakY) || Double.isNaN(takeoffY)
                                 ? 0.0 : peakY - takeoffY;
-                        LOGGER.info("[Bounce] touchdown #{} speed={} peakSpeed={} apexSpeed={} speedLoss={} peakRise={} ceiling={} roof={} mode={} launchPitch={} glidePitch={} activePitch={} pitchRange={}-{} diveTicks={} ay={} ax={} requiredAy={} landingTicks={} offset={} steer={}",
+                        LOGGER.info("[Bounce] touchdown #{} speed={} peakSpeed={} apexSpeed={} speedLoss={} peakRise={} ceiling={} mode={} launchPitch={} glidePitch={} activePitch={} pitchRange={}-{} diveTicks={} ay={} at={} an={} requiredAy={} requiredAn={} pathAngle={} landingTicks={} offset={} steer={}",
                                 completedBounces, String.format("%.3f", horizontalSpeed()),
                                 String.format("%.3f", peakHorizontalSpeed),
                                 formatArcValue(apexHorizontalSpeed),
                                 String.format("%.3f", maximumHorizontalSpeedLoss),
                                 String.format("%.3f", peakRise), ceilingContact,
-                                roofDetected,
                                 correctionRecoveryBounces > 0
                                         ? "RECOVERY"
                                         : acceleratingArc ? "ACCEL" : "CRUISE",
@@ -471,13 +465,16 @@ public final class BounceController {
                                 formatPitch(maximumGlidePitch),
                                 diveTicks,
                                 formatArcValue(filteredVerticalAcceleration),
-                                formatArcValue(filteredHorizontalAcceleration),
+                                formatArcValue(filteredTangentialAcceleration),
+                                formatArcValue(filteredNormalAcceleration),
                                 formatArcValue(requiredVerticalAcceleration),
+                                formatArcValue(requiredNormalAcceleration),
+                                formatArcValue(flightPathAngleDegrees()),
                                 formatArcValue(predictedLandingTicks),
                                 String.format("%.3f", lastPerpOffset),
                                 String.format("%.2f", lastPerpCorrection));
                     }
-                    if (jumpingEnabled && !decorationAhead && requestGroundJump()) {
+                    if (jumpingEnabled && requestGroundJump()) {
                         setLaunchPhase(LaunchPhase.GROUND_JUMP_REQUESTED);
                     } else {
                         setLaunchPhase(LaunchPhase.GROUNDED);
@@ -508,44 +505,6 @@ public final class BounceController {
 
     private static float yawForDirection(int dx, int dz) {
         return (float) Math.toDegrees(Math.atan2(-dx, dz));
-    }
-
-    // Find decoration entities in the immediate roadway corridor.
-    private boolean hasDecorationAhead(
-            /*? if >=26.1 {*//* Minecraft mc *//*?} else {*/ MinecraftClient mc /*?}*/) {
-        if (mc.player == null || highway == null) return false;
-        /*? if >=26.1 {*//*
-        if (mc.level == null) return false;
-        *//*?} else {*/
-        if (mc.world == null) return false;
-        /*?}*/
-
-        double startX = mc.player.getX();
-        double startZ = mc.player.getZ();
-        double endX = startX + travelDx * BounceTuning.DECORATION_SCAN_AHEAD;
-        double endZ = startZ + travelDz * BounceTuning.DECORATION_SCAN_AHEAD;
-        double minY = highway.floorY + 0.5;
-        double maxY = highway.floorY + 3.0;
-        /*? if >=26.1 {*//*
-        AABB corridor = new AABB(
-                Math.min(startX, endX) - BounceTuning.DECORATION_CORRIDOR_RADIUS,
-                minY,
-                Math.min(startZ, endZ) - BounceTuning.DECORATION_CORRIDOR_RADIUS,
-                Math.max(startX, endX) + BounceTuning.DECORATION_CORRIDOR_RADIUS,
-                maxY,
-                Math.max(startZ, endZ) + BounceTuning.DECORATION_CORRIDOR_RADIUS);
-        return !mc.level.getEntitiesOfClass(ItemFrame.class, corridor).isEmpty();
-        *//*?} else {*/
-        Box corridor = new Box(
-                Math.min(startX, endX) - BounceTuning.DECORATION_CORRIDOR_RADIUS,
-                minY,
-                Math.min(startZ, endZ) - BounceTuning.DECORATION_CORRIDOR_RADIUS,
-                Math.max(startX, endX) + BounceTuning.DECORATION_CORRIDOR_RADIUS,
-                maxY,
-                Math.max(startZ, endZ) + BounceTuning.DECORATION_CORRIDOR_RADIUS);
-        return !mc.world.getEntitiesByClass(
-                ItemFrameEntity.class, corridor, entity -> true).isEmpty();
-        /*?}*/
     }
 
     // Find a blocked body-height corridor ahead.
@@ -622,33 +581,6 @@ public final class BounceController {
         return true;
     }
 
-    // Latch the roof profile so pitch stays stable through the arc.
-    private boolean hasLowCeiling(
-            /*? if >=26.1 {*//* Minecraft mc *//*?} else {*/ MinecraftClient mc /*?}*/) {
-        if (mc.player == null || highway == null) return false;
-        /*? if >=26.1 {*//*
-        if (mc.level == null) return false;
-        *//*?} else {*/
-        if (mc.world == null) return false;
-        /*?}*/
-
-        int x = (int) Math.floor(mc.player.getX());
-        int z = (int) Math.floor(mc.player.getZ());
-        int ceilingY = highway.floorY + BounceTuning.HEADROOM_Y_OFFSET;
-        for (int ahead = 0; ahead <= BounceTuning.HEADROOM_SCAN_AHEAD; ahead++) {
-            BlockPos pos = new BlockPos(
-                    x + travelDx * ahead,
-                    ceilingY,
-                    z + travelDz * ahead);
-            /*? if >=26.1 {*//*
-            if (isImpassable(mc.level.getBlockState(pos).getBlock())) return true;
-            *//*?} else {*/
-            if (isImpassable(mc.world.getBlockState(pos).getBlock())) return true;
-            /*?}*/
-        }
-        return false;
-    }
-
     // Pulse vanilla jump input and let normal movement create the jump.
     private boolean requestGroundJump() {
         if (!MoarNetworkManager.tryAcquire(
@@ -665,7 +597,6 @@ public final class BounceController {
         if (mc.player == null) return false;
         mc.options.jumpKey.setPressed(true);
         /*?}*/
-        roofDetected = hasLowCeiling(mc);
         double speed = horizontalSpeed();
         acceleratingArc = correctionRecoveryBounces == 0
                 && speed < BounceTuning.TARGET_HORIZONTAL_SPEED;
@@ -727,19 +658,31 @@ public final class BounceController {
         double observedAcceleration = Double.isFinite(filteredVerticalAcceleration)
                 ? filteredVerticalAcceleration
                 : 0.0;
+        double observedNormalAcceleration = Double.isFinite(filteredNormalAcceleration)
+                ? filteredNormalAcceleration
+                : observedAcceleration;
+        requiredNormalAcceleration = requiredNormalAcceleration(
+                requiredVerticalAcceleration,
+                filteredTangentialAcceleration,
+                horizontalSpeed(),
+                velocityY);
+        double normalAccelerationError = Double.isFinite(requiredNormalAcceleration)
+                ? observedNormalAcceleration - requiredNormalAcceleration
+                : observedAcceleration - requiredVerticalAcceleration;
         double speedLoss = apexPassed && Double.isFinite(apexHorizontalSpeed)
                 ? Math.max(0.0, apexHorizontalSpeed - horizontalSpeed())
                 : 0.0;
         maximumHorizontalSpeedLoss = Math.max(maximumHorizontalSpeedLoss, speedLoss);
-        double compensatedSpeedLoss = horizontalDecelerationTicks
-                >= BounceTuning.GLIDE_ACCEL_HORIZONTAL_DECEL_TICKS
-                ? Math.max(0.0, speedLoss - BounceTuning.GLIDE_ACCEL_SPEED_LOSS_DEADZONE)
+        double tangentialLoss = tangentialDecelerationTicks
+                >= BounceTuning.GLIDE_ACCEL_TANGENTIAL_DECEL_TICKS
+                ? Math.max(0.0, -filteredTangentialAcceleration
+                        - BounceTuning.GLIDE_ACCEL_TANGENTIAL_LOSS_DEADZONE)
                 : 0.0;
         float speedCompensation = (float) Math.min(
                 BounceTuning.GLIDE_ACCEL_SPEED_COMPENSATION_MAX,
-                compensatedSpeedLoss * BounceTuning.GLIDE_ACCEL_SPEED_LOSS_GAIN);
+                tangentialLoss * BounceTuning.GLIDE_ACCEL_TANGENTIAL_LOSS_GAIN);
         float targetPitch = (float) (BounceTuning.GLIDE_ACCEL_DIVE_PITCH
-                + (observedAcceleration - requiredVerticalAcceleration)
+                + normalAccelerationError
                 * BounceTuning.GLIDE_ACCEL_PITCH_GAIN)
                 + speedCompensation;
         targetPitch = clamp(targetPitch,
@@ -755,7 +698,8 @@ public final class BounceController {
                 || velocityY <= BounceTuning.GLIDE_ACCEL_DIVE_MAX_ASCENT_VELOCITY);
     }
 
-    private void updateArcModel(double velocityY, double horizontalSpeed) {
+    private void updateArcModel(double velocityX, double velocityY, double velocityZ) {
+        double horizontalSpeed = Math.hypot(velocityX, velocityZ);
         if (!apexPassed && Double.isFinite(previousVerticalVelocity)
                 && previousVerticalVelocity > 0.0 && velocityY <= 0.0) {
             apexPassed = true;
@@ -773,40 +717,109 @@ public final class BounceController {
                 filteredVerticalAcceleration = observed;
             }
         }
-        if (Double.isFinite(previousHorizontalSpeed)) {
-            double observed = clamp(
-                    horizontalSpeed - previousHorizontalSpeed,
-                    -BounceTuning.GLIDE_ACCEL_HORIZONTAL_SAMPLE_LIMIT,
-                    BounceTuning.GLIDE_ACCEL_HORIZONTAL_SAMPLE_LIMIT);
-            if (Double.isFinite(filteredHorizontalAcceleration)) {
-                double weight = BounceTuning.GLIDE_ACCEL_HORIZONTAL_FILTER;
-                filteredHorizontalAcceleration +=
-                        (observed - filteredHorizontalAcceleration) * weight;
+        if (Double.isFinite(previousVelocityX) && Double.isFinite(previousVelocityZ)) {
+            FlightFrameAcceleration frame = resolveFlightFrameAcceleration(
+                    velocityX,
+                    velocityY,
+                    velocityZ,
+                    velocityX - previousVelocityX,
+                    velocityY - previousVerticalVelocity,
+                    velocityZ - previousVelocityZ);
+            filteredTangentialAcceleration = filterAcceleration(
+                    filteredTangentialAcceleration, frame.tangential());
+            filteredNormalAcceleration = filterAcceleration(
+                    filteredNormalAcceleration, frame.normal());
+            if (apexPassed && filteredTangentialAcceleration
+                    <= BounceTuning.GLIDE_ACCEL_TANGENTIAL_DECEL_THRESHOLD) {
+                tangentialDecelerationTicks++;
             } else {
-                filteredHorizontalAcceleration = observed;
-            }
-            if (apexPassed && filteredHorizontalAcceleration
-                    <= BounceTuning.GLIDE_ACCEL_HORIZONTAL_DECEL_THRESHOLD) {
-                horizontalDecelerationTicks++;
-            } else {
-                horizontalDecelerationTicks = 0;
+                tangentialDecelerationTicks = 0;
             }
         }
+        previousVelocityX = velocityX;
         previousVerticalVelocity = velocityY;
-        previousHorizontalSpeed = horizontalSpeed;
+        previousVelocityZ = velocityZ;
     }
 
     private void resetArcModel() {
         previousVerticalVelocity = Double.NaN;
         filteredVerticalAcceleration = Double.NaN;
         requiredVerticalAcceleration = Double.NaN;
+        requiredNormalAcceleration = Double.NaN;
         predictedLandingTicks = Double.NaN;
-        previousHorizontalSpeed = Double.NaN;
-        filteredHorizontalAcceleration = Double.NaN;
+        previousVelocityX = Double.NaN;
+        previousVelocityZ = Double.NaN;
+        filteredTangentialAcceleration = Double.NaN;
+        filteredNormalAcceleration = Double.NaN;
         apexHorizontalSpeed = Double.NaN;
         apexPassed = false;
-        horizontalDecelerationTicks = 0;
+        tangentialDecelerationTicks = 0;
     }
+
+    // Resolve acceleration along and normal to the current flight path.
+    private static FlightFrameAcceleration resolveFlightFrameAcceleration(
+            double velocityX,
+            double velocityY,
+            double velocityZ,
+            double accelerationX,
+            double accelerationY,
+            double accelerationZ) {
+        double horizontalSpeed = Math.hypot(velocityX, velocityZ);
+        double speed = Math.hypot(horizontalSpeed, velocityY);
+        if (speed < 1.0E-6 || horizontalSpeed < 1.0E-6) {
+            return new FlightFrameAcceleration(0.0, accelerationY);
+        }
+        double horizontalAcceleration =
+                (accelerationX * velocityX + accelerationZ * velocityZ) / horizontalSpeed;
+        double tangential = (horizontalAcceleration * horizontalSpeed
+                + accelerationY * velocityY) / speed;
+        double normal = (-horizontalAcceleration * velocityY
+                + accelerationY * horizontalSpeed) / speed;
+        return new FlightFrameAcceleration(tangential, normal);
+    }
+
+    private static double filterAcceleration(double filtered, double observed) {
+        observed = clamp(
+                observed,
+                -BounceTuning.GLIDE_ACCEL_FLIGHT_FRAME_SAMPLE_LIMIT,
+                BounceTuning.GLIDE_ACCEL_FLIGHT_FRAME_SAMPLE_LIMIT);
+        if (!Double.isFinite(filtered)) return observed;
+        return filtered + (observed - filtered) * BounceTuning.GLIDE_ACCEL_FLIGHT_FRAME_FILTER;
+    }
+
+    // Convert the landing requirement into the velocity-normal frame.
+    private static double requiredNormalAcceleration(
+            double requiredVertical,
+            double tangential,
+            double horizontalSpeed,
+            double velocityY) {
+        if (!Double.isFinite(requiredVertical) || horizontalSpeed < 1.0E-6) {
+            return Double.NaN;
+        }
+        double speed = Math.hypot(horizontalSpeed, velocityY);
+        double alongPath = Double.isFinite(tangential) ? tangential : 0.0;
+        return (requiredVertical * speed - alongPath * velocityY) / horizontalSpeed;
+    }
+
+    private static double flightPathAngleDegrees() {
+        /*? if >=26.1 {*//*
+        Minecraft mc = Minecraft.getInstance();
+        if (mc.player == null) return Double.NaN;
+        double horizontalSpeed = Math.hypot(
+                mc.player.getDeltaMovement().x,
+                mc.player.getDeltaMovement().z);
+        return Math.toDegrees(Math.atan2(mc.player.getDeltaMovement().y, horizontalSpeed));
+        *//*?} else {*/
+        MinecraftClient mc = MinecraftClient.getInstance();
+        if (mc.player == null) return Double.NaN;
+        double horizontalSpeed = Math.hypot(
+                mc.player.getVelocity().x,
+                mc.player.getVelocity().z);
+        return Math.toDegrees(Math.atan2(mc.player.getVelocity().y, horizontalSpeed));
+        /*?}*/
+    }
+
+    private record FlightFrameAcceleration(double tangential, double normal) {}
 
     private static double solveLandingTicks(double rise, double velocityY, double accelerationY) {
         if (rise <= 0.0) return 0.0;

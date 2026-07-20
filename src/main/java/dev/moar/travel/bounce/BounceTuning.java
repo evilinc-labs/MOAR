@@ -47,18 +47,14 @@ public final class BounceTuning {
     // Stop waiting for a rejected launch before landing.
     public static int LAUNCH_ACK_TIMEOUT_TICKS = 8;
 
-    // Coast through decoration entities before launching again.
-    public static double DECORATION_SCAN_AHEAD = 5.0;
-    public static double DECORATION_CORRIDOR_RADIUS = 1.0;
-
     // Fall back after repeated correction episodes.
-    public static int CORRECTIONS_DISABLE_ELYTRA = 2;
+    public static int CORRECTIONS_DISABLE_ELYTRA = 4;
 
     // Forget isolated correction episodes after this window.
     public static int CORRECTION_STORM_WINDOW_TICKS = 400;
 
     // Fall back to plain sprint after persistent episodes.
-    public static int CORRECTIONS_DISABLE_JUMP = 4;
+    public static int CORRECTIONS_DISABLE_JUMP = 6;
 
     // Keep launch acknowledgement on the proven posture.
     public static float LAUNCH_PITCH = 68.0f;
@@ -89,13 +85,13 @@ public final class BounceTuning {
     public static double GLIDE_ACCEL_VERTICAL_ACCEL_LIMIT = 0.10;
     public static double GLIDE_ACCEL_LANDING_TICKS = 5.0;
     public static double GLIDE_ACCEL_PITCH_GAIN = 120.0;
-    public static double GLIDE_ACCEL_SPEED_LOSS_DEADZONE = 0.05;
-    public static double GLIDE_ACCEL_HORIZONTAL_FILTER = 0.30;
-    public static double GLIDE_ACCEL_HORIZONTAL_SAMPLE_LIMIT = 0.06;
-    public static double GLIDE_ACCEL_HORIZONTAL_DECEL_THRESHOLD = -0.01;
-    public static int GLIDE_ACCEL_HORIZONTAL_DECEL_TICKS = 2;
-    public static double GLIDE_ACCEL_SPEED_LOSS_GAIN = 30.0;
-    public static float GLIDE_ACCEL_SPEED_COMPENSATION_MAX = 5.0f;
+    public static double GLIDE_ACCEL_FLIGHT_FRAME_FILTER = 0.25;
+    public static double GLIDE_ACCEL_FLIGHT_FRAME_SAMPLE_LIMIT = 0.10;
+    public static double GLIDE_ACCEL_TANGENTIAL_DECEL_THRESHOLD = -0.01;
+    public static int GLIDE_ACCEL_TANGENTIAL_DECEL_TICKS = 2;
+    public static double GLIDE_ACCEL_TANGENTIAL_LOSS_DEADZONE = 0.005;
+    public static double GLIDE_ACCEL_TANGENTIAL_LOSS_GAIN = 80.0;
+    public static float GLIDE_ACCEL_SPEED_COMPENSATION_MAX = 3.0f;
     public static double ACCEL_LOW_SPEED_THRESHOLD = 1.25;
     public static double ACCEL_MID_SPEED_THRESHOLD = 1.70;
 
@@ -104,11 +100,5 @@ public final class BounceTuning {
 
     // Stabilize several bounces after a server correction.
     public static int CORRECTION_RECOVERY_BOUNCES = 8;
-
-    // Check the roof above the player's full bounce height.
-    public static int HEADROOM_Y_OFFSET = 4;
-
-    // Observe immediate headroom once per bounce.
-    public static int HEADROOM_SCAN_AHEAD = 2;
 
 }
