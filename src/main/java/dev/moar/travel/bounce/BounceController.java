@@ -59,6 +59,7 @@ public final class BounceController {
     private int airborneLaunchTicks;
     private int glideConfirmationTicks;
     private int launchRequests;
+    private int launchAttemptsThisJump;
     private int completedBounces;
     private int consecutiveLaunchFailures;
     private double takeoffY;
@@ -125,6 +126,7 @@ public final class BounceController {
         airborneLaunchTicks = 0;
         glideConfirmationTicks = 0;
         launchRequests = 0;
+        launchAttemptsThisJump = 0;
         completedBounces = 0;
         consecutiveLaunchFailures = 0;
         takeoffY = Double.NaN;
@@ -452,7 +454,12 @@ public final class BounceController {
                     setLaunchPhase(LaunchPhase.GROUNDED);
                 } else {
                     glideConfirmationTicks = 0;
-                    if (launchPhaseTicks >= BounceTuning.LAUNCH_ACK_TIMEOUT_TICKS) {
+                    if (launchAttemptsThisJump < BounceTuning.LAUNCH_ATTEMPTS_PER_JUMP
+                            && launchPhaseTicks >= BounceTuning.LAUNCH_RETRY_AFTER_TICKS
+                            && velocityY <= BounceTuning.ELYTRA_ACTIVATE_VY_THRESHOLD
+                            && retryLaunch(mc.player.getY(), velocityY, rise)) {
+                        launchPhaseTicks = 0;
+                    } else if (launchPhaseTicks >= BounceTuning.LAUNCH_ACK_TIMEOUT_TICKS) {
                         recordLaunchRejected("ack-timeout", mc.player.getY(), velocityY, rise);
                         setLaunchPhase(LaunchPhase.LANDING);
                     }
@@ -633,6 +640,7 @@ public final class BounceController {
         launchArmed = false;
         airborneLaunchTicks = 0;
         glideConfirmationTicks = 0;
+        launchAttemptsThisJump = 0;
         LOGGER.debug("[Bounce] ground jump requested");
         return true;
     }
@@ -880,9 +888,21 @@ public final class BounceController {
             return false;
         }
         launchRequests++;
+        launchAttemptsThisJump++;
         launchArmed = true;
         glideConfirmationTicks = 0;
         setLaunchPhase(LaunchPhase.LAUNCH_REQUESTED);
+        return true;
+    }
+
+    private boolean retryLaunch(double y, double velocityY, double rise) {
+        if (!requestStartFlying(y, velocityY, rise)) return false;
+        launchRequests++;
+        launchAttemptsThisJump++;
+        LOGGER.info("[Bounce] launch retry {}/{} y={} rise={} vy={}",
+                launchAttemptsThisJump, BounceTuning.LAUNCH_ATTEMPTS_PER_JUMP,
+                String.format("%.3f", y), String.format("%.3f", rise),
+                String.format("%.3f", velocityY));
         return true;
     }
 

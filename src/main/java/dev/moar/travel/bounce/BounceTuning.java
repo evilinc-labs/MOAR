@@ -50,6 +50,10 @@ public final class BounceTuning {
     // Confirm glide before advancing the launch phase.
     public static int LAUNCH_CONFIRM_TICKS = 3;
 
+    // Retry one rejected launch after its key edge has cleared.
+    public static int LAUNCH_RETRY_AFTER_TICKS = 4;
+    public static int LAUNCH_ATTEMPTS_PER_JUMP = 2;
+
     // Fall back after repeated correction episodes.
     public static int CORRECTIONS_DISABLE_ELYTRA = 4;
 
