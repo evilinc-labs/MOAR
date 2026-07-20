@@ -886,7 +886,7 @@ public final class BounceController {
         return true;
     }
 
-    // Send one vanilla flight command for this jump arc.
+    // Let vanilla serialize the flight command during player movement.
     private boolean requestStartFlying(double y, double velocityY, double rise) {
         if (!MoarNetworkManager.tryAcquire(
                 MoarNetworkManager.Lane.MOVEMENT,
@@ -896,15 +896,11 @@ public final class BounceController {
         /*? if >=26.1 {*//*
         Minecraft mc = Minecraft.getInstance();
         if (mc.player == null) return false;
-        mc.player.startFallFlying();
-        mc.getConnection().send(new ServerboundPlayerCommandPacket(
-                mc.player, ServerboundPlayerCommandPacket.Action.START_FALL_FLYING));
+        mc.options.keyJump.setDown(true);
         *//*?} else {*/
         MinecraftClient mc = MinecraftClient.getInstance();
         if (mc.player == null) return false;
-        mc.player.startGliding();
-        mc.player.networkHandler.sendPacket(new ClientCommandC2SPacket(
-                mc.player, ClientCommandC2SPacket.Mode.START_FALL_FLYING));
+        mc.options.jumpKey.setPressed(true);
         /*?}*/
         if (launchRequests < 3) {
             LOGGER.info("[Bounce] launch request #{} y={} rise={} vy={}", launchRequests + 1,
