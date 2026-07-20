@@ -435,10 +435,10 @@ public final class BounceController {
                     recordLaunchAccepted();
                     setLaunchPhase(LaunchPhase.GLIDING);
                 } else if (onGround) {
-                    recordLaunchRejected();
+                    recordLaunchRejected("grounded-before-ack", mc.player.getY(), velocityY, rise);
                     setLaunchPhase(LaunchPhase.GROUNDED);
                 } else if (launchPhaseTicks >= BounceTuning.LAUNCH_ACK_TIMEOUT_TICKS) {
-                    recordLaunchRejected();
+                    recordLaunchRejected("ack-timeout", mc.player.getY(), velocityY, rise);
                     setLaunchPhase(LaunchPhase.LANDING);
                 }
             }
@@ -482,6 +482,11 @@ public final class BounceController {
                         setLaunchPhase(LaunchPhase.GROUNDED);
                     }
                 } else if (!gliding) {
+                    LOGGER.warn("[Bounce] glide state lost while airborne y={} vy={} rise={} phaseTicks={}",
+                            String.format("%.3f", mc.player.getY()),
+                            String.format("%.3f", velocityY),
+                            String.format("%.3f", rise),
+                            launchPhaseTicks);
                     setLaunchPhase(LaunchPhase.LANDING);
                 }
             }
@@ -577,9 +582,7 @@ public final class BounceController {
 
     // Pulse vanilla jump input and let normal movement create the jump.
     private boolean requestGroundJump() {
-        if (!MoarNetworkManager.tryAcquire(
-                MoarNetworkManager.Lane.MOVEMENT,
-                MoarNetworkManager.OWNER_BOUNCE, 1, 2)) {
+        if (!MoarNetworkManager.canAct(MoarNetworkManager.OWNER_BOUNCE)) {
             return false;
         }
         /*? if >=26.1 {*//*
@@ -915,12 +918,14 @@ public final class BounceController {
         }
     }
 
-    private void recordLaunchRejected() {
+    private void recordLaunchRejected(String reason, double y, double velocityY, double rise) {
         consecutiveLaunchFailures++;
         launchArmed = false;
         if (consecutiveLaunchFailures <= 3) {
-            LOGGER.warn("[Bounce] launch not acknowledged phase={} failures={}",
-                    launchPhase, consecutiveLaunchFailures);
+            LOGGER.warn("[Bounce] launch not acknowledged reason={} phase={} failures={} y={} vy={} rise={} phaseTicks={}",
+                    reason, launchPhase, consecutiveLaunchFailures,
+                    String.format("%.3f", y), String.format("%.3f", velocityY),
+                    String.format("%.3f", rise), launchPhaseTicks);
         }
     }
 
