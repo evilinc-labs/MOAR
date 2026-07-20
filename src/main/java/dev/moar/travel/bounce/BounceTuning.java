@@ -52,6 +52,9 @@ public final class BounceTuning {
     public static int LAUNCH_RETRY_INTERVAL_TICKS = 2;
     public static int LAUNCH_RETRIES_PER_JUMP = 3;
 
+    // Reject elevated entity contacts as highway touchdowns.
+    public static double HIGHWAY_CONTACT_Y_TOLERANCE = 0.03125;
+
     // Fall back after repeated correction episodes.
     public static int CORRECTIONS_DISABLE_ELYTRA = 2;
 
