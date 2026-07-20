@@ -435,6 +435,7 @@ public final class BounceController {
                     recordLaunchRejected();
                     setLaunchPhase(LaunchPhase.GROUNDED);
                 } else if (launchAttemptsThisJump < BounceTuning.LAUNCH_RETRIES_PER_JUMP
+                        && velocityY <= BounceTuning.LAUNCH_RETRY_MAX_ASCENT_VELOCITY
                         && launchPhaseTicks % BounceTuning.LAUNCH_RETRY_INTERVAL_TICKS == 0) {
                     retryStartFlying(mc.player.getY(), velocityY, rise);
                 } else if (launchPhaseTicks >= BounceTuning.LAUNCH_ACK_TIMEOUT_TICKS) {

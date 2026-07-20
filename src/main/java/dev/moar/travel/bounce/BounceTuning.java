@@ -45,9 +45,10 @@ public final class BounceTuning {
     public static int GROUND_JUMP_TIMEOUT_TICKS = 3;
 
     // Stop waiting for a rejected launch before landing.
-    public static int LAUNCH_ACK_TIMEOUT_TICKS = 8;
+    public static int LAUNCH_ACK_TIMEOUT_TICKS = 10;
 
-    // Retry missed airborne launch handshakes.
+    // Retry missed launches near the apex instead of during ascent.
+    public static double LAUNCH_RETRY_MAX_ASCENT_VELOCITY = 0.02;
     public static int LAUNCH_RETRY_INTERVAL_TICKS = 2;
     public static int LAUNCH_RETRIES_PER_JUMP = 3;
 
