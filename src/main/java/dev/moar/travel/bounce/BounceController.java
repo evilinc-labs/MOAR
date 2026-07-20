@@ -76,6 +76,10 @@ public final class BounceController {
     private float activeGlidePitch;
     private int diveTicks;
     private double peakHorizontalSpeed;
+    private double previousVerticalVelocity;
+    private double filteredVerticalAcceleration;
+    private double requiredVerticalAcceleration;
+    private double predictedLandingTicks;
     private boolean launchArmed;
     private boolean setbackHolding;
     private boolean elytraLaunchEnabled;
@@ -125,6 +129,7 @@ public final class BounceController {
         activeGlidePitch = arcPitch;
         diveTicks = 0;
         peakHorizontalSpeed = 0.0;
+        resetArcModel();
         launchArmed = false;
         setbackHolding = false;
         elytraLaunchEnabled = true;
@@ -366,14 +371,16 @@ public final class BounceController {
                 ceilingContact = true;
             }
         }
-        activeGlidePitch = launchPhase == LaunchPhase.GLIDING
-                ? glidePitchForArc(rise)
+        if (launchPhase == LaunchPhase.GLIDING && gliding && !onGround) {
+            updateArcModel(velocityY);
+        }
+        activeGlidePitch = launchPhase == LaunchPhase.GLIDING && !onGround
+                ? glidePitchForArc(rise, velocityY)
                 : arcPitch;
         float commandedPitch = launchPhase == LaunchPhase.GLIDING
                 ? activeGlidePitch
                 : launchPitch;
-        if (launchPhase == LaunchPhase.GLIDING
-                && activeGlidePitch == BounceTuning.GLIDE_ACCEL_DIVE_PITCH) {
+        if (launchPhase == LaunchPhase.GLIDING && isAdaptiveDive(rise, velocityY)) {
             diveTicks++;
         }
         setPitch(elytraLaunchEnabled ? commandedPitch : 0.0f);
@@ -431,7 +438,7 @@ public final class BounceController {
                     if (completedBounces <= 3 || completedBounces % 10 == 0) {
                         double peakRise = Double.isNaN(peakY) || Double.isNaN(takeoffY)
                                 ? 0.0 : peakY - takeoffY;
-                        LOGGER.info("[Bounce] touchdown #{} speed={} peakSpeed={} peakRise={} ceiling={} roof={} mode={} launchPitch={} glidePitch={} diveTicks={} offset={} steer={}",
+                        LOGGER.info("[Bounce] touchdown #{} speed={} peakSpeed={} peakRise={} ceiling={} roof={} mode={} launchPitch={} glidePitch={} activePitch={} diveTicks={} ay={} requiredAy={} landingTicks={} offset={} steer={}",
                                 completedBounces, String.format("%.3f", horizontalSpeed()),
                                 String.format("%.3f", peakHorizontalSpeed),
                                 String.format("%.3f", peakRise), ceilingContact,
@@ -441,7 +448,11 @@ public final class BounceController {
                                         : acceleratingArc ? "ACCEL" : "CRUISE",
                                 String.format("%.1f", launchPitch),
                                 String.format("%.1f", arcPitch),
+                                String.format("%.1f", activeGlidePitch),
                                 diveTicks,
+                                formatArcValue(filteredVerticalAcceleration),
+                                formatArcValue(requiredVerticalAcceleration),
+                                formatArcValue(predictedLandingTicks),
                                 String.format("%.3f", lastPerpOffset),
                                 String.format("%.2f", lastPerpCorrection));
                     }
@@ -608,6 +619,7 @@ public final class BounceController {
         activeGlidePitch = arcPitch;
         diveTicks = 0;
         peakHorizontalSpeed = speed;
+        resetArcModel();
         setPitch(launchPitch);
         takeoffY = mc.player.getY();
         peakY = takeoffY;
@@ -637,13 +649,92 @@ public final class BounceController {
         return BounceTuning.LAUNCH_PITCH;
     }
 
-    private float glidePitchForArc(double rise) {
-        if (acceleratingArc
-                && correctionRecoveryBounces == 0
-                && rise >= BounceTuning.GLIDE_ACCEL_DIVE_MIN_RISE) {
-            return BounceTuning.GLIDE_ACCEL_DIVE_PITCH;
+    private float glidePitchForArc(double rise, double velocityY) {
+        if (!isAdaptiveDive(rise, velocityY)) {
+            requiredVerticalAcceleration = Double.NaN;
+            predictedLandingTicks = Double.NaN;
+            return arcPitch;
         }
-        return arcPitch;
+
+        double landingTicks = BounceTuning.GLIDE_ACCEL_LANDING_TICKS;
+        requiredVerticalAcceleration = -2.0 * (Math.max(0.0, rise) + velocityY * landingTicks)
+                / (landingTicks * landingTicks);
+        predictedLandingTicks = solveLandingTicks(
+                Math.max(0.0, rise), velocityY, filteredVerticalAcceleration);
+
+        double observedAcceleration = Double.isFinite(filteredVerticalAcceleration)
+                ? filteredVerticalAcceleration
+                : 0.0;
+        float targetPitch = (float) (BounceTuning.GLIDE_ACCEL_DIVE_PITCH
+                + (observedAcceleration - requiredVerticalAcceleration)
+                * BounceTuning.GLIDE_ACCEL_PITCH_GAIN);
+        targetPitch = clamp(targetPitch,
+                BounceTuning.GLIDE_ACCEL_DIVE_MIN_PITCH,
+                BounceTuning.GLIDE_ACCEL_DIVE_MAX_PITCH);
+        return approach(activeGlidePitch, targetPitch,
+                BounceTuning.GLIDE_ACCEL_DIVE_MAX_PITCH_STEP);
+    }
+
+    private boolean isAdaptiveDive(double rise, double velocityY) {
+        return acceleratingArc
+                && correctionRecoveryBounces == 0
+                && (rise >= BounceTuning.GLIDE_ACCEL_DIVE_MIN_RISE
+                || velocityY <= BounceTuning.GLIDE_ACCEL_DIVE_MAX_ASCENT_VELOCITY);
+    }
+
+    private void updateArcModel(double velocityY) {
+        if (Double.isFinite(previousVerticalVelocity)) {
+            double observed = clamp(
+                    velocityY - previousVerticalVelocity,
+                    -BounceTuning.GLIDE_ACCEL_VERTICAL_ACCEL_LIMIT,
+                    BounceTuning.GLIDE_ACCEL_VERTICAL_ACCEL_LIMIT);
+            if (Double.isFinite(filteredVerticalAcceleration)) {
+                double weight = BounceTuning.GLIDE_ACCEL_VERTICAL_ACCEL_FILTER;
+                filteredVerticalAcceleration += (observed - filteredVerticalAcceleration) * weight;
+            } else {
+                filteredVerticalAcceleration = observed;
+            }
+        }
+        previousVerticalVelocity = velocityY;
+    }
+
+    private void resetArcModel() {
+        previousVerticalVelocity = Double.NaN;
+        filteredVerticalAcceleration = Double.NaN;
+        requiredVerticalAcceleration = Double.NaN;
+        predictedLandingTicks = Double.NaN;
+    }
+
+    private static double solveLandingTicks(double rise, double velocityY, double accelerationY) {
+        if (rise <= 0.0) return 0.0;
+        if (!Double.isFinite(accelerationY) || Math.abs(accelerationY) < 1.0E-6) {
+            return velocityY < -1.0E-6 ? -rise / velocityY : Double.NaN;
+        }
+        double discriminant = velocityY * velocityY - 2.0 * accelerationY * rise;
+        if (discriminant < 0.0) return Double.NaN;
+        double root = Math.sqrt(discriminant);
+        double first = (-velocityY + root) / accelerationY;
+        double second = (-velocityY - root) / accelerationY;
+        double result = Double.POSITIVE_INFINITY;
+        if (first > 0.0) result = first;
+        if (second > 0.0) result = Math.min(result, second);
+        return Double.isFinite(result) ? result : Double.NaN;
+    }
+
+    private static float approach(float current, float target, float maxStep) {
+        return current + clamp(target - current, -maxStep, maxStep);
+    }
+
+    private static float clamp(float value, float minimum, float maximum) {
+        return Math.max(minimum, Math.min(maximum, value));
+    }
+
+    private static double clamp(double value, double minimum, double maximum) {
+        return Math.max(minimum, Math.min(maximum, value));
+    }
+
+    private static String formatArcValue(double value) {
+        return Double.isFinite(value) ? String.format("%.3f", value) : "n/a";
     }
 
     // Arm flight at the first safe fractional launch point.

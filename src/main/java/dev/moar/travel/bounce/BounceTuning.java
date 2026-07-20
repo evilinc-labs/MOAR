@@ -73,7 +73,15 @@ public final class BounceTuning {
     public static float GLIDE_ACCEL_LOW_SPEED_PITCH = 40.0f;
     public static float GLIDE_ACCEL_MID_SPEED_PITCH = 40.0f;
     public static float GLIDE_ACCEL_DIVE_PITCH = 56.0f;
-    public static double GLIDE_ACCEL_DIVE_MIN_RISE = 0.25;
+    public static double GLIDE_ACCEL_DIVE_MIN_RISE = 0.10;
+    public static double GLIDE_ACCEL_DIVE_MAX_ASCENT_VELOCITY = 0.04;
+    public static float GLIDE_ACCEL_DIVE_MIN_PITCH = 50.0f;
+    public static float GLIDE_ACCEL_DIVE_MAX_PITCH = 72.0f;
+    public static float GLIDE_ACCEL_DIVE_MAX_PITCH_STEP = 3.0f;
+    public static double GLIDE_ACCEL_VERTICAL_ACCEL_FILTER = 0.35;
+    public static double GLIDE_ACCEL_VERTICAL_ACCEL_LIMIT = 0.16;
+    public static double GLIDE_ACCEL_LANDING_TICKS = 5.0;
+    public static double GLIDE_ACCEL_PITCH_GAIN = 120.0;
     public static double ACCEL_LOW_SPEED_THRESHOLD = 1.25;
     public static double ACCEL_MID_SPEED_THRESHOLD = 1.70;
 
