@@ -81,12 +81,13 @@ public final class BounceTuning {
     public static float GLIDE_ACCEL_DIVE_MAX_UP_STEP = 0.50f;
     public static float GLIDE_ACCEL_APEX_MAX_PITCH_STEP = 0.35f;
     public static double GLIDE_ACCEL_APEX_VELOCITY_BAND = 0.08;
-    public static double GLIDE_ACCEL_VERTICAL_ACCEL_FILTER = 0.35;
-    public static double GLIDE_ACCEL_VERTICAL_ACCEL_LIMIT = 0.16;
+    public static double GLIDE_ACCEL_VERTICAL_ACCEL_FILTER = 0.25;
+    public static double GLIDE_ACCEL_VERTICAL_ACCEL_LIMIT = 0.10;
     public static double GLIDE_ACCEL_LANDING_TICKS = 5.0;
     public static double GLIDE_ACCEL_PITCH_GAIN = 120.0;
     public static double GLIDE_ACCEL_SPEED_LOSS_DEADZONE = 0.05;
     public static double GLIDE_ACCEL_HORIZONTAL_FILTER = 0.30;
+    public static double GLIDE_ACCEL_HORIZONTAL_SAMPLE_LIMIT = 0.06;
     public static double GLIDE_ACCEL_HORIZONTAL_DECEL_THRESHOLD = -0.01;
     public static int GLIDE_ACCEL_HORIZONTAL_DECEL_TICKS = 2;
     public static double GLIDE_ACCEL_SPEED_LOSS_GAIN = 30.0;

@@ -728,7 +728,10 @@ public final class BounceController {
             }
         }
         if (Double.isFinite(previousHorizontalSpeed)) {
-            double observed = horizontalSpeed - previousHorizontalSpeed;
+            double observed = clamp(
+                    horizontalSpeed - previousHorizontalSpeed,
+                    -BounceTuning.GLIDE_ACCEL_HORIZONTAL_SAMPLE_LIMIT,
+                    BounceTuning.GLIDE_ACCEL_HORIZONTAL_SAMPLE_LIMIT);
             if (Double.isFinite(filteredHorizontalAcceleration)) {
                 double weight = BounceTuning.GLIDE_ACCEL_HORIZONTAL_FILTER;
                 filteredHorizontalAcceleration +=
