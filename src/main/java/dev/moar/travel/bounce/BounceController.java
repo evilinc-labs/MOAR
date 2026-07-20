@@ -81,6 +81,11 @@ public final class BounceController {
     private double requiredVerticalAcceleration;
     private double predictedLandingTicks;
     private double maximumHorizontalSpeedLoss;
+    private double previousHorizontalSpeed;
+    private double filteredHorizontalAcceleration;
+    private double apexHorizontalSpeed;
+    private boolean apexPassed;
+    private int horizontalDecelerationTicks;
     private float minimumGlidePitch;
     private float maximumGlidePitch;
     private boolean launchArmed;
@@ -375,7 +380,7 @@ public final class BounceController {
             }
         }
         if (launchPhase == LaunchPhase.GLIDING && gliding && !onGround) {
-            updateArcModel(velocityY);
+            updateArcModel(velocityY, horizontalSpeed());
             activeGlidePitch = glidePitchForArc(rise, velocityY);
             minimumGlidePitch = Math.min(minimumGlidePitch, activeGlidePitch);
             maximumGlidePitch = Math.max(maximumGlidePitch, activeGlidePitch);
@@ -441,9 +446,10 @@ public final class BounceController {
                     if (completedBounces <= 3 || completedBounces % 10 == 0) {
                         double peakRise = Double.isNaN(peakY) || Double.isNaN(takeoffY)
                                 ? 0.0 : peakY - takeoffY;
-                        LOGGER.info("[Bounce] touchdown #{} speed={} peakSpeed={} speedLoss={} peakRise={} ceiling={} roof={} mode={} launchPitch={} glidePitch={} activePitch={} pitchRange={}-{} diveTicks={} ay={} requiredAy={} landingTicks={} offset={} steer={}",
+                        LOGGER.info("[Bounce] touchdown #{} speed={} peakSpeed={} apexSpeed={} speedLoss={} peakRise={} ceiling={} roof={} mode={} launchPitch={} glidePitch={} activePitch={} pitchRange={}-{} diveTicks={} ay={} ax={} requiredAy={} landingTicks={} offset={} steer={}",
                                 completedBounces, String.format("%.3f", horizontalSpeed()),
                                 String.format("%.3f", peakHorizontalSpeed),
+                                formatArcValue(apexHorizontalSpeed),
                                 String.format("%.3f", maximumHorizontalSpeedLoss),
                                 String.format("%.3f", peakRise), ceilingContact,
                                 roofDetected,
@@ -457,6 +463,7 @@ public final class BounceController {
                                 formatPitch(maximumGlidePitch),
                                 diveTicks,
                                 formatArcValue(filteredVerticalAcceleration),
+                                formatArcValue(filteredHorizontalAcceleration),
                                 formatArcValue(requiredVerticalAcceleration),
                                 formatArcValue(predictedLandingTicks),
                                 String.format("%.3f", lastPerpOffset),
@@ -674,10 +681,14 @@ public final class BounceController {
         double observedAcceleration = Double.isFinite(filteredVerticalAcceleration)
                 ? filteredVerticalAcceleration
                 : 0.0;
-        double speedLoss = Math.max(0.0, peakHorizontalSpeed - horizontalSpeed());
+        double speedLoss = apexPassed && Double.isFinite(apexHorizontalSpeed)
+                ? Math.max(0.0, apexHorizontalSpeed - horizontalSpeed())
+                : 0.0;
         maximumHorizontalSpeedLoss = Math.max(maximumHorizontalSpeedLoss, speedLoss);
-        double compensatedSpeedLoss = Math.max(
-                0.0, speedLoss - BounceTuning.GLIDE_ACCEL_SPEED_LOSS_DEADZONE);
+        double compensatedSpeedLoss = horizontalDecelerationTicks
+                >= BounceTuning.GLIDE_ACCEL_HORIZONTAL_DECEL_TICKS
+                ? Math.max(0.0, speedLoss - BounceTuning.GLIDE_ACCEL_SPEED_LOSS_DEADZONE)
+                : 0.0;
         float speedCompensation = (float) Math.min(
                 BounceTuning.GLIDE_ACCEL_SPEED_COMPENSATION_MAX,
                 compensatedSpeedLoss * BounceTuning.GLIDE_ACCEL_SPEED_LOSS_GAIN);
@@ -688,7 +699,7 @@ public final class BounceController {
         targetPitch = clamp(targetPitch,
                 BounceTuning.GLIDE_ACCEL_DIVE_MIN_PITCH,
                 BounceTuning.GLIDE_ACCEL_DIVE_MAX_PITCH);
-        return approachPitch(activeGlidePitch, targetPitch);
+        return approachPitch(activeGlidePitch, targetPitch, velocityY);
     }
 
     private boolean isAdaptiveDive(double rise, double velocityY) {
@@ -698,7 +709,12 @@ public final class BounceController {
                 || velocityY <= BounceTuning.GLIDE_ACCEL_DIVE_MAX_ASCENT_VELOCITY);
     }
 
-    private void updateArcModel(double velocityY) {
+    private void updateArcModel(double velocityY, double horizontalSpeed) {
+        if (!apexPassed && Double.isFinite(previousVerticalVelocity)
+                && previousVerticalVelocity > 0.0 && velocityY <= 0.0) {
+            apexPassed = true;
+            apexHorizontalSpeed = horizontalSpeed;
+        }
         if (Double.isFinite(previousVerticalVelocity)) {
             double observed = clamp(
                     velocityY - previousVerticalVelocity,
@@ -711,7 +727,24 @@ public final class BounceController {
                 filteredVerticalAcceleration = observed;
             }
         }
+        if (Double.isFinite(previousHorizontalSpeed)) {
+            double observed = horizontalSpeed - previousHorizontalSpeed;
+            if (Double.isFinite(filteredHorizontalAcceleration)) {
+                double weight = BounceTuning.GLIDE_ACCEL_HORIZONTAL_FILTER;
+                filteredHorizontalAcceleration +=
+                        (observed - filteredHorizontalAcceleration) * weight;
+            } else {
+                filteredHorizontalAcceleration = observed;
+            }
+            if (apexPassed && filteredHorizontalAcceleration
+                    <= BounceTuning.GLIDE_ACCEL_HORIZONTAL_DECEL_THRESHOLD) {
+                horizontalDecelerationTicks++;
+            } else {
+                horizontalDecelerationTicks = 0;
+            }
+        }
         previousVerticalVelocity = velocityY;
+        previousHorizontalSpeed = horizontalSpeed;
     }
 
     private void resetArcModel() {
@@ -719,6 +752,11 @@ public final class BounceController {
         filteredVerticalAcceleration = Double.NaN;
         requiredVerticalAcceleration = Double.NaN;
         predictedLandingTicks = Double.NaN;
+        previousHorizontalSpeed = Double.NaN;
+        filteredHorizontalAcceleration = Double.NaN;
+        apexHorizontalSpeed = Double.NaN;
+        apexPassed = false;
+        horizontalDecelerationTicks = 0;
     }
 
     private static double solveLandingTicks(double rise, double velocityY, double accelerationY) {
@@ -738,10 +776,20 @@ public final class BounceController {
     }
 
     private static float approachPitch(float current, float target) {
+        return approachPitch(current, target, Double.NaN);
+    }
+
+    private static float approachPitch(float current, float target, double velocityY) {
         float difference = target - current;
-        float limit = difference >= 0.0f
-                ? BounceTuning.GLIDE_ACCEL_DIVE_MAX_DOWN_STEP
-                : BounceTuning.GLIDE_ACCEL_DIVE_MAX_UP_STEP;
+        float limit;
+        if (Double.isFinite(velocityY)
+                && Math.abs(velocityY) <= BounceTuning.GLIDE_ACCEL_APEX_VELOCITY_BAND) {
+            limit = BounceTuning.GLIDE_ACCEL_APEX_MAX_PITCH_STEP;
+        } else {
+            limit = difference >= 0.0f
+                    ? BounceTuning.GLIDE_ACCEL_DIVE_MAX_DOWN_STEP
+                    : BounceTuning.GLIDE_ACCEL_DIVE_MAX_UP_STEP;
+        }
         return current + clamp(difference, -limit, limit);
     }
 
