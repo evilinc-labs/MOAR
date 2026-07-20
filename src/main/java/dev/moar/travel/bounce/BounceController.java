@@ -445,7 +445,11 @@ public final class BounceController {
                                 String.format("%.3f", lastPerpOffset),
                                 String.format("%.2f", lastPerpCorrection));
                     }
-                    setLaunchPhase(LaunchPhase.GROUNDED);
+                    if (jumpingEnabled && requestGroundJump()) {
+                        setLaunchPhase(LaunchPhase.GROUND_JUMP_REQUESTED);
+                    } else {
+                        setLaunchPhase(LaunchPhase.GROUNDED);
+                    }
                 } else if (!gliding) {
                     setLaunchPhase(LaunchPhase.LANDING);
                 }
