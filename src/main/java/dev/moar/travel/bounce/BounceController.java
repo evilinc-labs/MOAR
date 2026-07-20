@@ -63,6 +63,7 @@ public final class BounceController {
     private LaunchPhase launchPhase = LaunchPhase.GROUNDED;
     private int launchPhaseTicks;
     private int launchRequests;
+    private int launchAttemptsThisJump;
     private int completedBounces;
     private int consecutiveLaunchFailures;
     private double takeoffY;
@@ -124,6 +125,7 @@ public final class BounceController {
         launchPhase    = LaunchPhase.GROUNDED;
         launchPhaseTicks = 0;
         launchRequests = 0;
+        launchAttemptsThisJump = 0;
         completedBounces = 0;
         consecutiveLaunchFailures = 0;
         takeoffY = Double.NaN;
@@ -432,6 +434,9 @@ public final class BounceController {
                 } else if (onGround) {
                     recordLaunchRejected();
                     setLaunchPhase(LaunchPhase.GROUNDED);
+                } else if (launchAttemptsThisJump < BounceTuning.LAUNCH_RETRIES_PER_JUMP
+                        && launchPhaseTicks % BounceTuning.LAUNCH_RETRY_INTERVAL_TICKS == 0) {
+                    retryStartFlying(mc.player.getY(), velocityY, rise);
                 } else if (launchPhaseTicks >= BounceTuning.LAUNCH_ACK_TIMEOUT_TICKS) {
                     recordLaunchRejected();
                     setLaunchPhase(LaunchPhase.LANDING);
@@ -641,6 +646,7 @@ public final class BounceController {
         peakY = takeoffY;
         ceilingContact = false;
         launchArmed = false;
+        launchAttemptsThisJump = 0;
         LOGGER.debug("[Bounce] ground jump requested");
         return true;
     }
@@ -821,9 +827,23 @@ public final class BounceController {
             return false;
         }
         launchRequests++;
+        launchAttemptsThisJump++;
         launchArmed = true;
         setLaunchPhase(LaunchPhase.LAUNCH_REQUESTED);
         return true;
+    }
+
+    private void retryStartFlying(double y, double velocityY, double rise) {
+        if (!requestStartFlying(y, velocityY, rise)) return;
+        launchRequests++;
+        launchAttemptsThisJump++;
+        if (launchAttemptsThisJump <= BounceTuning.LAUNCH_RETRIES_PER_JUMP) {
+            LOGGER.info("[Bounce] launch retry {}/{} rise={} vy={}",
+                    launchAttemptsThisJump,
+                    BounceTuning.LAUNCH_RETRIES_PER_JUMP,
+                    String.format("%.3f", rise),
+                    String.format("%.3f", velocityY));
+        }
     }
 
     // Pulse vanilla jump input after reaching a server-valid airborne state.
