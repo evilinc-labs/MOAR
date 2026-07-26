@@ -13,6 +13,8 @@ public final class HighwayVerifier {
 
     private static final int SAMPLE_INTERVAL   = 10;  // ticks
     private static final int LOOK_AHEAD_BLOCKS = 64;  // cells along axis
+    private static final int NEAR_LOOK_AHEAD_BLOCKS = 16;
+    private static final int NEAR_GRIEF_RUN = 3;
     private static final float GRIEF_THRESHOLD = 0.30f; // 30 % bad → GRIEFED (was 0.25; raised to reduce false positives at road crossings)
     private static final float UNLOADED_MAJORITY = 0.5f; // 50 % unloaded → UNLOADED
 
@@ -53,6 +55,14 @@ public final class HighwayVerifier {
     // Return the last integrity report.
     public IntegrityReport lastReport() { return lastReport; }
 
+    // Refresh integrity before a movement handoff.
+    public IntegrityReport sampleNow(BlockPos playerPos) {
+        if (highway == null || playerPos == null) return lastReport;
+        ticksSinceLastSample = 0;
+        lastReport = sample(playerPos);
+        return lastReport;
+    }
+
     // Sample on the configured interval.
     public void tick(BlockPos playerPos) {
         if (highway == null || playerPos == null) return;
@@ -86,6 +96,8 @@ public final class HighwayVerifier {
 
         int total = 0, griefed = 0, unloaded = 0;
         int griefStart = -1, griefEnd = -1;
+        int nearRun = 0, nearRunStart = -1;
+        int longestNearRun = 0, longestNearStart = -1, longestNearEnd = -1;
         int sampleLimit = LOOK_AHEAD_BLOCKS;
         if (highway.exit != null) {
             int exitDx = highway.exit.getX() - ox;
@@ -107,10 +119,25 @@ public final class HighwayVerifier {
                     griefed++;
                     if (griefStart < 0) griefStart = step;
                     griefEnd = step;
+                    if (step <= NEAR_LOOK_AHEAD_BLOCKS) {
+                        if (nearRun == 0) nearRunStart = step;
+                        nearRun++;
+                        if (nearRun > longestNearRun) {
+                            longestNearRun = nearRun;
+                            longestNearStart = nearRunStart;
+                            longestNearEnd = step;
+                        }
+                    }
                 }
-                case UNLOADED  -> unloaded++;
-                case CAVE_PASS -> { /* natural cave intersection — not grief */ }
-                case OK        -> { /* intact */ }
+                case UNLOADED -> {
+                    unloaded++;
+                    nearRun = 0;
+                    nearRunStart = -1;
+                }
+                case CAVE_PASS, OK -> {
+                    nearRun = 0;
+                    nearRunStart = -1;
+                }
             }
         }
 
@@ -120,9 +147,11 @@ public final class HighwayVerifier {
         float unloadedRatio = (float) unloaded / total;
         float confidence    = 1f - unloadedRatio; // lower confidence when few chunks loaded
 
-        if (griefRatio >= GRIEF_THRESHOLD) {
+        if (griefRatio >= GRIEF_THRESHOLD || longestNearRun >= NEAR_GRIEF_RUN) {
+            int reportStart = longestNearRun >= NEAR_GRIEF_RUN ? longestNearStart : griefStart;
+            int reportEnd = longestNearRun >= NEAR_GRIEF_RUN ? longestNearEnd : griefEnd;
             return new IntegrityReport(IntegrityReport.Status.GRIEFED, confidence,
-                    total, griefed, unloaded, griefStart, griefEnd);
+                    total, griefed, unloaded, reportStart, reportEnd);
         }
         if (unloadedRatio > UNLOADED_MAJORITY) {
             return new IntegrityReport(IntegrityReport.Status.UNLOADED, confidence,

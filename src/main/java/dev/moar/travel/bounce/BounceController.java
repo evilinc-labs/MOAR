@@ -59,6 +59,7 @@ public final class BounceController {
     private int airborneLaunchTicks;
     private int glideConfirmationTicks;
     private int launchRequests;
+    private int launchAttemptsThisJump;
     private int completedBounces;
     private int consecutiveLaunchFailures;
     private double takeoffY;
@@ -141,6 +142,7 @@ public final class BounceController {
         airborneLaunchTicks = 0;
         glideConfirmationTicks = 0;
         launchRequests = 0;
+        launchAttemptsThisJump = 0;
         completedBounces = 0;
         consecutiveLaunchFailures = 0;
         takeoffY = Double.NaN;
@@ -248,12 +250,7 @@ public final class BounceController {
             wallObservationTicks = 0;
             wallReason = "none";
         }
-        /*? if >=26.1 {*//*
-        boolean grounded = mc.player.onGround();
-        *//*?} else {*/
-        boolean grounded = mc.player.isOnGround();
-        /*?}*/
-        wallAhead = grounded && wallObservationTicks >= BounceTuning.WALL_CONFIRM_TICKS;
+        wallAhead = wallObservationTicks >= BounceTuning.WALL_CONFIRM_TICKS;
         if (wallAhead) return; // skip stuck-detection this tick
 
         // ── Exit check ───────────────────────────────────────────
@@ -491,7 +488,12 @@ public final class BounceController {
                     setLaunchPhase(LaunchPhase.GROUNDED);
                 } else {
                     glideConfirmationTicks = 0;
-                    if (launchPhaseTicks >= BounceTuning.LAUNCH_ACK_TIMEOUT_TICKS) {
+                    if (launchAttemptsThisJump < BounceTuning.LAUNCH_ATTEMPTS_PER_JUMP
+                            && launchPhaseTicks >= BounceTuning.LAUNCH_RETRY_AFTER_TICKS
+                            && velocityY <= BounceTuning.ELYTRA_ACTIVATE_VY_THRESHOLD
+                            && retryLaunch(mc.player.getY(), velocityY, rise)) {
+                        launchPhaseTicks = 0;
+                    } else if (launchPhaseTicks >= BounceTuning.LAUNCH_ACK_TIMEOUT_TICKS) {
                         recordLaunchRejected("ack-timeout", mc.player.getY(), velocityY, rise);
                         setLaunchPhase(LaunchPhase.LANDING);
                     }
@@ -590,7 +592,7 @@ public final class BounceController {
         return (float) Math.toDegrees(Math.atan2(-dx, dz));
     }
 
-    // Find a blocked body-height corridor ahead.
+    // Find a blocked launch corridor ahead.
     private boolean detectBlockedCorridor(
             /*? if >=26.1 {*//* Minecraft mc *//*?} else {*/ MinecraftClient mc /*?}*/) {
         if (mc.player == null || highway == null || exitColumn == null
@@ -615,28 +617,39 @@ public final class BounceController {
         int maxAhead = (int) Math.min(
                 BounceTuning.OBSTACLE_SCAN_AHEAD,
                 exitProjection - playerProjection - 1L);
-        if (maxAhead < 2) return false;
+        if (maxAhead < 1) return false;
 
         int perpX = highway.axis.perpDx();
         int perpZ = highway.axis.perpDz();
-        for (int d = 2; d <= maxAhead; d++) {
+        for (int d = 1; d <= maxAhead; d++) {
             int centerX = (int) Math.floor(px + dirX * d);
             int centerZ = (int) Math.floor(pz + dirZ * d);
             boolean centerBlocked = false;
+            boolean centerBodyBlocked = false;
+            boolean centerLaunchBlocked = false;
             int blockedLanes = 0;
             for (int lane = -1; lane <= 1; lane++) {
                 int bx = centerX + perpX * lane;
                 int bz = centerZ + perpZ * lane;
                 BlockPos feet = new BlockPos(bx, feetY, bz);
                 BlockPos head = new BlockPos(bx, feetY + 1, bz);
-                boolean laneBlocked = hasCollision(mc, feet) || hasCollision(mc, head);
+                BlockPos launchHeadroom = new BlockPos(bx, feetY + 2, bz);
+                boolean bodyBlocked = hasCollision(mc, feet) || hasCollision(mc, head);
+                boolean launchBlocked = hasCollision(mc, launchHeadroom);
+                boolean laneBlocked = bodyBlocked || launchBlocked;
                 if (laneBlocked) {
                     blockedLanes++;
-                    if (lane == 0) centerBlocked = true;
+                    if (lane == 0) {
+                        centerBlocked = true;
+                        centerBodyBlocked = bodyBlocked;
+                        centerLaunchBlocked = launchBlocked;
+                    }
                 }
             }
-            if (centerBlocked && blockedLanes == 3) {
-                wallReason = "corridor@" + centerX + "," + feetY + "," + centerZ + " d=" + d;
+            if (centerBlocked) {
+                wallReason = "corridor@" + centerX + "," + feetY + "," + centerZ
+                        + " d=" + d + " lanes=" + blockedLanes
+                        + " body=" + centerBodyBlocked + " launch=" + centerLaunchBlocked;
                 return true;
             }
         }
@@ -699,6 +712,7 @@ public final class BounceController {
         launchArmed = false;
         airborneLaunchTicks = 0;
         glideConfirmationTicks = 0;
+        launchAttemptsThisJump = 0;
         LOGGER.debug("[Bounce] ground jump requested");
         return true;
     }
@@ -1127,9 +1141,21 @@ public final class BounceController {
             return false;
         }
         launchRequests++;
+        launchAttemptsThisJump++;
         launchArmed = true;
         glideConfirmationTicks = 0;
         setLaunchPhase(LaunchPhase.LAUNCH_REQUESTED);
+        return true;
+    }
+
+    private boolean retryLaunch(double y, double velocityY, double rise) {
+        if (!requestStartFlying(y, velocityY, rise)) return false;
+        launchRequests++;
+        launchAttemptsThisJump++;
+        LOGGER.info("[Bounce] launch retry {}/{} y={} rise={} vy={}",
+                launchAttemptsThisJump, BounceTuning.LAUNCH_ATTEMPTS_PER_JUMP,
+                String.format("%.3f", y), String.format("%.3f", rise),
+                String.format("%.3f", velocityY));
         return true;
     }
 
@@ -1216,6 +1242,19 @@ public final class BounceController {
                 monitor.totalCorrectionEpisodes() - correctionEpisodeBaseline);
         int episodes = Math.min(sessionEpisodes,
                 monitor.recentCorrectionEpisodeCount(BounceTuning.CORRECTION_STORM_WINDOW_TICKS));
+        if (episodes == 0 && monitor.isCalm()
+                && (!elytraLaunchEnabled || !jumpingEnabled)) {
+            elytraLaunchEnabled = true;
+            jumpingEnabled = true;
+            launchAttemptsThisJump = 0;
+            consecutiveLaunchFailures = 0;
+            launchRearmTicks = Math.max(
+                    launchRearmTicks, BounceTuning.CORRECTION_REARM_TICKS);
+            correctionRecoveryBounces = BounceTuning.CORRECTION_RECOVERY_BOUNCES;
+            LOGGER.info("[Bounce] correction window clear; restoring launch after {}t rearm",
+                    launchRearmTicks);
+            return;
+        }
         if (elytraLaunchEnabled && episodes >= BounceTuning.CORRECTIONS_DISABLE_ELYTRA) {
             elytraLaunchEnabled = false;
             LOGGER.warn("[Bounce] {} correction episodes; falling back to sprint-jump", episodes);
