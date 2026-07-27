@@ -25,11 +25,21 @@ public final class HighwayDetectorBridge {
     public static HighwayDetectorBridge get() { return INSTANCE; }
     private HighwayDetectorBridge() {}
 
+    public enum Surface { PAVED, TUNNEL }
+
     // ── ScanResult ───────────────────────────────────────────────
     public record ScanResult(int floorY, int width, int centerX, int centerZ,
                               int leftRailOffset, int rightRailOffset,
                               boolean hasLeftRail, boolean hasRightRail,
-                              float blockConfidence) {}
+                              float blockConfidence, Surface surface) {
+        public ScanResult(int floorY, int width, int centerX, int centerZ,
+                          int leftRailOffset, int rightRailOffset,
+                          boolean hasLeftRail, boolean hasRightRail,
+                          float blockConfidence) {
+            this(floorY, width, centerX, centerZ, leftRailOffset, rightRailOffset,
+                    hasLeftRail, hasRightRail, blockConfidence, Surface.PAVED);
+        }
+    }
 
     // ── CellStatus ───────────────────────────────────────────────
     /*
@@ -59,6 +69,7 @@ public final class HighwayDetectorBridge {
         // Highway floor may step ±1 block in height at section joints; treat as intact.
         if (isHighwayBlock(bx, floorY + 1, bz)) return CellStatus.OK;
         if (isHighwayBlock(bx, floorY - 1, bz)) return CellStatus.OK;
+        if (isWalkableFloor(bx, floorY, bz)) return CellStatus.OK;
         // Cave suppressor: a deep void below indicates the highway spans a natural
         // Nether cave opening rather than a targeted block removal.
         if (looksLikeCave(bx, floorY, bz)) return CellStatus.CAVE_PASS;
@@ -71,7 +82,12 @@ public final class HighwayDetectorBridge {
     // Try to confirm a highway near the player's current Y.
     public Optional<ScanResult> scanAt(BlockPos playerPos, HighwayCandidate.Axis axis) {
         for (int yOff = -4; yOff <= 4; yOff++) {
-            ScanResult r = scanAlongAxis(
+            ScanResult r = scanPavedAlongAxis(
+                    playerPos.getX(), playerPos.getY() + yOff, playerPos.getZ(), axis);
+            if (r != null) return Optional.of(r);
+        }
+        for (int yOff = -4; yOff <= 4; yOff++) {
+            ScanResult r = scanTunnelAlongAxis(
                     playerPos.getX(), playerPos.getY() + yOff, playerPos.getZ(), axis);
             if (r != null) return Optional.of(r);
         }
@@ -110,7 +126,10 @@ public final class HighwayDetectorBridge {
     // Classify one floor cell with headroom checks.
     public CellStatus checkCell(BlockPos floorPos) {
         if (!isChunkLoaded(floorPos)) return CellStatus.UNLOADED;
-        if (!isHighwayBlock(floorPos)) return CellStatus.GRIEFED;
+        if (!isHighwayBlock(floorPos)
+                && !isWalkableFloor(floorPos.getX(), floorPos.getY(), floorPos.getZ())) {
+            return CellStatus.GRIEFED;
+        }
         if (!isAirLike(above(floorPos, 1))) return CellStatus.GRIEFED;
         if (!isAirLike(above(floorPos, 2))) return CellStatus.GRIEFED;
         return CellStatus.OK;
@@ -183,8 +202,8 @@ public final class HighwayDetectorBridge {
     }
 
     // ── Internal scan ────────────────────────────────────────────
-    private ScanResult scanAlongAxis(int px, int floorY, int pz,
-                                      HighwayCandidate.Axis axis) {
+    private ScanResult scanPavedAlongAxis(int px, int floorY, int pz,
+                                          HighwayCandidate.Axis axis) {
         int perpDx = axis.perpDx();
         int perpDz = axis.perpDz();
         int stepDx = axis.stepDx;
@@ -278,7 +297,181 @@ public final class HighwayDetectorBridge {
                 leftRail, rightRail, conf);
     }
 
+    private ScanResult scanTunnelAlongAxis(int px, int floorY, int pz,
+                                           HighwayCandidate.Axis axis) {
+        final int scanRange = 20;
+        final int maxPerp = 8;
+        final int minSamples = 21;
+        int perpDx = axis.perpDx();
+        int perpDz = axis.perpDz();
+
+        int centerX = px;
+        int centerZ = pz;
+        boolean foundCenter = isTunnelPassage(px, floorY, pz);
+        for (int shift = 1; shift <= 4 && !foundCenter; shift++) {
+            int positiveX = px + perpDx * shift;
+            int positiveZ = pz + perpDz * shift;
+            if (isTunnelPassage(positiveX, floorY, positiveZ)) {
+                centerX = positiveX;
+                centerZ = positiveZ;
+                foundCenter = true;
+                break;
+            }
+            int negativeX = px - perpDx * shift;
+            int negativeZ = pz - perpDz * shift;
+            if (isTunnelPassage(negativeX, floorY, negativeZ)) {
+                centerX = negativeX;
+                centerZ = negativeZ;
+                foundCenter = true;
+            }
+        }
+        if (!foundCenter) return null;
+
+        List<Integer> widths = new ArrayList<>();
+        List<Integer> leftEdges = new ArrayList<>();
+        List<Integer> rightEdges = new ArrayList<>();
+        int enclosedSamples = 0;
+
+        for (int step = -scanRange; step <= scanRange; step++) {
+            int sampleX = centerX + axis.stepDx * step;
+            int sampleZ = centerZ + axis.stepDz * step;
+            TunnelSection section = scanTunnelSection(
+                    sampleX, floorY, sampleZ, axis, maxPerp);
+            if (section == null) continue;
+            widths.add(section.width());
+            leftEdges.add(section.left());
+            rightEdges.add(section.right());
+            if (section.enclosed()) enclosedSamples++;
+        }
+
+        if (widths.size() < minSamples) return null;
+        int medianWidth = median(widths);
+        if (medianWidth < 2 || medianWidth > 9) return null;
+
+        int stableSamples = 0;
+        for (int width : widths) {
+            if (Math.abs(width - medianWidth) <= 1) stableSamples++;
+        }
+
+        float continuity = widths.size() / (float) (scanRange * 2 + 1);
+        float stability = stableSamples / (float) widths.size();
+        float enclosure = enclosedSamples / (float) widths.size();
+        if (continuity < 0.55f || stability < 0.65f || enclosure < 0.45f) return null;
+
+        int left = median(leftEdges);
+        int right = median(rightEdges);
+        int centerAdjust = (right - left) / 2;
+        centerX += perpDx * centerAdjust;
+        centerZ += perpDz * centerAdjust;
+        int adjustedLeft = left + centerAdjust;
+        int adjustedRight = right - centerAdjust;
+        int adjustedWidth = adjustedLeft + adjustedRight + 1;
+
+        float confidence = 0.25f * continuity
+                + 0.20f * stability
+                + 0.20f * enclosure
+                + (adjustedWidth >= 3 ? 0.10f : 0f);
+        confidence = Math.min(0.55f, confidence);
+        if (confidence < 0.45f) return null;
+
+        return new ScanResult(floorY, adjustedWidth, centerX, centerZ,
+                -(adjustedLeft + 1), adjustedRight + 1,
+                false, false, confidence, Surface.TUNNEL);
+    }
+
+    private TunnelSection scanTunnelSection(int centerX, int floorY, int centerZ,
+                                            HighwayCandidate.Axis axis, int maxPerp) {
+        if (!isTunnelPassage(centerX, floorY, centerZ)) return null;
+
+        int left = 0;
+        for (int offset = 1; offset <= maxPerp; offset++) {
+            int x = centerX - axis.perpDx() * offset;
+            int z = centerZ - axis.perpDz() * offset;
+            if (!isTunnelPassage(x, floorY, z)) break;
+            left = offset;
+        }
+
+        int right = 0;
+        for (int offset = 1; offset <= maxPerp; offset++) {
+            int x = centerX + axis.perpDx() * offset;
+            int z = centerZ + axis.perpDz() * offset;
+            if (!isTunnelPassage(x, floorY, z)) break;
+            right = offset;
+        }
+        if (left == maxPerp && isTunnelPassage(
+                centerX - axis.perpDx() * (maxPerp + 1),
+                floorY,
+                centerZ - axis.perpDz() * (maxPerp + 1))) {
+            return null;
+        }
+        if (right == maxPerp && isTunnelPassage(
+                centerX + axis.perpDx() * (maxPerp + 1),
+                floorY,
+                centerZ + axis.perpDz() * (maxPerp + 1))) {
+            return null;
+        }
+
+        int width = left + right + 1;
+        if (width < 2 || width > 9) return null;
+
+        int leftBoundaryX = centerX - axis.perpDx() * (left + 1);
+        int leftBoundaryZ = centerZ - axis.perpDz() * (left + 1);
+        int rightBoundaryX = centerX + axis.perpDx() * (right + 1);
+        int rightBoundaryZ = centerZ + axis.perpDz() * (right + 1);
+        boolean sideWalls = isTunnelBoundary(leftBoundaryX, floorY, leftBoundaryZ)
+                && isTunnelBoundary(rightBoundaryX, floorY, rightBoundaryZ);
+        boolean enclosed = sideWalls || hasTunnelRoof(centerX, floorY, centerZ);
+        return new TunnelSection(left, right, enclosed);
+    }
+
+    private static int median(List<Integer> values) {
+        values.sort(null);
+        return values.get(values.size() / 2);
+    }
+
+    private static boolean isTunnelPassage(int x, int floorY, int z) {
+        return isWalkableFloor(x, floorY, z)
+                && isAirLike(new BlockPos(x, floorY + 1, z))
+                && isAirLike(new BlockPos(x, floorY + 2, z));
+    }
+
+    private static boolean isTunnelBoundary(int x, int floorY, int z) {
+        return !isAirLike(new BlockPos(x, floorY + 1, z))
+                || !isAirLike(new BlockPos(x, floorY + 2, z));
+    }
+
+    private static boolean hasTunnelRoof(int x, int floorY, int z) {
+        for (int y = floorY + 3; y <= floorY + 5; y++) {
+            if (!isAirLike(new BlockPos(x, y, z))) return true;
+        }
+        return false;
+    }
+
+    private record TunnelSection(int left, int right, boolean enclosed) {
+        private int width() {
+            return left + right + 1;
+        }
+    }
+
     // ── Stonecutter-quarantined block helpers ─────────────────────
+    private static boolean isWalkableFloor(int x, int y, int z) {
+        BlockPos pos = new BlockPos(x, y, z);
+        if (!isChunkLoaded(pos)) return false;
+        /*? if >=26.1 {*//*
+        Minecraft mc = Minecraft.getInstance();
+        if (mc.level == null) return false;
+        var state = mc.level.getBlockState(pos);
+        if (state.is(Blocks.LAVA)) return false;
+        return !state.getCollisionShape(mc.level, pos).isEmpty();
+        *//*?} else {*/
+        MinecraftClient mc = MinecraftClient.getInstance();
+        if (mc.world == null) return false;
+        var state = mc.world.getBlockState(pos);
+        if (state.isOf(Blocks.LAVA)) return false;
+        return !state.getCollisionShape(mc.world, pos).isEmpty();
+        /*?}*/
+    }
+
     private static boolean isHighwayBlock(int x, int y, int z) {
         /*? if >=26.1 {*//*
         Minecraft mc = Minecraft.getInstance();

@@ -7,14 +7,17 @@ import net.minecraft.client.Minecraft;
 import net.minecraft.client.player.LocalPlayer;
 import net.minecraft.network.protocol.game.ClientboundPlayerPositionPacket;
 import net.minecraft.network.protocol.game.ServerboundAcceptTeleportationPacket;
+import net.minecraft.world.entity.Relative;
 *//*?} else {*/
 import net.minecraft.client.MinecraftClient;
 import net.minecraft.client.network.ClientPlayerEntity;
 import net.minecraft.network.packet.c2s.play.TeleportConfirmC2SPacket;
 import net.minecraft.network.packet.s2c.play.PlayerPositionLookS2CPacket;
+import net.minecraft.network.packet.s2c.play.PositionFlag;
 /*?}*/
 
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -36,9 +39,12 @@ public final class SetbackMonitor {
 
     // Movement below this per-tick delta counts as stationary.
     private static final double STATIONARY_DELTA_BLOCKS = 0.025;
+    // Ignore position syncs too small to represent a rubber-band.
+    private static final double MIN_CORRECTION_DISTANCE_BLOCKS = 0.10;
 
     private final AtomicInteger pendingCorrections = new AtomicInteger();
     private final AtomicInteger pendingAcknowledgements = new AtomicInteger();
+    private final AtomicLong pendingMaxCorrectionBits = new AtomicLong();
 
     private boolean primed;
     private double lastX, lastY, lastZ;
@@ -72,12 +78,46 @@ public final class SetbackMonitor {
     public void onIncomingPacket(Object packet) {
         if (packet == null) return;
         /*? if >=26.1 {*//*
-        if (packet instanceof ClientboundPlayerPositionPacket) {
+        if (packet instanceof ClientboundPlayerPositionPacket correction) {
+            Minecraft mc = Minecraft.getInstance();
+            LocalPlayer player = mc.player;
+            if (player == null) {
+                recordPendingCorrection(Double.POSITIVE_INFINITY);
+                return;
+            }
+            var position = correction.change().position();
+            var relatives = correction.relatives();
+            double targetX = position.x + (relatives.contains(Relative.X) ? player.getX() : 0.0);
+            double targetY = position.y + (relatives.contains(Relative.Y) ? player.getY() : 0.0);
+            double targetZ = position.z + (relatives.contains(Relative.Z) ? player.getZ() : 0.0);
         *//*?} else {*/
-        if (packet instanceof PlayerPositionLookS2CPacket) {
+        if (packet instanceof PlayerPositionLookS2CPacket correction) {
+            MinecraftClient mc = MinecraftClient.getInstance();
+            ClientPlayerEntity player = mc.player;
+            if (player == null) {
+                recordPendingCorrection(Double.POSITIVE_INFINITY);
+                return;
+            }
+            var position = correction.change().position();
+            var relatives = correction.relatives();
+            double targetX = position.x + (relatives.contains(PositionFlag.X) ? player.getX() : 0.0);
+            double targetY = position.y + (relatives.contains(PositionFlag.Y) ? player.getY() : 0.0);
+            double targetZ = position.z + (relatives.contains(PositionFlag.Z) ? player.getZ() : 0.0);
         /*?}*/
-            pendingCorrections.incrementAndGet();
+            double dx = targetX - player.getX();
+            double dy = targetY - player.getY();
+            double dz = targetZ - player.getZ();
+            recordPendingCorrection(Math.sqrt(dx * dx + dy * dy + dz * dz));
         }
+    }
+
+    private void recordPendingCorrection(double distance) {
+        pendingCorrections.incrementAndGet();
+        long candidate = Double.doubleToRawLongBits(distance);
+        pendingMaxCorrectionBits.getAndUpdate(currentBits -> {
+            double current = Double.longBitsToDouble(currentBits);
+            return distance > current ? candidate : currentBits;
+        });
     }
 
     // Track the client acknowledgement for correction diagnostics.
@@ -104,6 +144,7 @@ public final class SetbackMonitor {
             ticksSinceSetback = CALM_WINDOW_TICKS;
             pendingCorrections.set(0);
             pendingAcknowledgements.set(0);
+            pendingMaxCorrectionBits.set(0L);
             return;
         }
         currentTick++;
@@ -118,10 +159,13 @@ public final class SetbackMonitor {
             primed = true;
             pendingCorrections.set(0);
             pendingAcknowledgements.set(0);
+            pendingMaxCorrectionBits.set(0L);
             return;
         }
 
         int correctionCount = pendingCorrections.getAndSet(0);
+        double maxCorrectionDistance = Double.longBitsToDouble(
+                pendingMaxCorrectionBits.getAndSet(0L));
         int acknowledgementCount = pendingAcknowledgements.getAndSet(0);
         if (acknowledgementCount > 0) {
             PacketTelemetry.markCorrectionAcknowledged(acknowledgementCount);
@@ -138,9 +182,13 @@ public final class SetbackMonitor {
             stationaryTicks = 0;
         }
 
-        if (correctionCount > 0) {
+        if (correctionCount > 0
+                && maxCorrectionDistance < MIN_CORRECTION_DISTANCE_BLOCKS) {
+            LOGGER.info("[Setback] ignored position sync packets={} maxDelta={}",
+                    correctionCount, String.format("%.3f", maxCorrectionDistance));
+        } else if (correctionCount > 0) {
             if (ticksSinceSetback >= CALM_WINDOW_TICKS) {
-                recordCorrectionEpisode(correctionCount);
+                recordCorrectionEpisode(correctionCount, maxCorrectionDistance);
             }
             for (int i = 0; i < correctionCount; i++) {
                 recordSetback("server-correction");
@@ -150,12 +198,12 @@ public final class SetbackMonitor {
         }
     }
 
-    private void recordCorrectionEpisode(int packetCount) {
+    private void recordCorrectionEpisode(int packetCount, double maxDistance) {
         totalCorrectionEpisodes++;
         correctionEpisodeTicks[correctionEpisodeHead] = currentTick;
         correctionEpisodeHead = (correctionEpisodeHead + 1) % HISTORY_SIZE;
-        LOGGER.warn("[Setback] correction episode #{} started with {} packet(s)",
-                totalCorrectionEpisodes, packetCount);
+        LOGGER.warn("[Setback] correction episode #{} started with {} packet(s), maxDelta={}",
+                totalCorrectionEpisodes, packetCount, String.format("%.3f", maxDistance));
     }
 
     private void recordSetback(String source) {
@@ -228,6 +276,7 @@ public final class SetbackMonitor {
         correctionEpisodeHead = 0;
         pendingCorrections.set(0);
         pendingAcknowledgements.set(0);
+        pendingMaxCorrectionBits.set(0L);
         for (int i = 0; i < setbackTicks.length; i++) setbackTicks[i] = 0;
         for (int i = 0; i < correctionEpisodeTicks.length; i++) correctionEpisodeTicks[i] = 0;
     }

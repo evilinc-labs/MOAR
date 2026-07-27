@@ -539,6 +539,7 @@ public final class HighwayPlanner {
             if (scan.isEmpty()) continue;
             HighwayDetectorBridge.ScanResult result = scan.get();
             float score = result.blockConfidence();
+            if (result.surface() == HighwayDetectorBridge.Surface.PAVED) score += 0.25f;
             if (result.hasLeftRail()) score += 0.15f;
             if (result.hasRightRail()) score += 0.15f;
             score += Math.min(0.2f, result.width() * 0.03f);
@@ -546,6 +547,11 @@ public final class HighwayPlanner {
                 bestScore = score;
                 best = new OriginHighway(axis, result);
             }
+        }
+        if (best != null && best.scan().surface() == HighwayDetectorBridge.Surface.TUNNEL) {
+            LOGGER.info("[Travel] detected unpaved tunnel highway axis={} floorY={} width={} conf={}",
+                    best.axis(), best.scan().floorY(), best.scan().width(),
+                    String.format("%.2f", best.scan().blockConfidence()));
         }
         return best;
     }
