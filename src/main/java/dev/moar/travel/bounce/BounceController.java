@@ -59,6 +59,15 @@ public final class BounceController {
     private int airborneLaunchTicks;
     private int glideConfirmationTicks;
     private int launchRequests;
+    private int launchAttemptsThisJump;
+    private int sprintReadyWaitTicks;
+    private boolean takeoffSprinting;
+    private int firstLaunchAirborneTicks;
+    private double firstLaunchRise;
+    private double firstLaunchVelocityY;
+    private int firstGlideAirborneTicks;
+    private double firstGlideRise;
+    private double firstGlideVelocityY;
     private int completedBounces;
     private int consecutiveLaunchFailures;
     private double takeoffY;
@@ -97,7 +106,19 @@ public final class BounceController {
     private double modelDragLoss;
     private double modelCycleGain;
     private double modelCycleRate;
+    private float modelTerminalPitch;
+    private int modelHoldTicks;
+    private float initialModelPitch;
+    private float initialModelTerminalPitch;
+    private int initialModelHoldTicks;
+    private double initialModelTouchdownSpeed;
+    private int initialModelTouchdownTicks;
+    private double initialModelCycleGain;
     private double learnedLaunchImpulse;
+    private int airborneCycleTicks;
+    private double previousTouchdownSpeed;
+    private double observedCycleGain;
+    private double filteredCycleGain;
     private boolean apexPassed;
     private int tangentialDecelerationTicks;
     private float minimumGlidePitch;
@@ -141,6 +162,15 @@ public final class BounceController {
         airborneLaunchTicks = 0;
         glideConfirmationTicks = 0;
         launchRequests = 0;
+        launchAttemptsThisJump = 0;
+        sprintReadyWaitTicks = 0;
+        takeoffSprinting = false;
+        firstLaunchAirborneTicks = 0;
+        firstLaunchRise = Double.NaN;
+        firstLaunchVelocityY = Double.NaN;
+        firstGlideAirborneTicks = 0;
+        firstGlideRise = Double.NaN;
+        firstGlideVelocityY = Double.NaN;
         completedBounces = 0;
         consecutiveLaunchFailures = 0;
         takeoffY = Double.NaN;
@@ -159,6 +189,10 @@ public final class BounceController {
         normalPitchBias = 0.0f;
         tangentialPitchBias = 0.0f;
         learnedLaunchImpulse = BounceTuning.GLIDE_MODEL_INITIAL_LAUNCH_IMPULSE;
+        airborneCycleTicks = 0;
+        previousTouchdownSpeed = Double.NaN;
+        observedCycleGain = Double.NaN;
+        filteredCycleGain = Double.NaN;
         diveTicks = 0;
         peakHorizontalSpeed = 0.0;
         resetArcModel();
@@ -248,12 +282,7 @@ public final class BounceController {
             wallObservationTicks = 0;
             wallReason = "none";
         }
-        /*? if >=26.1 {*//*
-        boolean grounded = mc.player.onGround();
-        *//*?} else {*/
-        boolean grounded = mc.player.isOnGround();
-        /*?}*/
-        wallAhead = grounded && wallObservationTicks >= BounceTuning.WALL_CONFIRM_TICKS;
+        wallAhead = wallObservationTicks >= BounceTuning.WALL_CONFIRM_TICKS;
         if (wallAhead) return; // skip stuck-detection this tick
 
         // ── Exit check ───────────────────────────────────────────
@@ -415,6 +444,9 @@ public final class BounceController {
                 || launchPhase == LaunchPhase.ASCENDING) {
             airborneLaunchTicks++;
         }
+        if (!onGround && Double.isFinite(takeoffHorizontalSpeed)) {
+            airborneCycleTicks++;
+        }
         double rise = Double.isNaN(takeoffY) ? 0.0 : mc.player.getY() - takeoffY;
         peakHorizontalSpeed = Math.max(peakHorizontalSpeed, horizontalSpeed);
         if (!Double.isNaN(takeoffY)) {
@@ -429,6 +461,9 @@ public final class BounceController {
         if (controllingGlide) {
             if (!Double.isFinite(glideStartHorizontalSpeed)) {
                 glideStartHorizontalSpeed = horizontalSpeed;
+                firstGlideAirborneTicks = airborneCycleTicks;
+                firstGlideRise = rise;
+                firstGlideVelocityY = velocityY;
             }
             updateArcModel(velocityX, velocityY, velocityZ);
             activeGlidePitch = glidePitchForArc(rise, velocityY);
@@ -491,7 +526,11 @@ public final class BounceController {
                     setLaunchPhase(LaunchPhase.GROUNDED);
                 } else {
                     glideConfirmationTicks = 0;
-                    if (launchPhaseTicks >= BounceTuning.LAUNCH_ACK_TIMEOUT_TICKS) {
+                    if (launchAttemptsThisJump < BounceTuning.LAUNCH_ATTEMPTS_PER_JUMP
+                            && shouldRetryLaunch(velocityY)
+                            && retryLaunch(mc.player.getY(), velocityY, rise)) {
+                        launchPhaseTicks = 0;
+                    } else if (launchPhaseTicks >= BounceTuning.LAUNCH_ACK_TIMEOUT_TICKS) {
                         recordLaunchRejected("ack-timeout", mc.player.getY(), velocityY, rise);
                         setLaunchPhase(LaunchPhase.LANDING);
                     }
@@ -501,22 +540,37 @@ public final class BounceController {
                 if (onGround) {
                     completedBounces++;
                     updateLaunchImpulseEstimate();
+                    double touchdownSpeed = horizontalSpeed();
+                    updateCycleGain(touchdownSpeed);
                     if (correctionRecoveryBounces > 0) {
                         correctionRecoveryBounces--;
                     }
-                    if (completedBounces <= 3 || completedBounces % 10 == 0) {
+                    boolean irregularCycle = launchAttemptsThisJump > 1
+                            || (Double.isFinite(observedCycleGain)
+                            && observedCycleGain < -0.02);
+                    if (completedBounces <= 3 || completedBounces % 10 == 0
+                            || irregularCycle) {
                         double peakRise = Double.isNaN(peakY) || Double.isNaN(takeoffY)
                                 ? 0.0 : peakY - takeoffY;
-                        double touchdownSpeed = horizontalSpeed();
                         double glideLoss = Double.isFinite(glideStartHorizontalSpeed)
                                 ? glideStartHorizontalSpeed - touchdownSpeed
                                 : Double.NaN;
-                        LOGGER.info("[Bounce] touchdown #{} speed={} takeoffSpeed={} glideStartSpeed={} glideLoss={} launchImpulse={} peakSpeed={} apexSpeed={} speedLoss={} targetDemand={} targetBias={} normalBias={} tangentBias={} gainScale={} modelPitch={} modelSpeed={} modelTicks={} modelLift={} modelDrag={} cycleGain={} cycleRate={} peakRise={} ceiling={} mode={} launchPitch={} glidePitch={} activePitch={} pitchRange={}-{} diveTicks={} ay={} at={} an={} requiredAy={} requiredAn={} pathAngle={} landingTicks={} offset={} steer={}",
+                        LOGGER.info("[Bounce] touchdown #{} speed={} takeoffSpeed={} takeoffSprinting={} glideStartSpeed={} glideLoss={} launchImpulse={} launchAttempts={} firstLaunchAirTicks={} firstLaunchRise={} firstLaunchVy={} firstGlideAirTicks={} firstGlideRise={} firstGlideVy={} observedCycleGain={} filteredCycleGain={} peakSpeed={} apexSpeed={} speedLoss={} targetDemand={} targetBias={} normalBias={} tangentBias={} gainScale={} initialModelPitch={} initialTerminalPitch={} initialHoldTicks={} initialModelSpeed={} initialModelTicks={} initialCycleGain={} modelPitch={} modelTerminalPitch={} modelHoldTicks={} modelSpeed={} modelTicks={} modelLift={} modelDrag={} cycleGain={} cycleEnergyRate={} peakRise={} ceiling={} mode={} launchPitch={} glidePitch={} activePitch={} pitchRange={}-{} diveTicks={} ay={} at={} an={} requiredAy={} requiredAn={} pathAngle={} landingTicks={} offset={} steer={}",
                                 completedBounces, String.format("%.3f", touchdownSpeed),
                                 formatArcValue(takeoffHorizontalSpeed),
+                                takeoffSprinting,
                                 formatArcValue(glideStartHorizontalSpeed),
                                 formatArcValue(glideLoss),
                                 formatArcValue(learnedLaunchImpulse),
+                                launchAttemptsThisJump,
+                                firstLaunchAirborneTicks,
+                                formatArcValue(firstLaunchRise),
+                                formatArcValue(firstLaunchVelocityY),
+                                firstGlideAirborneTicks,
+                                formatArcValue(firstGlideRise),
+                                formatArcValue(firstGlideVelocityY),
+                                formatArcValue(observedCycleGain),
+                                formatArcValue(filteredCycleGain),
                                 String.format("%.3f", peakHorizontalSpeed),
                                 formatArcValue(apexHorizontalSpeed),
                                 String.format("%.3f", maximumHorizontalSpeedLoss),
@@ -525,7 +579,15 @@ public final class BounceController {
                                 String.format("%.2f", normalPitchBias),
                                 String.format("%.2f", tangentialPitchBias),
                                 String.format("%.3f", controlGainScale),
+                                formatPitch(initialModelPitch),
+                                formatPitch(initialModelTerminalPitch),
+                                initialModelHoldTicks,
+                                formatArcValue(initialModelTouchdownSpeed),
+                                initialModelTouchdownTicks,
+                                formatArcValue(initialModelCycleGain),
                                 formatPitch(modelPitch),
+                                formatPitch(modelTerminalPitch),
+                                modelHoldTicks,
                                 formatArcValue(modelTouchdownSpeed),
                                 modelTouchdownTicks,
                                 formatArcValue(modelLiftGain),
@@ -590,7 +652,7 @@ public final class BounceController {
         return (float) Math.toDegrees(Math.atan2(-dx, dz));
     }
 
-    // Find a blocked body-height corridor ahead.
+    // Find a blocked launch corridor ahead.
     private boolean detectBlockedCorridor(
             /*? if >=26.1 {*//* Minecraft mc *//*?} else {*/ MinecraftClient mc /*?}*/) {
         if (mc.player == null || highway == null || exitColumn == null
@@ -615,28 +677,39 @@ public final class BounceController {
         int maxAhead = (int) Math.min(
                 BounceTuning.OBSTACLE_SCAN_AHEAD,
                 exitProjection - playerProjection - 1L);
-        if (maxAhead < 2) return false;
+        if (maxAhead < 1) return false;
 
         int perpX = highway.axis.perpDx();
         int perpZ = highway.axis.perpDz();
-        for (int d = 2; d <= maxAhead; d++) {
+        for (int d = 1; d <= maxAhead; d++) {
             int centerX = (int) Math.floor(px + dirX * d);
             int centerZ = (int) Math.floor(pz + dirZ * d);
             boolean centerBlocked = false;
+            boolean centerBodyBlocked = false;
+            boolean centerLaunchBlocked = false;
             int blockedLanes = 0;
             for (int lane = -1; lane <= 1; lane++) {
                 int bx = centerX + perpX * lane;
                 int bz = centerZ + perpZ * lane;
                 BlockPos feet = new BlockPos(bx, feetY, bz);
                 BlockPos head = new BlockPos(bx, feetY + 1, bz);
-                boolean laneBlocked = hasCollision(mc, feet) || hasCollision(mc, head);
+                BlockPos launchHeadroom = new BlockPos(bx, feetY + 2, bz);
+                boolean bodyBlocked = hasCollision(mc, feet) || hasCollision(mc, head);
+                boolean launchBlocked = hasCollision(mc, launchHeadroom);
+                boolean laneBlocked = bodyBlocked || launchBlocked;
                 if (laneBlocked) {
                     blockedLanes++;
-                    if (lane == 0) centerBlocked = true;
+                    if (lane == 0) {
+                        centerBlocked = true;
+                        centerBodyBlocked = bodyBlocked;
+                        centerLaunchBlocked = launchBlocked;
+                    }
                 }
             }
-            if (centerBlocked && blockedLanes == 3) {
-                wallReason = "corridor@" + centerX + "," + feetY + "," + centerZ + " d=" + d;
+            if (centerBlocked) {
+                wallReason = "corridor@" + centerX + "," + feetY + "," + centerZ
+                        + " d=" + d + " lanes=" + blockedLanes
+                        + " body=" + centerBodyBlocked + " launch=" + centerLaunchBlocked;
                 return true;
             }
         }
@@ -670,6 +743,25 @@ public final class BounceController {
         if (mc.player == null) return false;
         mc.options.jumpKey.setPressed(true);
         /*?}*/
+        takeoffSprinting = mc.player.isSprinting();
+        if (!takeoffSprinting) {
+            sprintReadyWaitTicks++;
+            mc.player.setSprinting(true);
+            takeoffSprinting = mc.player.isSprinting();
+        }
+        if (!takeoffSprinting) {
+            /*? if >=26.1 {*//*
+            mc.options.keyJump.setDown(false);
+            *//*?} else {*/
+            mc.options.jumpKey.setPressed(false);
+            /*?}*/
+            if (sprintReadyWaitTicks == 1) {
+                LOGGER.info("[Bounce] waiting for sprint before launch speed={}",
+                        formatArcValue(horizontalSpeed()));
+            }
+            return false;
+        }
+        sprintReadyWaitTicks = 0;
         double speed = horizontalSpeed();
         double accelerationThreshold = acceleratingArc
                 ? BounceTuning.TARGET_HORIZONTAL_SPEED
@@ -699,6 +791,14 @@ public final class BounceController {
         launchArmed = false;
         airborneLaunchTicks = 0;
         glideConfirmationTicks = 0;
+        launchAttemptsThisJump = 0;
+        firstLaunchAirborneTicks = 0;
+        firstLaunchRise = Double.NaN;
+        firstLaunchVelocityY = Double.NaN;
+        firstGlideAirborneTicks = 0;
+        firstGlideRise = Double.NaN;
+        firstGlideVelocityY = Double.NaN;
+        airborneCycleTicks = 0;
         LOGGER.debug("[Bounce] ground jump requested");
         return true;
     }
@@ -782,7 +882,7 @@ public final class BounceController {
                         / (targetSpeed * targetSpeed),
                 0.0,
                 1.0);
-        targetSpeedBias = (float) (targetSpeedDemand
+        targetSpeedBias = (float) (-targetSpeedDemand
                 * BounceTuning.GLIDE_ACCEL_TARGET_SPEED_BIAS_MAX);
         normalPitchBias = clamp(
                 (float) (normalAccelerationError
@@ -797,16 +897,34 @@ public final class BounceController {
         fallbackPitch = clamp(fallbackPitch,
                 BounceTuning.GLIDE_ACCEL_DIVE_MIN_PITCH,
                 BounceTuning.GLIDE_ACCEL_DIVE_MAX_PITCH);
-        GlidePlan plan = planGlidePitch(rise, velocityY, horizontalSpeed);
+        GlidePlan plan = planGlidePitch(
+                rise,
+                velocityY,
+                horizontalSpeed,
+                takeoffHorizontalSpeed,
+                airborneCycleTicks);
         float targetPitch = plan.valid() ? plan.targetPitch() : fallbackPitch;
         if (plan.valid()) {
             modelPitch = plan.targetPitch();
+            modelTerminalPitch = plan.terminalPitch();
+            modelHoldTicks = plan.holdTicks();
             modelTouchdownSpeed = plan.touchdownSpeed();
             modelTouchdownTicks = plan.touchdownTicks();
-            modelCycleGain = plan.touchdownSpeed() + learnedLaunchImpulse - horizontalSpeed;
-            modelCycleRate = cycleRate(plan, horizontalSpeed);
+            modelCycleGain = cycleGain(plan, takeoffHorizontalSpeed);
+            modelCycleRate = cycleEnergyRate(
+                    plan, takeoffHorizontalSpeed, airborneCycleTicks);
+            if (!Float.isFinite(initialModelPitch)) {
+                initialModelPitch = modelPitch;
+                initialModelTerminalPitch = modelTerminalPitch;
+                initialModelHoldTicks = modelHoldTicks;
+                initialModelTouchdownSpeed = modelTouchdownSpeed;
+                initialModelTouchdownTicks = modelTouchdownTicks;
+                initialModelCycleGain = modelCycleGain;
+            }
         } else {
             modelPitch = Float.NaN;
+            modelTerminalPitch = Float.NaN;
+            modelHoldTicks = 0;
             modelTouchdownSpeed = Double.NaN;
             modelTouchdownTicks = 0;
             modelCycleGain = Double.NaN;
@@ -930,35 +1048,153 @@ public final class BounceController {
 
     private record FlightFrameAcceleration(double tangential, double normal) {}
 
-    private GlidePlan planGlidePitch(double rise, double velocityY, double horizontalSpeed) {
+    private GlidePlan planGlidePitch(
+            double rise,
+            double velocityY,
+            double horizontalSpeed,
+            double cycleStartSpeed,
+            int elapsedCycleTicks) {
         GlidePlan best = GlidePlan.invalid();
-        double bestCycleRate = Double.NEGATIVE_INFINITY;
-        for (float targetPitch = BounceTuning.GLIDE_MODEL_MIN_PITCH;
-                targetPitch <= BounceTuning.GLIDE_MODEL_MAX_PITCH;
-                targetPitch += BounceTuning.GLIDE_MODEL_PITCH_STEP) {
-            GlidePlan candidate = simulateGlidePlan(
-                    rise, velocityY, horizontalSpeed, activeGlidePitch, targetPitch);
-            if (!candidate.valid()) continue;
-            double candidateCycleRate = cycleRate(candidate, horizontalSpeed);
-            if (!best.valid()
-                    || candidateCycleRate > bestCycleRate + 1.0E-6
-                    || (Math.abs(candidateCycleRate - bestCycleRate) <= 1.0E-6
-                    && candidate.touchdownSpeed() > best.touchdownSpeed() + 1.0E-6)
-                    || (Math.abs(candidateCycleRate - bestCycleRate) <= 1.0E-6
-                    && Math.abs(candidate.touchdownSpeed() - best.touchdownSpeed()) <= 1.0E-6
-                    && Math.abs(targetPitch - activeGlidePitch)
-                    < Math.abs(best.targetPitch() - activeGlidePitch))) {
-                best = candidate;
-                bestCycleRate = candidateCycleRate;
+        double touchdownFloor = minimumTouchdownSpeed(cycleStartSpeed);
+        boolean speedFloorActive = Double.isFinite(cycleStartSpeed)
+                && cycleStartSpeed >= BounceTuning.GLIDE_MODEL_MIN_TOUCHDOWN_SPEED;
+        for (float terminalPitch = BounceTuning.GLIDE_MODEL_MIN_PITCH;
+                terminalPitch <= BounceTuning.GLIDE_MODEL_MAX_PITCH;
+                terminalPitch += BounceTuning.GLIDE_MODEL_PITCH_STEP) {
+            GlidePlan direct = simulateGlidePlan(
+                    rise,
+                    velocityY,
+                    horizontalSpeed,
+                    activeGlidePitch,
+                    terminalPitch,
+                    terminalPitch,
+                    0);
+            if (isBetterGlidePlan(
+                    direct,
+                    best,
+                    cycleStartSpeed,
+                    elapsedCycleTicks,
+                    touchdownFloor,
+                    speedFloorActive,
+                    activeGlidePitch)) {
+                best = direct;
+            }
+            for (int holdStep = 1;
+                    holdStep <= BounceTuning.GLIDE_MODEL_HOLD_PITCH_STEPS;
+                    holdStep++) {
+                float holdPitch = Math.min(
+                        BounceTuning.GLIDE_MODEL_MAX_PITCH,
+                        terminalPitch
+                                + holdStep * BounceTuning.GLIDE_MODEL_HOLD_PITCH_STEP);
+                if (holdPitch <= terminalPitch) continue;
+                for (int holdTicks = 1;
+                        holdTicks <= BounceTuning.GLIDE_MODEL_MAX_HOLD_TICKS;
+                        holdTicks++) {
+                    GlidePlan staged = simulateGlidePlan(
+                            rise,
+                            velocityY,
+                            horizontalSpeed,
+                            activeGlidePitch,
+                            holdPitch,
+                            terminalPitch,
+                            holdTicks);
+                    if (isBetterGlidePlan(
+                            staged,
+                            best,
+                            cycleStartSpeed,
+                            elapsedCycleTicks,
+                            touchdownFloor,
+                            speedFloorActive,
+                            activeGlidePitch)) {
+                        best = staged;
+                    }
+                }
             }
         }
         return best;
     }
 
-    private double cycleRate(GlidePlan plan, double horizontalSpeed) {
-        double cycleGain = plan.touchdownSpeed() + learnedLaunchImpulse - horizontalSpeed;
-        return cycleGain / (plan.touchdownTicks()
-                + BounceTuning.GLIDE_MODEL_LAUNCH_OVERHEAD_TICKS);
+    private static boolean isBetterGlidePlan(
+            GlidePlan candidate,
+            GlidePlan current,
+            double cycleStartSpeed,
+            int elapsedCycleTicks,
+            double touchdownFloor,
+            boolean speedFloorActive,
+            float activePitch) {
+        if (!candidate.valid()) return false;
+        if (!current.valid()) return true;
+
+        boolean candidateProtectsSpeed = speedFloorActive
+                && candidate.touchdownSpeed() >= touchdownFloor;
+        boolean currentProtectsSpeed = speedFloorActive
+                && current.touchdownSpeed() >= touchdownFloor;
+        if (candidateProtectsSpeed != currentProtectsSpeed) {
+            return candidateProtectsSpeed;
+        }
+
+        double candidateGain = cycleEnergyGain(candidate, cycleStartSpeed);
+        double currentGain = cycleEnergyGain(current, cycleStartSpeed);
+        double candidateRate = cycleEnergyRate(
+                candidate, cycleStartSpeed, elapsedCycleTicks);
+        double currentRate = cycleEnergyRate(current, cycleStartSpeed, elapsedCycleTicks);
+        int primary = candidateProtectsSpeed
+                ? compareMetric(candidateRate, currentRate)
+                : compareMetric(candidateGain, currentGain);
+        if (primary != 0) return primary > 0;
+
+        int secondary = candidateProtectsSpeed
+                ? compareMetric(candidateGain, currentGain)
+                : compareMetric(candidateRate, currentRate);
+        if (secondary != 0) return secondary > 0;
+
+        int touchdown = compareMetric(
+                candidate.touchdownSpeed(), current.touchdownSpeed());
+        if (touchdown != 0) return touchdown > 0;
+        if (candidate.holdTicks() != current.holdTicks()) {
+            return candidate.holdTicks() < current.holdTicks();
+        }
+        return Math.abs(candidate.targetPitch() - activePitch)
+                < Math.abs(current.targetPitch() - activePitch);
+    }
+
+    private static int compareMetric(double candidate, double current) {
+        if (Double.isFinite(candidate) && Double.isFinite(current)) {
+            double difference = candidate - current;
+            if (Math.abs(difference) <= 1.0E-6) return 0;
+            return difference > 0.0 ? 1 : -1;
+        }
+        return Double.compare(candidate, current);
+    }
+
+    private static double cycleGain(GlidePlan plan, double cycleStartSpeed) {
+        if (!Double.isFinite(cycleStartSpeed)) return Double.NaN;
+        return plan.touchdownSpeed() - cycleStartSpeed;
+    }
+
+    private static double cycleEnergyGain(GlidePlan plan, double cycleStartSpeed) {
+        if (!Double.isFinite(cycleStartSpeed)) return Double.NEGATIVE_INFINITY;
+        return 0.5 * (plan.touchdownSpeed() * plan.touchdownSpeed()
+                - cycleStartSpeed * cycleStartSpeed);
+    }
+
+    private static double cycleEnergyRate(
+            GlidePlan plan, double cycleStartSpeed, int elapsedCycleTicks) {
+        double energyGain = cycleEnergyGain(plan, cycleStartSpeed);
+        if (!Double.isFinite(energyGain)) return Double.NEGATIVE_INFINITY;
+        return energyGain / Math.max(
+                1, elapsedCycleTicks + plan.touchdownTicks());
+    }
+
+    private static double minimumTouchdownSpeed(double cycleStartSpeed) {
+        if (!Double.isFinite(cycleStartSpeed)) {
+            return BounceTuning.GLIDE_MODEL_MIN_TOUCHDOWN_SPEED;
+        }
+        return Math.min(
+                BounceTuning.TARGET_HORIZONTAL_SPEED,
+                Math.max(
+                        BounceTuning.GLIDE_MODEL_MIN_TOUCHDOWN_SPEED,
+                        cycleStartSpeed - BounceTuning.GLIDE_MODEL_MAX_CYCLE_SPEED_DROP));
     }
 
     private static GlidePlan simulateGlidePlan(
@@ -966,7 +1202,9 @@ public final class BounceController {
             double velocityY,
             double horizontalSpeed,
             float currentPitch,
-            float targetPitch) {
+            float holdPitch,
+            float terminalPitch,
+            int holdTicks) {
         double simulatedRise = Math.max(0.0, rise);
         double simulatedVertical = velocityY;
         double simulatedHorizontal = horizontalSpeed;
@@ -975,6 +1213,7 @@ public final class BounceController {
         float simulatedPitch = currentPitch;
 
         for (int tick = 1; tick <= BounceTuning.GLIDE_MODEL_MAX_TICKS; tick++) {
+            float targetPitch = tick <= holdTicks ? holdPitch : terminalPitch;
             simulatedPitch = approachPitch(
                     simulatedPitch, targetPitch, simulatedVertical, simulatedHorizontal);
             GlideStep step = simulateVanillaGlideStep(
@@ -986,7 +1225,9 @@ public final class BounceController {
             dragLoss += step.dragLoss();
             if (simulatedRise <= 0.0) {
                 return new GlidePlan(
-                        targetPitch,
+                        holdTicks > 0 ? holdPitch : terminalPitch,
+                        terminalPitch,
+                        holdTicks,
                         simulatedHorizontal,
                         tick,
                         liftGain,
@@ -1025,13 +1266,23 @@ public final class BounceController {
 
     private record GlidePlan(
             float targetPitch,
+            float terminalPitch,
+            int holdTicks,
             double touchdownSpeed,
             int touchdownTicks,
             double liftGain,
             double dragLoss,
             boolean valid) {
         private static GlidePlan invalid() {
-            return new GlidePlan(Float.NaN, Double.NaN, 0, Double.NaN, Double.NaN, false);
+            return new GlidePlan(
+                    Float.NaN,
+                    Float.NaN,
+                    0,
+                    Double.NaN,
+                    0,
+                    Double.NaN,
+                    Double.NaN,
+                    false);
         }
     }
 
@@ -1043,6 +1294,14 @@ public final class BounceController {
         modelDragLoss = 0.0;
         modelCycleGain = Double.NaN;
         modelCycleRate = Double.NaN;
+        modelTerminalPitch = Float.NaN;
+        modelHoldTicks = 0;
+        initialModelPitch = Float.NaN;
+        initialModelTerminalPitch = Float.NaN;
+        initialModelHoldTicks = 0;
+        initialModelTouchdownSpeed = Double.NaN;
+        initialModelTouchdownTicks = 0;
+        initialModelCycleGain = Double.NaN;
     }
 
     private void updateLaunchImpulseEstimate() {
@@ -1056,6 +1315,21 @@ public final class BounceController {
         }
         learnedLaunchImpulse += (observed - learnedLaunchImpulse)
                 * BounceTuning.GLIDE_MODEL_LAUNCH_IMPULSE_FILTER;
+    }
+
+    private void updateCycleGain(double touchdownSpeed) {
+        observedCycleGain = Double.isFinite(previousTouchdownSpeed)
+                ? touchdownSpeed - previousTouchdownSpeed
+                : Double.NaN;
+        if (Double.isFinite(observedCycleGain)) {
+            if (Double.isFinite(filteredCycleGain)) {
+                filteredCycleGain += (observedCycleGain - filteredCycleGain)
+                        * BounceTuning.GLIDE_MODEL_CYCLE_GAIN_FILTER;
+            } else {
+                filteredCycleGain = observedCycleGain;
+            }
+        }
+        previousTouchdownSpeed = touchdownSpeed;
     }
 
     private static double solveLandingTicks(double rise, double velocityY, double accelerationY) {
@@ -1119,7 +1393,7 @@ public final class BounceController {
 
     // Arm flight at the first safe fractional launch point.
     private boolean tryRequestLaunch(double y, double velocityY, double rise) {
-        boolean reachedLaunchPoint = airborneLaunchTicks >= 2
+        boolean reachedLaunchPoint = airborneLaunchTicks >= BounceTuning.LAUNCH_MIN_AIRBORNE_TICKS
                 && (velocityY <= BounceTuning.ELYTRA_ACTIVATE_VY_THRESHOLD
                 || rise >= BounceTuning.ELYTRA_ACTIVATE_MAX_RISE);
         if (!elytraLaunchEnabled || launchRearmTicks > 0 || !reachedLaunchPoint
@@ -1127,10 +1401,40 @@ public final class BounceController {
             return false;
         }
         launchRequests++;
+        launchAttemptsThisJump++;
+        firstLaunchAirborneTicks = airborneLaunchTicks;
+        firstLaunchRise = rise;
+        firstLaunchVelocityY = velocityY;
         launchArmed = true;
         glideConfirmationTicks = 0;
         setLaunchPhase(LaunchPhase.LAUNCH_REQUESTED);
         return true;
+    }
+
+    private boolean retryLaunch(double y, double velocityY, double rise) {
+        if (!requestStartFlying(y, velocityY, rise)) return false;
+        launchRequests++;
+        launchAttemptsThisJump++;
+        LOGGER.info("[Bounce] launch retry {}/{} phaseTicks={} takeoffSpeed={} firstAirTicks={} firstRise={} firstVy={} y={} rise={} vy={}",
+                launchAttemptsThisJump, BounceTuning.LAUNCH_ATTEMPTS_PER_JUMP,
+                launchPhaseTicks, formatArcValue(takeoffHorizontalSpeed),
+                firstLaunchAirborneTicks, formatArcValue(firstLaunchRise),
+                formatArcValue(firstLaunchVelocityY),
+                String.format("%.3f", y), String.format("%.3f", rise),
+                String.format("%.3f", velocityY));
+        return true;
+    }
+
+    private boolean shouldRetryLaunch(double velocityY) {
+        boolean highSpeed = Double.isFinite(takeoffHorizontalSpeed)
+                && takeoffHorizontalSpeed >= BounceTuning.ACCEL_MID_SPEED_THRESHOLD;
+        int retryAfterTicks = highSpeed
+                ? BounceTuning.LAUNCH_HIGH_SPEED_RETRY_AFTER_TICKS
+                : BounceTuning.LAUNCH_RETRY_AFTER_TICKS;
+        double maximumVelocityY = highSpeed
+                ? BounceTuning.LAUNCH_HIGH_SPEED_RETRY_MAX_ASCENT_VELOCITY
+                : BounceTuning.ELYTRA_ACTIVATE_VY_THRESHOLD;
+        return launchPhaseTicks >= retryAfterTicks && velocityY <= maximumVelocityY;
     }
 
     // Let vanilla serialize one flight command per jump arc.
@@ -1216,6 +1520,19 @@ public final class BounceController {
                 monitor.totalCorrectionEpisodes() - correctionEpisodeBaseline);
         int episodes = Math.min(sessionEpisodes,
                 monitor.recentCorrectionEpisodeCount(BounceTuning.CORRECTION_STORM_WINDOW_TICKS));
+        if (episodes == 0 && monitor.isCalm()
+                && (!elytraLaunchEnabled || !jumpingEnabled)) {
+            elytraLaunchEnabled = true;
+            jumpingEnabled = true;
+            launchAttemptsThisJump = 0;
+            consecutiveLaunchFailures = 0;
+            launchRearmTicks = Math.max(
+                    launchRearmTicks, BounceTuning.CORRECTION_REARM_TICKS);
+            correctionRecoveryBounces = BounceTuning.CORRECTION_RECOVERY_BOUNCES;
+            LOGGER.info("[Bounce] correction window clear; restoring launch after {}t rearm",
+                    launchRearmTicks);
+            return;
+        }
         if (elytraLaunchEnabled && episodes >= BounceTuning.CORRECTIONS_DISABLE_ELYTRA) {
             elytraLaunchEnabled = false;
             LOGGER.warn("[Bounce] {} correction episodes; falling back to sprint-jump", episodes);

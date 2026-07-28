@@ -1,5 +1,9 @@
 package dev.moar.travel;
 
+import dev.moar.MoarMod;
+import dev.moar.api.MoarProperties;
+import dev.moar.api.WebhookEvent;
+import dev.moar.api.WebhookService;
 import dev.moar.travel.bounce.BounceController;
 import dev.moar.travel.bridge.TravelBaritoneBridge;
 import dev.moar.travel.detour.DetourPlanner;
@@ -13,6 +17,7 @@ import dev.moar.travel.plan.HighwayRoute;
 import dev.moar.travel.telemetry.TravelLog;
 import dev.moar.travel.telemetry.TravelTelemetry;
 import dev.moar.util.ChatHelper;
+import dev.moar.world.SetbackMonitor;
 
 /*? if >=26.1 {*//*
 import net.minecraft.client.Minecraft;
@@ -35,7 +40,9 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 
 // Travel mission state machine; owns phase progression and movement handoffs.
@@ -87,6 +94,9 @@ public final class TravelManager {
     private static final int SETTLE_MIN_TICKS = 10;
     private static final int SETTLE_GROUNDED_TICKS = 3;
     private static final int SETTLE_TIMEOUT_TICKS = 60;
+    private static final int DETOUR_WAYPOINT_RADIUS = 1;
+    private static final int DETOUR_FALL_GRACE_TICKS = 10;
+    private static final int DETOUR_FALL_TOLERANCE = 3;
 
     private int miningRetargetAttempts = 0;
     private MiningTraversal miningTraversal = MiningTraversal.NONE;
@@ -96,6 +106,7 @@ public final class TravelManager {
     private int turnRetargetAttempts;
     private TravelPhase resupplyResumePhase;
     private BlockPos resupplyResumeTarget;
+    private int detourMinSafeY = Integer.MIN_VALUE;
 
     private enum MiningTraversal {
         NONE,
@@ -132,6 +143,7 @@ public final class TravelManager {
         clearTurnHandoff();
         resupplyResumePhase = null;
         resupplyResumeTarget = null;
+        detourMinSafeY = Integer.MIN_VALUE;
         transition(TravelPhase.PLANNING, "user start: " + mission);
         return true;
     }
@@ -146,6 +158,7 @@ public final class TravelManager {
         miningTraversal = MiningTraversal.NONE;
         activeMineTarget = null;
         clearTurnHandoff();
+        detourMinSafeY = Integer.MIN_VALUE;
         if (state.phase == TravelPhase.ELYTRA_RESUPPLY) {
             elytra.pause();
         } else {
@@ -174,6 +187,7 @@ public final class TravelManager {
         state.ticksInPhase = 0;
         state.lastTransitionReason = "user pause from " + from;
         TravelLog.get().recordTransition(missionId(), state.missionTicks, from, TravelPhase.PAUSED, state.lastTransitionReason);
+        publishTravelEvent(from, TravelPhase.PAUSED, state.lastTransitionReason);
     }
 
     public synchronized void resume() {
@@ -381,32 +395,19 @@ public final class TravelManager {
     }
 
     private void tickBouncing() {
-        // Repair the elytra before continuing.
-        /*? if >=26.1 {*//*
-        Minecraft mc = Minecraft.getInstance();
-        *//*?} else {*/
-        MinecraftClient mc = MinecraftClient.getInstance();
-        /*?}*/
-        if (mc.player != null && ElytraManager.needsResupply(mc)) {
-            startElytraResupply();
-            return;
-        }
-        if (mc.player != null && plannedFlightDestination() != null
-                && ElytraManager.needsFireworksRestock(mc)) {
-            startFireworkRestock();
-            return;
-        }
+        if (startElytraResupplyIfNeeded()) return;
 
-        // Handle falls before planning ground detours.
-        if (bounce.isStuck()) {
-            // Replan instead of launching inside a tunnel.
-            abort(bounce.isStuckFromFall() ? "bounce: fell off highway, gliding to safety"
-                                           : "bounce stuck");
+        boolean stalled = bounce.isStuck() && !bounce.isStuckFromFall();
+        if (bounce.isStuckFromFall()) {
+            abort("bounce: fell off highway, gliding to safety");
             return;
         }
 
         // Detour around damaged highway sections.
-        IntegrityReport rep = verifier.lastReport();
+        BlockPos playerPos = currentPlayerPos();
+        IntegrityReport rep = stalled
+                ? verifier.sampleNow(playerPos)
+                : verifier.lastReport();
         if (rep.status() == IntegrityReport.Status.GRIEFED
                 && rep.confidence() >= DetourPlanner.MIN_CONFIDENCE) {
             if (state.mission == null || !state.mission.allowDetour) {
@@ -438,6 +439,15 @@ public final class TravelManager {
                 return;
             }
             triggerKnockbackRecovery();
+            return;
+        }
+        if (stalled) {
+            if (state.mission == null || !state.mission.allowDetour) {
+                abort("bounce stalled and detours disabled");
+                return;
+            }
+            LOGGER.warn("[Travel] bounce stalled with {}; handing off to Baritone bypass", rep);
+            triggerForwardBypass("bounce stall bypass", STALL_BYPASS_DISTANCE);
             return;
         }
         if (bounce.isArrived()) { advanceLeg("bounce arrived"); }
@@ -478,13 +488,24 @@ public final class TravelManager {
         transition(TravelPhase.ELYTRA_RESUPPLY, "elytra durability critical");
     }
 
+    private boolean startElytraResupplyIfNeeded() {
+        /*? if >=26.1 {*//*
+        Minecraft mc = Minecraft.getInstance();
+        *//*?} else {*/
+        MinecraftClient mc = MinecraftClient.getInstance();
+        /*?}*/
+        if (mc.player == null || !ElytraManager.needsResupply(mc)) return false;
+        startElytraResupply();
+        return true;
+    }
+
     private void startFireworkRestock() {
         LOGGER.warn("[Travel] fireworks low — entering ELYTRA_RESUPPLY");
         rememberResupplyResumeContext();
         rememberCurrentBounceExit();
         releaseOwner(state.owner);
         state.owner = MovementOwner.NONE;
-        elytra.startFireworkRestock();
+        elytra.startFireworkRestockForTravel();
         transition(TravelPhase.ELYTRA_RESUPPLY, "fireworks low");
     }
 
@@ -505,7 +526,8 @@ public final class TravelManager {
 
         releaseOwner(state.owner);
         acquireOwner(MovementOwner.BARITONE);
-        bridge.walkToWaypoints(waypoints, 3);
+        beginDetourTracking(pos, waypoints.get(0), DETOUR_WAYPOINT_RADIUS);
+        bridge.walkToWaypoints(waypoints, DETOUR_WAYPOINT_RADIUS);
         transition(TravelPhase.DETOURING,
                 "detour planned: " + waypoints.size() + " waypoints, griefRange=["
                 + rep.griefStartOffset() + "," + rep.griefEndOffset() + "]");
@@ -513,18 +535,27 @@ public final class TravelManager {
 
     // Resume bounce when Baritone finishes the detour.
     private void tickDetouring() {
-        // Replan after falling below the highway.
-        if (state.route != null && state.route.primary != null) {
+        // Ignore correction displacement while Baritone initializes.
+        if (state.ticksInPhase >= DETOUR_FALL_GRACE_TICKS
+                && SetbackMonitor.get().isCalm()
+                && detourMinSafeY != Integer.MIN_VALUE) {
             BlockPos pos = currentPlayerPos();
-            if (pos != null && pos.getY() < state.route.primary.floorY - 2) {
-                abort("detouring fall — player below highway (y=" + pos.getY() + ")");
+            if (pos != null && pos.getY() < detourMinSafeY) {
+                abort("detouring fall — player below safe Y " + detourMinSafeY
+                        + " (y=" + pos.getY() + ")");
                 return;
             }
         }
-        // Follow Baritone if it starts elytra flight.
+        // Keep detours on the active bounce leg.
         if (bridge.isElytraOwning()) {
-            LOGGER.info("[Travel] DETOURING: Baritone switched to elytra — upgrading to ELYTRA_CRUISE");
-            transition(TravelPhase.ELYTRA_CRUISE, "Baritone elytra took over during ground detour");
+            BlockPos target = bridge.currentTarget();
+            LOGGER.warn("[Travel] DETOURING: rejecting unexpected Baritone elytra ownership");
+            bridge.stopElytra();
+            if (target == null) {
+                abort("detour lost its ground target");
+                return;
+            }
+            bridge.walkNear(target, DETOUR_WAYPOINT_RADIUS);
             return;
         }
         if (bridge.isArrived()) {
@@ -733,9 +764,12 @@ public final class TravelManager {
         *//*?} else {*/
         MinecraftClient mc = MinecraftClient.getInstance();
         /*?}*/
-        if (!isPlayerGliding() && mc.player != null && ElytraManager.needsFireworksRestock(mc)) {
-            startFireworkRestock();
-            return;
+        if (!isPlayerGliding() && mc.player != null) {
+            if (startElytraResupplyIfNeeded()) return;
+            if (ElytraManager.needsFireworksRestock(mc)) {
+                startFireworkRestock();
+                return;
+            }
         }
         if (flight.isCruising() && isPlayerGliding()) {
             LOGGER.info("[Travel] LAUNCH -> ELYTRA_FALLBACK (manual flight entered cruise)");
@@ -775,6 +809,7 @@ public final class TravelManager {
 
     // Restore Baritone flight ownership when lost.
     private void tickElytraCruise() {
+        if (startElytraResupplyIfNeeded()) return;
         if (bridge.isElytraArrived()) {
             advanceLeg("elytra cruise arrived");
             return;
@@ -798,6 +833,7 @@ public final class TravelManager {
 
     // Fly manually when Baritone cannot claim elytra movement.
     private void tickElytraFallback() {
+        if (startElytraResupplyIfNeeded()) return;
         if (bridge.isElytraOwning()) {
             LOGGER.info("[Travel] ELYTRA_FALLBACK -> ELYTRA_CRUISE (Baritone took over mid-flight)");
             acquireOwner(MovementOwner.BARITONE);
@@ -993,7 +1029,8 @@ public final class TravelManager {
                     highway.axis, highway.category, floorY,
                     withY(highway.entry, floorY), withY(highway.exit, floorY), highway.confidence,
                     highway.ringOrDiamondDist, highway.ringSide, highway.diamondSegment,
-                    highway.width, highway.hasLeftRail, highway.hasRightRail);
+                    highway.width, highway.hasLeftRail, highway.hasRightRail,
+                    highway.unpavedTunnel);
             List<HighwayRoute.Leg> legs = new ArrayList<>(state.route.legs);
             legs.set(i, new HighwayRoute.BounceLeg(
                     aligned, withY(bounceLeg.exitColumn(), floorY),
@@ -1113,25 +1150,31 @@ public final class TravelManager {
     }
 
     private static final int WALL_BYPASS_DISTANCE      = 12; // blocks to walk past a wall
+    private static final int STALL_BYPASS_DISTANCE     = 24;
     private static final int KNOCKBACK_PERP_THRESHOLD  =  5; // off-axis blocks before recovery
     private static final int KNOCKBACK_RECOVERY_LEAD   =  8; // stay moving toward the exit after re-entry
 
     private void triggerWallBypass() {
+        triggerForwardBypass("wall bypass", WALL_BYPASS_DISTANCE);
+    }
+
+    private void triggerForwardBypass(String reason, int distance) {
         BlockPos pos = currentPlayerPos();
         HighwayRoute.BounceLeg bounceLeg = currentBounceLeg();
         if (pos == null || bounceLeg == null) {
-            abort("no player pos for wall bypass");
+            abort("no player pos for " + reason);
             return;
         }
         rememberCurrentBounceExit();
         BlockPos goal = new BlockPos(
-                pos.getX() + bounceLeg.travelDx() * WALL_BYPASS_DISTANCE,
+                pos.getX() + bounceLeg.travelDx() * distance,
                 pos.getY(),
-                pos.getZ() + bounceLeg.travelDz() * WALL_BYPASS_DISTANCE);
+                pos.getZ() + bounceLeg.travelDz() * distance);
         releaseOwner(state.owner);
         acquireOwner(MovementOwner.BARITONE);
+        beginDetourTracking(pos, goal, 2);
         bridge.walkNear(goal, 2);
-        transition(TravelPhase.DETOURING, "wall bypass: goal=" + goal.toShortString());
+        transition(TravelPhase.DETOURING, reason + ": goal=" + goal.toShortString());
     }
 
     // Detect displacement beyond the highway lane.
@@ -1167,7 +1210,8 @@ public final class TravelManager {
                 LOGGER.warn("[Travel] knocked off highway near grief — recovering via {} detour waypoints", waypoints.size());
                 releaseOwner(state.owner);
                 acquireOwner(MovementOwner.BARITONE);
-                bridge.walkToWaypoints(waypoints, 3);
+                beginDetourTracking(pos, waypoints.get(0), DETOUR_WAYPOINT_RADIUS);
+                bridge.walkToWaypoints(waypoints, DETOUR_WAYPOINT_RADIUS);
                 transition(TravelPhase.DETOURING,
                         "knockback recovery detour: griefRange=["
                                 + rep.griefStartOffset() + "," + rep.griefEndOffset() + "]");
@@ -1184,8 +1228,16 @@ public final class TravelManager {
         LOGGER.warn("[Travel] knocked off highway — recovering forward to {}", onHighway.toShortString());
         releaseOwner(state.owner);
         acquireOwner(MovementOwner.BARITONE);
+        beginDetourTracking(pos, onHighway, 2);
         bridge.walkNear(onHighway, 2);
         transition(TravelPhase.DETOURING, "knockback recovery to " + onHighway.toShortString());
+    }
+
+    private void beginDetourTracking(BlockPos start, BlockPos firstTarget, int radius) {
+        int anchorY = Math.min(start.getY(), firstTarget.getY());
+        detourMinSafeY = anchorY - DETOUR_FALL_TOLERANCE;
+        LOGGER.info("[Travel] detour handoff start={} first={} radius={} minSafeY={}",
+                start.toShortString(), firstTarget.toShortString(), radius, detourMinSafeY);
     }
 
     private void abort(String reason) {
@@ -1211,11 +1263,15 @@ public final class TravelManager {
     private void transition(TravelPhase next, String reason) {
         TravelPhase from = state.phase;
         if (from == next) return;
+        if (from == TravelPhase.DETOURING && next != TravelPhase.DETOURING) {
+            detourMinSafeY = Integer.MIN_VALUE;
+        }
         state.phase = next;
         state.ticksInPhase = 0;
         state.lastTransitionReason = reason;
         TravelLog.get().recordTransition(missionId(), state.missionTicks, from, next, reason);
         LOGGER.info("[Travel] {} -> {} ({})", from, next, reason);
+        publishTravelEvent(from, next, reason);
         if (next.isTerminal()) {
             releaseOwner(state.owner);
             state.owner = MovementOwner.NONE;
@@ -1235,7 +1291,66 @@ public final class TravelManager {
         state.ticksInPhase = 0;
         state.lastTransitionReason = "auto pause: left nether during travel";
         TravelLog.get().recordTransition(missionId(), state.missionTicks, from, TravelPhase.PAUSED, state.lastTransitionReason);
+        publishTravelEvent(from, TravelPhase.PAUSED, state.lastTransitionReason);
         ChatHelper.labelled("Travel", "§eTravel paused — left the Nether. Return to the Nether and use §f/moar travel resume§e.");
+    }
+
+    private void publishTravelEvent(TravelPhase from, TravelPhase to, String reason) {
+        if (to == TravelPhase.IDLE || from.isTerminal()) return;
+
+        MoarProperties properties = MoarMod.getProperties();
+        WebhookEvent.Type type = to == TravelPhase.ARRIVED
+                ? WebhookEvent.Type.DESTINATION_REACHED
+                : to == TravelPhase.ABORTED
+                        ? WebhookEvent.Type.TRAVEL_ABORTED
+                        : WebhookEvent.Type.NAVIGATION_CHANGED;
+        if (properties == null
+                || !properties.isWebhookEnabled()
+                || !properties.hasWebhookUrl()
+                || !properties.isWebhookEventEnabled(type)) {
+            return;
+        }
+
+        boolean detailed = properties.isWebhookIncludeCoordinates();
+        Map<String, String> fields = new LinkedHashMap<>();
+        fields.put("From", from.name());
+        fields.put("To", to.name());
+        if (detailed) {
+            if (reason != null && !reason.isBlank()) fields.put("Reason", reason);
+            BlockPos position = currentPlayerPos();
+            if (position != null) fields.put("Position", position.toShortString());
+            if (state.mission != null) {
+                fields.put("Destination", state.mission.destination.toShortString());
+                fields.put("Mission", String.valueOf(state.mission.id));
+            }
+        }
+
+        if (to == TravelPhase.ARRIVED) {
+            WebhookService.get().publish(WebhookEvent.of(
+                    type,
+                    "Destination reached",
+                    "MOAR completed the active travel mission.",
+                    WebhookEvent.Severity.SUCCESS,
+                    fields));
+            return;
+        }
+        if (to == TravelPhase.ABORTED) {
+            WebhookService.get().publish(WebhookEvent.of(
+                    type,
+                    "Travel aborted",
+                    detailed && reason != null ? reason : "MOAR stopped before reaching the destination.",
+                    WebhookEvent.Severity.ERROR,
+                    fields));
+            return;
+        }
+        WebhookService.get().publish(WebhookEvent.of(
+                type,
+                "Navigation changed",
+                "Travel moved from " + from.name() + " to " + to.name() + ".",
+                to == TravelPhase.PAUSED
+                        ? WebhookEvent.Severity.WARNING
+                        : WebhookEvent.Severity.INFO,
+                fields));
     }
 
     private HighwayRoute.BounceLeg currentBounceLeg() {

@@ -83,6 +83,7 @@ public final class HighwayCandidate {
     public final int width;
     public final boolean hasLeftRail;
     public final boolean hasRightRail;
+    public final boolean unpavedTunnel;
 
     // ── Constructors ──────────────────────────────────────────────
     public HighwayCandidate(Axis axis, Category category, int floorY,
@@ -90,6 +91,17 @@ public final class HighwayCandidate {
                             double ringOrDiamondDist, RingSide ringSide,
                             DiamondSegment diamondSegment, int width,
                             boolean hasLeftRail, boolean hasRightRail) {
+        this(axis, category, floorY, entry, exit, confidence,
+                ringOrDiamondDist, ringSide, diamondSegment, width,
+                hasLeftRail, hasRightRail, false);
+    }
+
+    public HighwayCandidate(Axis axis, Category category, int floorY,
+                            BlockPos entry, BlockPos exit, float confidence,
+                            double ringOrDiamondDist, RingSide ringSide,
+                            DiamondSegment diamondSegment, int width,
+                            boolean hasLeftRail, boolean hasRightRail,
+                            boolean unpavedTunnel) {
         this.axis = axis;
         this.category = category;
         this.floorY = floorY;
@@ -102,6 +114,7 @@ public final class HighwayCandidate {
         this.width = width;
         this.hasLeftRail = hasLeftRail;
         this.hasRightRail = hasRightRail;
+        this.unpavedTunnel = unpavedTunnel;
     }
 
     // Create a candidate without ring, diamond, or scan metadata.
@@ -119,6 +132,7 @@ public final class HighwayCandidate {
             base += ", ring=" + (int) ringOrDiamondDist + " side=" + ringSide;
         else if (category == Category.DIAMOND)
             base += ", diamond=" + (int) ringOrDiamondDist + " seg=" + diamondSegment;
+        if (unpavedTunnel) base += ", surface=TUNNEL width=" + width;
         return base + ", entry=" + entry.toShortString()
                 + ", exit=" + exit.toShortString() + "}";
     }

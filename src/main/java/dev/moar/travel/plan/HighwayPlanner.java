@@ -270,7 +270,9 @@ public final class HighwayPlanner {
                 best.ringOrDiamondDist, best.ringSide, best.diamondSegment,
                 scan.map(HighwayDetectorBridge.ScanResult::width).orElse(0),
                 scan.map(HighwayDetectorBridge.ScanResult::hasLeftRail).orElse(false),
-                scan.map(HighwayDetectorBridge.ScanResult::hasRightRail).orElse(false));
+                scan.map(HighwayDetectorBridge.ScanResult::hasRightRail).orElse(false),
+                scan.map(result -> result.surface() == HighwayDetectorBridge.Surface.TUNNEL)
+                        .orElse(false));
 
         int[] travelDir = travelDirection(best, point(primary.entry), point(primary.exit));
         double originToOnRamp = HighwayGeometry.horizontalDistance(
@@ -284,7 +286,8 @@ public final class HighwayPlanner {
             primary = new HighwayCandidate(
                     primary.axis, primary.category, primary.floorY, directionalEntry, primary.exit, primary.confidence,
                     primary.ringOrDiamondDist, primary.ringSide, primary.diamondSegment,
-                    primary.width, primary.hasLeftRail, primary.hasRightRail);
+                    primary.width, primary.hasLeftRail, primary.hasRightRail,
+                    primary.unpavedTunnel);
         }
 
         List<HighwayRoute.Leg> legs = new ArrayList<>();
@@ -539,6 +542,7 @@ public final class HighwayPlanner {
             if (scan.isEmpty()) continue;
             HighwayDetectorBridge.ScanResult result = scan.get();
             float score = result.blockConfidence();
+            if (result.surface() == HighwayDetectorBridge.Surface.PAVED) score += 0.25f;
             if (result.hasLeftRail()) score += 0.15f;
             if (result.hasRightRail()) score += 0.15f;
             score += Math.min(0.2f, result.width() * 0.03f);
@@ -546,6 +550,11 @@ public final class HighwayPlanner {
                 bestScore = score;
                 best = new OriginHighway(axis, result);
             }
+        }
+        if (best != null && best.scan().surface() == HighwayDetectorBridge.Surface.TUNNEL) {
+            LOGGER.info("[Travel] detected unpaved tunnel highway axis={} floorY={} width={} conf={}",
+                    best.axis(), best.scan().floorY(), best.scan().width(),
+                    String.format("%.2f", best.scan().blockConfidence()));
         }
         return best;
     }

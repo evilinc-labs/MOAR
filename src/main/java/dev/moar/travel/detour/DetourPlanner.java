@@ -13,6 +13,7 @@ import net.minecraft.util.math.BlockPos;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
+import java.util.Optional;
 
 // Plan a short detour around grief.
 public final class DetourPlanner {
@@ -40,8 +41,14 @@ public final class DetourPlanner {
         if (report.griefEndOffset() < 0)                           return Collections.emptyList();
         if (travelDx == 0 && travelDz == 0)                         return Collections.emptyList();
 
-        int floorY  = highway.floorY;
+        HighwayDetectorBridge bridge = HighwayDetectorBridge.get();
+        Optional<HighwayDetectorBridge.ScanResult> localScan =
+                bridge.scanAt(playerPos, highway.axis);
+        int floorY = localScan
+                .map(HighwayDetectorBridge.ScanResult::floorY)
+                .orElse(highway.floorY);
         if (floorY == Integer.MIN_VALUE) return Collections.emptyList();
+        int waypointY = floorY + 1;
 
         int stepDx  = travelDx;
         int stepDz  = travelDz;
@@ -53,8 +60,12 @@ public final class DetourPlanner {
 
         // Snap player position to highway center line before computing waypoints.
         // Prevents WP1 landing in the guardrail when the player has drifted off-center.
-        int ex     = highway.entry.getX();
-        int ez     = highway.entry.getZ();
+        int ex = localScan
+                .map(HighwayDetectorBridge.ScanResult::centerX)
+                .orElse(highway.entry.getX());
+        int ez = localScan
+                .map(HighwayDetectorBridge.ScanResult::centerZ)
+                .orElse(highway.entry.getZ());
         int perpSq = perpDx * perpDx + perpDz * perpDz; // 1 for cardinal, 2 for diagonal
         int dp     = (px - ex) * perpDx + (pz - ez) * perpDz;
         px -= perpDx * dp / perpSq;
@@ -66,7 +77,6 @@ public final class DetourPlanner {
         // Try the "natural" side first, then the opposite side if that one
         // hangs over exposed lava — nether highways are commonly built as
         // causeways, and stepping off to the side has no guaranteed floor.
-        HighwayDetectorBridge bridge = HighwayDetectorBridge.get();
         int side = 1;
         if (isSideUnsafe(bridge, px, pz, floorY, perpDx, perpDz, stepDx, stepDz, clearDepth, side)) {
             side = -1;
@@ -79,19 +89,19 @@ public final class DetourPlanner {
         // ── WP 1: slide perpendicular off the highway ─────────────
         BlockPos wp1 = new BlockPos(
                 px + perpDx * SIDE_OFFSET * side,
-                floorY,
+                waypointY,
                 pz + perpDz * SIDE_OFFSET * side);
 
         // ── WP 2: forward past grief at the side offset ───────────
         BlockPos wp2 = new BlockPos(
                 px + stepDx * clearDepth + perpDx * SIDE_OFFSET * side,
-                floorY,
+                waypointY,
                 pz + stepDz * clearDepth + perpDz * SIDE_OFFSET * side);
 
         // ── WP 3: return to highway ───────────────────────────────
         BlockPos wp3 = new BlockPos(
                 px + stepDx * clearDepth,
-                floorY,
+                waypointY,
                 pz + stepDz * clearDepth);
 
         List<BlockPos> waypoints = new ArrayList<>(3);

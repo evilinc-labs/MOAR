@@ -42,6 +42,7 @@ public final class ApiServer implements AutoCloseable {
             server.createContext("/api/v1/stats", h::handleStats);
             server.createContext("/api/v1/metrics", h::handleMetrics);
             server.createContext("/api/v1/organizer", h::handleOrganizer);
+            server.createContext("/api/v1/webhook/status", h::handleWebhookStatus);
             server.createContext("/api/v1/webhook/test", h::handleWebhookTest);
 
             server.start();

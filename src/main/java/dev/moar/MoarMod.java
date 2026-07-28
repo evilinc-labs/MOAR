@@ -2,6 +2,7 @@ package dev.moar;
 
 import dev.moar.api.ApiServer;
 import dev.moar.api.MoarProperties;
+import dev.moar.api.WebhookService;
 import dev.moar.world.SetbackMonitor;
 import dev.moar.world.VelocityMonitor;
 import dev.moar.chest.ChestManager;
@@ -137,6 +138,7 @@ public class MoarMod implements ClientModInitializer {
 
         // Load properties and start API server if enabled
         PROPERTIES = MoarProperties.load();
+        WebhookService.get().configure(PROPERTIES);
         API_SERVER = new ApiServer(PROPERTIES);
         API_SERVER.start();
 
@@ -267,6 +269,10 @@ public class MoarMod implements ClientModInitializer {
     // Get the loaded API/webhook properties.
     public static MoarProperties getProperties() {
         return PROPERTIES;
+    }
+
+    public static WebhookService getWebhookService() {
+        return WebhookService.get();
     }
 
     // Get the embedded API server.

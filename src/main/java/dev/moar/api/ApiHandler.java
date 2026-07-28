@@ -255,6 +255,25 @@ public final class ApiHandler {
         sendJson(ex, 200, sb);
     }
 
+    // --- GET /api/v1/webhook/status ---
+
+    public void handleWebhookStatus(HttpExchange ex) throws IOException {
+        if (!checkAuth(ex)) return;
+        if (!checkGet(ex)) return;
+
+        WebhookService.Status status = WebhookService.get().status();
+        StringBuilder sb = jsonObject();
+        jsonField(sb, "enabled", status.enabled());
+        jsonField(sb, "configured", status.configured());
+        jsonField(sb, "format", status.discord() ? "discord" : "generic");
+        jsonField(sb, "queued", status.queued());
+        jsonField(sb, "delivered", status.delivered());
+        jsonField(sb, "failed", status.failed());
+        jsonField(sb, "dropped", status.dropped());
+        jsonClose(sb);
+        sendJson(ex, 200, sb);
+    }
+
     // --- POST /api/v1/webhook/test ---
 
     public void handleWebhookTest(HttpExchange ex) throws IOException {
@@ -264,48 +283,15 @@ public final class ApiHandler {
             return;
         }
 
+        boolean queued = WebhookService.get().sendTest();
         StringBuilder sb = jsonObject();
-        jsonField(sb, "status", "ok");
-        jsonField(sb, "message", "Webhook connectivity confirmed");
-        jsonField(sb, "timestamp", System.currentTimeMillis());
-        jsonField(sb, "scanner_state", stash().getState().name());
+        jsonField(sb, "status", queued ? "queued" : "not_configured");
+        jsonField(sb, "queued", queued);
+        jsonField(sb, "message", queued
+                ? "Webhook test queued for delivery"
+                : "Configure a webhook URL before testing");
         jsonClose(sb);
-        sendJson(ex, 200, sb);
-    }
-
-    // --- Webhook dispatch (called externally after scan completes) ---
-
-    public static void fireScanComplete(MoarProperties config, StashManager stash) {
-        String url = config.getWebhookUrl();
-        if (url == null || url.isBlank()) return;
-
-        StringBuilder sb = jsonObject();
-        jsonField(sb, "event", "scan_complete");
-        jsonField(sb, "containers_found", stash.getTotalFound());
-        jsonField(sb, "containers_indexed", stash.getTotalIndexed());
-        jsonField(sb, "containers_failed", stash.getTotalSkipped());
-        jsonField(sb, "timestamp", System.currentTimeMillis());
-        jsonClose(sb);
-
-        // Fire-and-forget POST on a daemon thread
-        String body = sb.toString();
-        Thread.ofVirtual().name("moar-webhook").start(() -> {
-            try {
-                var conn = (java.net.HttpURLConnection) new java.net.URI(url).toURL().openConnection();
-                conn.setRequestMethod("POST");
-                conn.setDoOutput(true);
-                conn.setConnectTimeout(10_000);
-                conn.setReadTimeout(10_000);
-                conn.setRequestProperty("Content-Type", "application/json");
-                try (var out = conn.getOutputStream()) {
-                    out.write(body.getBytes(StandardCharsets.UTF_8));
-                }
-                conn.getResponseCode(); // consume response
-                conn.disconnect();
-            } catch (Exception e) {
-                MoarMod.LOGGER.warn("Webhook POST failed: {}", e.getMessage());
-            }
-        });
+        sendJson(ex, queued ? 202 : 409, sb);
     }
 
     // --- Auth ---

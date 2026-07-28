@@ -296,7 +296,7 @@ How do I...
 <details>
 <summary><strong>API & Monitoring</strong></summary>
 
-MOAR includes an embedded HTTP API for Grafana dashboards, Prometheus scraping, and n8n webhook integrations. All settings live in `config/moar/moar.properties` (auto-created on first launch).
+MOAR includes an embedded HTTP API for Grafana dashboards, Prometheus scraping, Discord notifications, and generic webhook integrations. Configure it from `/moar gui` or `config/moar/moar.properties`.
 
 ```properties
 # Enable the embedded API server
@@ -307,9 +307,21 @@ api.bind=127.0.0.1
 api.port=8585
 # Bearer token for auth (leave blank to disable auth)
 api.key=
-# POST JSON to this URL on scan completion (n8n, etc.)
+# Serialize selected events to this URL
+webhook.enabled=false
 webhook.url=
+# Use Discord embeds instead of generic JSON
+webhook.discord=false
+webhook.event.navigation=true
+webhook.event.disconnect=true
+webhook.event.arrival=true
+webhook.event.abort=true
+webhook.event.scan=true
+# Keep coordinates private unless explicitly enabled
+webhook.include_coordinates=false
 ```
+
+Webhook delivery uses one bounded background dispatcher, never logs the webhook URL, and disables Discord mentions. Treat the URL as a secret.
 
 | Endpoint | Method | Description |
 |----------|--------|-------------|
@@ -319,7 +331,8 @@ webhook.url=
 | `/api/v1/stats` | GET | Aggregate statistics (JSON) |
 | `/api/v1/metrics` | GET | Prometheus-format metrics |
 | `/api/v1/organizer` | GET | Organizer state and progress |
-| `/api/v1/webhook/test` | POST | Webhook connectivity test |
+| `/api/v1/webhook/status` | GET | Webhook configuration and delivery counters |
+| `/api/v1/webhook/test` | POST | Queue a webhook connectivity test |
 
 All endpoints accept `Authorization: Bearer <api.key>` when `api.key` is set. See [docs/grafana-setup.md](docs/grafana-setup.md) for a step-by-step Prometheus + Grafana guide via Docker Compose.
 
