@@ -79,6 +79,26 @@ public final class HighwayDetectorBridge {
         return CellStatus.GRIEFED;
     }
 
+    // Accept any traversable lane inside the scanned tunnel width.
+    public CellStatus checkTunnelCorridor(int bx, int floorY, int bz,
+                                          HighwayCandidate.Axis axis, int width) {
+        int laneWidth = Math.max(1, Math.min(9, width));
+        int left = (laneWidth - 1) / 2;
+        int right = laneWidth / 2;
+        boolean unloaded = false;
+        for (int offset = -left; offset <= right; offset++) {
+            int laneX = bx + axis.perpDx() * offset;
+            int laneZ = bz + axis.perpDz() * offset;
+            BlockPos pos = new BlockPos(laneX, floorY, laneZ);
+            if (!isChunkLoaded(pos)) {
+                unloaded = true;
+                continue;
+            }
+            if (isTunnelPassage(laneX, floorY, laneZ)) return CellStatus.OK;
+        }
+        return unloaded ? CellStatus.UNLOADED : CellStatus.GRIEFED;
+    }
+
     // Try to confirm a highway near the player's current Y.
     public Optional<ScanResult> scanAt(BlockPos playerPos, HighwayCandidate.Axis axis) {
         for (int yOff = -4; yOff <= 4; yOff++) {

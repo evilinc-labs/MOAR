@@ -22,16 +22,24 @@ public final class MoarProperties {
             .resolve("moar.properties");
 
     // API server
-    private boolean apiEnabled;
-    private String apiBindAddress;
-    private int apiPort;
-    private String apiKey;
+    private volatile boolean apiEnabled;
+    private volatile String apiBindAddress;
+    private volatile int apiPort;
+    private volatile String apiKey;
 
-    // Webhook (n8n, etc.)
-    private String webhookUrl;
+    // Outbound webhooks
+    private volatile boolean webhookEnabled;
+    private volatile String webhookUrl;
+    private volatile boolean webhookDiscord;
+    private volatile boolean webhookNavigation;
+    private volatile boolean webhookDisconnect;
+    private volatile boolean webhookArrival;
+    private volatile boolean webhookAbort;
+    private volatile boolean webhookScan;
+    private volatile boolean webhookIncludeCoordinates;
 
     // Elytra resupply
-    private int elytraResupplyCount;
+    private volatile int elytraResupplyCount;
 
     private MoarProperties() {}
 
@@ -41,6 +49,7 @@ public final class MoarProperties {
     private static final int API_PORT = 8585;
     private static final String API_KEY = "";
     private static final String WEBHOOK_URL = "";
+    private static final boolean WEBHOOK_DISCORD = false;
     private static final int ELYTRA_RESUPPLY_COUNT = 1;
 
     public static MoarProperties load() {
@@ -61,7 +70,17 @@ public final class MoarProperties {
         cfg.apiPort = parsePort(props.getProperty("api.port",
                 String.valueOf(API_PORT)));
         cfg.apiKey = props.getProperty("api.key", API_KEY);
-        cfg.webhookUrl = props.getProperty("webhook.url", WEBHOOK_URL);
+        cfg.webhookUrl = props.getProperty("webhook.url", WEBHOOK_URL).trim();
+        cfg.webhookEnabled = Boolean.parseBoolean(props.getProperty("webhook.enabled",
+                String.valueOf(!cfg.webhookUrl.isBlank())));
+        cfg.webhookDiscord = booleanProperty(props, "webhook.discord", WEBHOOK_DISCORD);
+        cfg.webhookNavigation = booleanProperty(props, "webhook.event.navigation", true);
+        cfg.webhookDisconnect = booleanProperty(props, "webhook.event.disconnect", true);
+        cfg.webhookArrival = booleanProperty(props, "webhook.event.arrival", true);
+        cfg.webhookAbort = booleanProperty(props, "webhook.event.abort", true);
+        cfg.webhookScan = booleanProperty(props, "webhook.event.scan", true);
+        cfg.webhookIncludeCoordinates = booleanProperty(
+                props, "webhook.include_coordinates", false);
         try {
             int v = Integer.parseInt(props.getProperty("elytra.resupply.count",
                     String.valueOf(ELYTRA_RESUPPLY_COUNT)));
@@ -79,7 +98,7 @@ public final class MoarProperties {
         return cfg;
     }
 
-    public void save() {
+    public synchronized void save() {
         try {
             Files.createDirectories(FILE.getParent());
             Properties props = new Properties();
@@ -87,7 +106,16 @@ public final class MoarProperties {
             props.setProperty("api.bind", apiBindAddress);
             props.setProperty("api.port", String.valueOf(apiPort));
             props.setProperty("api.key", apiKey);
+            props.setProperty("webhook.enabled", String.valueOf(webhookEnabled));
             props.setProperty("webhook.url", webhookUrl);
+            props.setProperty("webhook.discord", String.valueOf(webhookDiscord));
+            props.setProperty("webhook.event.navigation", String.valueOf(webhookNavigation));
+            props.setProperty("webhook.event.disconnect", String.valueOf(webhookDisconnect));
+            props.setProperty("webhook.event.arrival", String.valueOf(webhookArrival));
+            props.setProperty("webhook.event.abort", String.valueOf(webhookAbort));
+            props.setProperty("webhook.event.scan", String.valueOf(webhookScan));
+            props.setProperty("webhook.include_coordinates",
+                    String.valueOf(webhookIncludeCoordinates));
             props.setProperty("elytra.resupply.count", String.valueOf(elytraResupplyCount));
 
             try (OutputStream out = Files.newOutputStream(FILE)) {
@@ -104,8 +132,28 @@ public final class MoarProperties {
     public String getApiBindAddress() { return apiBindAddress; }
     public int getApiPort()          { return apiPort; }
     public String getApiKey()        { return apiKey; }
+    public boolean isWebhookEnabled() { return webhookEnabled; }
     public String getWebhookUrl()    { return webhookUrl; }
+    public boolean isWebhookDiscord() { return webhookDiscord; }
+    public boolean isWebhookNavigation() { return webhookNavigation; }
+    public boolean isWebhookDisconnect() { return webhookDisconnect; }
+    public boolean isWebhookArrival() { return webhookArrival; }
+    public boolean isWebhookAbort() { return webhookAbort; }
+    public boolean isWebhookScan() { return webhookScan; }
+    public boolean isWebhookIncludeCoordinates() { return webhookIncludeCoordinates; }
     public int getElytraResupplyCount() { return elytraResupplyCount; }
+    public boolean hasWebhookUrl() { return webhookUrl != null && !webhookUrl.isBlank(); }
+
+    public boolean isWebhookEventEnabled(WebhookEvent.Type type) {
+        return switch (type) {
+            case NAVIGATION_CHANGED -> webhookNavigation;
+            case TRAVEL_DISCONNECT -> webhookDisconnect;
+            case DESTINATION_REACHED -> webhookArrival;
+            case TRAVEL_ABORTED -> webhookAbort;
+            case STASH_SCAN_COMPLETE -> webhookScan;
+            case TEST -> true;
+        };
+    }
 
     // Setters (mutate + persist)
 
@@ -113,8 +161,20 @@ public final class MoarProperties {
     public void setApiBindAddress(String v) { apiBindAddress = v; save(); }
     public void setApiPort(int v) { apiPort = v; save(); }
     public void setApiKey(String v) { apiKey = v; save(); }
-    public void setWebhookUrl(String v) { webhookUrl = v; save(); }
+    public void setWebhookEnabled(boolean v) { webhookEnabled = v; save(); }
+    public void setWebhookUrl(String v) { webhookUrl = v == null ? "" : v.trim(); save(); }
+    public void setWebhookDiscord(boolean v) { webhookDiscord = v; save(); }
+    public void setWebhookNavigation(boolean v) { webhookNavigation = v; save(); }
+    public void setWebhookDisconnect(boolean v) { webhookDisconnect = v; save(); }
+    public void setWebhookArrival(boolean v) { webhookArrival = v; save(); }
+    public void setWebhookAbort(boolean v) { webhookAbort = v; save(); }
+    public void setWebhookScan(boolean v) { webhookScan = v; save(); }
+    public void setWebhookIncludeCoordinates(boolean v) { webhookIncludeCoordinates = v; save(); }
     public void setElytraResupplyCount(int v) { elytraResupplyCount = Math.max(1, Math.min(27, v)); save(); }
+
+    private static boolean booleanProperty(Properties props, String key, boolean fallback) {
+        return Boolean.parseBoolean(props.getProperty(key, String.valueOf(fallback)));
+    }
 
     private static int parsePort(String s) {
         try {

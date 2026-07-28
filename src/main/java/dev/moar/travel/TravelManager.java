@@ -1,5 +1,9 @@
 package dev.moar.travel;
 
+import dev.moar.MoarMod;
+import dev.moar.api.MoarProperties;
+import dev.moar.api.WebhookEvent;
+import dev.moar.api.WebhookService;
 import dev.moar.travel.bounce.BounceController;
 import dev.moar.travel.bridge.TravelBaritoneBridge;
 import dev.moar.travel.detour.DetourPlanner;
@@ -36,7 +40,9 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 
 // Travel mission state machine; owns phase progression and movement handoffs.
@@ -181,6 +187,7 @@ public final class TravelManager {
         state.ticksInPhase = 0;
         state.lastTransitionReason = "user pause from " + from;
         TravelLog.get().recordTransition(missionId(), state.missionTicks, from, TravelPhase.PAUSED, state.lastTransitionReason);
+        publishTravelEvent(from, TravelPhase.PAUSED, state.lastTransitionReason);
     }
 
     public synchronized void resume() {
@@ -388,21 +395,7 @@ public final class TravelManager {
     }
 
     private void tickBouncing() {
-        // Repair the elytra before continuing.
-        /*? if >=26.1 {*//*
-        Minecraft mc = Minecraft.getInstance();
-        *//*?} else {*/
-        MinecraftClient mc = MinecraftClient.getInstance();
-        /*?}*/
-        if (mc.player != null && ElytraManager.needsResupply(mc)) {
-            startElytraResupply();
-            return;
-        }
-        if (mc.player != null && plannedFlightDestination() != null
-                && ElytraManager.needsFireworksRestock(mc)) {
-            startFireworkRestock();
-            return;
-        }
+        if (startElytraResupplyIfNeeded()) return;
 
         boolean stalled = bounce.isStuck() && !bounce.isStuckFromFall();
         if (bounce.isStuckFromFall()) {
@@ -495,13 +488,24 @@ public final class TravelManager {
         transition(TravelPhase.ELYTRA_RESUPPLY, "elytra durability critical");
     }
 
+    private boolean startElytraResupplyIfNeeded() {
+        /*? if >=26.1 {*//*
+        Minecraft mc = Minecraft.getInstance();
+        *//*?} else {*/
+        MinecraftClient mc = MinecraftClient.getInstance();
+        /*?}*/
+        if (mc.player == null || !ElytraManager.needsResupply(mc)) return false;
+        startElytraResupply();
+        return true;
+    }
+
     private void startFireworkRestock() {
         LOGGER.warn("[Travel] fireworks low — entering ELYTRA_RESUPPLY");
         rememberResupplyResumeContext();
         rememberCurrentBounceExit();
         releaseOwner(state.owner);
         state.owner = MovementOwner.NONE;
-        elytra.startFireworkRestock();
+        elytra.startFireworkRestockForTravel();
         transition(TravelPhase.ELYTRA_RESUPPLY, "fireworks low");
     }
 
@@ -542,10 +546,16 @@ public final class TravelManager {
                 return;
             }
         }
-        // Follow Baritone if it starts elytra flight.
+        // Keep detours on the active bounce leg.
         if (bridge.isElytraOwning()) {
-            LOGGER.info("[Travel] DETOURING: Baritone switched to elytra — upgrading to ELYTRA_CRUISE");
-            transition(TravelPhase.ELYTRA_CRUISE, "Baritone elytra took over during ground detour");
+            BlockPos target = bridge.currentTarget();
+            LOGGER.warn("[Travel] DETOURING: rejecting unexpected Baritone elytra ownership");
+            bridge.stopElytra();
+            if (target == null) {
+                abort("detour lost its ground target");
+                return;
+            }
+            bridge.walkNear(target, DETOUR_WAYPOINT_RADIUS);
             return;
         }
         if (bridge.isArrived()) {
@@ -754,9 +764,12 @@ public final class TravelManager {
         *//*?} else {*/
         MinecraftClient mc = MinecraftClient.getInstance();
         /*?}*/
-        if (!isPlayerGliding() && mc.player != null && ElytraManager.needsFireworksRestock(mc)) {
-            startFireworkRestock();
-            return;
+        if (!isPlayerGliding() && mc.player != null) {
+            if (startElytraResupplyIfNeeded()) return;
+            if (ElytraManager.needsFireworksRestock(mc)) {
+                startFireworkRestock();
+                return;
+            }
         }
         if (flight.isCruising() && isPlayerGliding()) {
             LOGGER.info("[Travel] LAUNCH -> ELYTRA_FALLBACK (manual flight entered cruise)");
@@ -796,6 +809,7 @@ public final class TravelManager {
 
     // Restore Baritone flight ownership when lost.
     private void tickElytraCruise() {
+        if (startElytraResupplyIfNeeded()) return;
         if (bridge.isElytraArrived()) {
             advanceLeg("elytra cruise arrived");
             return;
@@ -819,6 +833,7 @@ public final class TravelManager {
 
     // Fly manually when Baritone cannot claim elytra movement.
     private void tickElytraFallback() {
+        if (startElytraResupplyIfNeeded()) return;
         if (bridge.isElytraOwning()) {
             LOGGER.info("[Travel] ELYTRA_FALLBACK -> ELYTRA_CRUISE (Baritone took over mid-flight)");
             acquireOwner(MovementOwner.BARITONE);
@@ -1014,7 +1029,8 @@ public final class TravelManager {
                     highway.axis, highway.category, floorY,
                     withY(highway.entry, floorY), withY(highway.exit, floorY), highway.confidence,
                     highway.ringOrDiamondDist, highway.ringSide, highway.diamondSegment,
-                    highway.width, highway.hasLeftRail, highway.hasRightRail);
+                    highway.width, highway.hasLeftRail, highway.hasRightRail,
+                    highway.unpavedTunnel);
             List<HighwayRoute.Leg> legs = new ArrayList<>(state.route.legs);
             legs.set(i, new HighwayRoute.BounceLeg(
                     aligned, withY(bounceLeg.exitColumn(), floorY),
@@ -1255,6 +1271,7 @@ public final class TravelManager {
         state.lastTransitionReason = reason;
         TravelLog.get().recordTransition(missionId(), state.missionTicks, from, next, reason);
         LOGGER.info("[Travel] {} -> {} ({})", from, next, reason);
+        publishTravelEvent(from, next, reason);
         if (next.isTerminal()) {
             releaseOwner(state.owner);
             state.owner = MovementOwner.NONE;
@@ -1274,7 +1291,66 @@ public final class TravelManager {
         state.ticksInPhase = 0;
         state.lastTransitionReason = "auto pause: left nether during travel";
         TravelLog.get().recordTransition(missionId(), state.missionTicks, from, TravelPhase.PAUSED, state.lastTransitionReason);
+        publishTravelEvent(from, TravelPhase.PAUSED, state.lastTransitionReason);
         ChatHelper.labelled("Travel", "§eTravel paused — left the Nether. Return to the Nether and use §f/moar travel resume§e.");
+    }
+
+    private void publishTravelEvent(TravelPhase from, TravelPhase to, String reason) {
+        if (to == TravelPhase.IDLE || from.isTerminal()) return;
+
+        MoarProperties properties = MoarMod.getProperties();
+        WebhookEvent.Type type = to == TravelPhase.ARRIVED
+                ? WebhookEvent.Type.DESTINATION_REACHED
+                : to == TravelPhase.ABORTED
+                        ? WebhookEvent.Type.TRAVEL_ABORTED
+                        : WebhookEvent.Type.NAVIGATION_CHANGED;
+        if (properties == null
+                || !properties.isWebhookEnabled()
+                || !properties.hasWebhookUrl()
+                || !properties.isWebhookEventEnabled(type)) {
+            return;
+        }
+
+        boolean detailed = properties.isWebhookIncludeCoordinates();
+        Map<String, String> fields = new LinkedHashMap<>();
+        fields.put("From", from.name());
+        fields.put("To", to.name());
+        if (detailed) {
+            if (reason != null && !reason.isBlank()) fields.put("Reason", reason);
+            BlockPos position = currentPlayerPos();
+            if (position != null) fields.put("Position", position.toShortString());
+            if (state.mission != null) {
+                fields.put("Destination", state.mission.destination.toShortString());
+                fields.put("Mission", String.valueOf(state.mission.id));
+            }
+        }
+
+        if (to == TravelPhase.ARRIVED) {
+            WebhookService.get().publish(WebhookEvent.of(
+                    type,
+                    "Destination reached",
+                    "MOAR completed the active travel mission.",
+                    WebhookEvent.Severity.SUCCESS,
+                    fields));
+            return;
+        }
+        if (to == TravelPhase.ABORTED) {
+            WebhookService.get().publish(WebhookEvent.of(
+                    type,
+                    "Travel aborted",
+                    detailed && reason != null ? reason : "MOAR stopped before reaching the destination.",
+                    WebhookEvent.Severity.ERROR,
+                    fields));
+            return;
+        }
+        WebhookService.get().publish(WebhookEvent.of(
+                type,
+                "Navigation changed",
+                "Travel moved from " + from.name() + " to " + to.name() + ".",
+                to == TravelPhase.PAUSED
+                        ? WebhookEvent.Severity.WARNING
+                        : WebhookEvent.Severity.INFO,
+                fields));
     }
 
     private HighwayRoute.BounceLeg currentBounceLeg() {

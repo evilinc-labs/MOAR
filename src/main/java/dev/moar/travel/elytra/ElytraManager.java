@@ -1,5 +1,7 @@
 package dev.moar.travel.elytra;
 
+import dev.moar.api.WebhookEvent;
+import dev.moar.api.WebhookService;
 /*? if >=26.1 {*//*
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.player.LocalPlayer;
@@ -184,7 +186,7 @@ public final class ElytraManager {
     // State to transition to once the full shulker breakdown cycle finishes.
     // DONE for elytra resupply; MENDING when we placed a shulker to get XP bottles.
     private State postShulkerState = State.DONE;
-    // Disconnect on hard failure for life-critical elytra flows, but not for fireworks.
+    // Disconnect when the active flow cannot travel safely.
     private boolean disconnectOnFailure = true;
 
     // ──────────────────────────────────────────────────────────────
@@ -240,11 +242,20 @@ public final class ElytraManager {
     }
 
     public void startFireworkRestock() {
+        startFireworkRestock(false);
+    }
+
+    public void startFireworkRestockForTravel() {
+        startFireworkRestock(true);
+    }
+
+    private void startFireworkRestock(boolean disconnectOnFailure) {
         resetAll();
         fireworkMode = true;
-        disconnectOnFailure = false;
+        this.disconnectOnFailure = disconnectOnFailure;
         state = State.CHECKING;
-        LOGGER.info("[Elytra] firework restock started");
+        LOGGER.info("[Elytra] firework restock started (disconnectOnFailure={})",
+                disconnectOnFailure);
     }
 
     // Stop the playbook and release held state.
@@ -2103,10 +2114,10 @@ public final class ElytraManager {
     /*?}*/
         if (mc.player == null) return false;
         ItemStack chest = getChestStack(mc);
-        // Empty chest slot → elytra fully broke and disappeared
+        // Require a usable elytra in the chest slot.
         if (chest.isEmpty()) return true;
         String id = ItemIdentifier.getItemId(chest);
-        if (!id.equals("minecraft:elytra")) return false;
+        if (!id.equals("minecraft:elytra")) return true;
         return isElytraLow(chest);
     }
 
@@ -3023,6 +3034,12 @@ public final class ElytraManager {
                 : "§c[Elytra] " + reason + ".");
         state = State.FAILED;
         if (!disconnectOnFailure || mc.player == null) return;
+        WebhookService.get().publish(WebhookEvent.of(
+                WebhookEvent.Type.TRAVEL_DISCONNECT,
+                "Safety disconnect",
+                reason,
+                WebhookEvent.Severity.ERROR,
+                Map.of("Subsystem", "Elytra resupply")));
         /*? if >=26.1 {*//*
         mc.player.connection.getConnection().disconnect(
                 Component.literal(reason));

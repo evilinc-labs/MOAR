@@ -1,6 +1,8 @@
 package dev.moar.stash;
 
 import dev.moar.MoarMod;
+import dev.moar.api.WebhookEvent;
+import dev.moar.api.WebhookService;
 import dev.moar.chest.ChestManager;
 import dev.moar.util.ChatHelper;
 import dev.moar.util.ItemIdentifier;
@@ -940,11 +942,17 @@ public final class StashManager {
                 + "§7 types, §f" + totalShulkers + "§7 shulker boxes inspected.");
         ChatHelper.labelled("Stash", "§7Use §f/stash export§7 to save CSV report.");
 
-        // Fire webhook notification if configured
-        var props = MoarMod.getProperties();
-        if (props != null) {
-            dev.moar.api.ApiHandler.fireScanComplete(props, this);
-        }
+        WebhookService.get().publish(WebhookEvent.of(
+                WebhookEvent.Type.STASH_SCAN_COMPLETE,
+                "Stash scan complete",
+                "MOAR finished indexing the selected stash region.",
+                WebhookEvent.Severity.SUCCESS,
+                Map.of(
+                        "Found", String.valueOf(totalFound),
+                        "Indexed", String.valueOf(totalIndexed),
+                        "Skipped", String.valueOf(totalSkipped),
+                        "Items", String.valueOf(totalItems),
+                        "Types", String.valueOf(totalTypes))));
     }
 
     // Region helpers

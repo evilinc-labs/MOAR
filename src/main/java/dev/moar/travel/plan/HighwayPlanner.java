@@ -270,7 +270,9 @@ public final class HighwayPlanner {
                 best.ringOrDiamondDist, best.ringSide, best.diamondSegment,
                 scan.map(HighwayDetectorBridge.ScanResult::width).orElse(0),
                 scan.map(HighwayDetectorBridge.ScanResult::hasLeftRail).orElse(false),
-                scan.map(HighwayDetectorBridge.ScanResult::hasRightRail).orElse(false));
+                scan.map(HighwayDetectorBridge.ScanResult::hasRightRail).orElse(false),
+                scan.map(result -> result.surface() == HighwayDetectorBridge.Surface.TUNNEL)
+                        .orElse(false));
 
         int[] travelDir = travelDirection(best, point(primary.entry), point(primary.exit));
         double originToOnRamp = HighwayGeometry.horizontalDistance(
@@ -284,7 +286,8 @@ public final class HighwayPlanner {
             primary = new HighwayCandidate(
                     primary.axis, primary.category, primary.floorY, directionalEntry, primary.exit, primary.confidence,
                     primary.ringOrDiamondDist, primary.ringSide, primary.diamondSegment,
-                    primary.width, primary.hasLeftRail, primary.hasRightRail);
+                    primary.width, primary.hasLeftRail, primary.hasRightRail,
+                    primary.unpavedTunnel);
         }
 
         List<HighwayRoute.Leg> legs = new ArrayList<>();

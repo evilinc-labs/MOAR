@@ -38,6 +38,9 @@ public final class BounceTuning {
     // Retry just after the apex before horizontal speed decays.
     public static double ELYTRA_ACTIVATE_VY_THRESHOLD = -0.02;
 
+    // Wait for the server-visible jump before launching.
+    public static int LAUNCH_MIN_AIRBORNE_TICKS = 2;
+
     // Flatten the arc before the player's head reaches a low ceiling.
     public static double ELYTRA_ACTIVATE_MAX_RISE = 0.35;
 
@@ -52,6 +55,8 @@ public final class BounceTuning {
 
     // Retry one missed launch after its key edge clears.
     public static int LAUNCH_RETRY_AFTER_TICKS = 4;
+    public static int LAUNCH_HIGH_SPEED_RETRY_AFTER_TICKS = 4;
+    public static double LAUNCH_HIGH_SPEED_RETRY_MAX_ASCENT_VELOCITY = 0.04;
     public static int LAUNCH_ATTEMPTS_PER_JUMP = 2;
 
     // Suspend launch during repeated correction episodes.
@@ -110,11 +115,17 @@ public final class BounceTuning {
     public static float GLIDE_MODEL_MIN_PITCH = 30.0f;
     public static float GLIDE_MODEL_MAX_PITCH = 72.0f;
     public static float GLIDE_MODEL_PITCH_STEP = 1.0f;
-    public static int GLIDE_MODEL_MAX_TICKS = 8;
+    public static int GLIDE_MODEL_MAX_TICKS = 16;
+    public static float GLIDE_MODEL_HOLD_PITCH_STEP = 4.0f;
+    public static int GLIDE_MODEL_HOLD_PITCH_STEPS = 4;
+    public static int GLIDE_MODEL_MAX_HOLD_TICKS = 3;
     public static int GLIDE_MODEL_LAUNCH_OVERHEAD_TICKS = 4;
     public static double GLIDE_MODEL_INITIAL_LAUNCH_IMPULSE = 0.15;
     public static double GLIDE_MODEL_LAUNCH_IMPULSE_FILTER = 0.20;
     public static double GLIDE_MODEL_MAX_LAUNCH_IMPULSE = 0.30;
+    public static double GLIDE_MODEL_MIN_TOUCHDOWN_SPEED = 2.0;
+    public static double GLIDE_MODEL_MAX_CYCLE_SPEED_DROP = 0.03;
+    public static double GLIDE_MODEL_CYCLE_GAIN_FILTER = 0.15;
     public static double ELYTRA_GRAVITY = 0.08;
     public static double ELYTRA_GRAVITY_LIFT = 0.75;
     public static double ELYTRA_DESCENT_TRANSFER = 0.10;

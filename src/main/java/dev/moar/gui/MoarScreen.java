@@ -3,6 +3,7 @@ package dev.moar.gui;
 import dev.moar.MoarMod;
 import dev.moar.api.ApiServer;
 import dev.moar.api.MoarProperties;
+import dev.moar.api.WebhookService;
 import dev.moar.printer.SchematicPrinter;
 import dev.moar.spawnproof.SpawnProofer;
 import dev.moar.stash.StashDatabase;
@@ -301,8 +302,9 @@ public final class MoarScreen extends Screen {
     private void buildApi(int x, int y) {
         MoarProperties props = MoarMod.getProperties();
         if (props == null) return;
-        apiBindField = addTextField(x, y, 140, "bind address", props.getApiBindAddress());
-        apiPortField = addTextField(x + 152, y, 72, "port", String.valueOf(props.getApiPort()));
+        y += 12;
+        apiBindField = addTextField(x, y, 140, "API bind address", props.getApiBindAddress());
+        apiPortField = addTextField(x + 152, y, 72, "API port", String.valueOf(props.getApiPort()));
         addButton(x + 236, y, 96, 20, "API " + onOff(props.isApiEnabled()), () -> {
             props.setApiEnabled(!props.isApiEnabled());
             syncApiServer();
@@ -310,11 +312,21 @@ public final class MoarScreen extends Screen {
         });
         addButton(x + 340, y, 76, 20, "Apply", this::applyApiConfig);
         y += 30;
-        apiKeyField = addTextField(x, y, 416, "api key", props.getApiKey());
+        apiKeyField = addTextField(x, y, 416, "API key", props.getApiKey());
+        y += 42;
+        webhookField = addTextField(x, y, 416, "Webhook URL", props.getWebhookUrl());
         y += 30;
-        webhookField = addTextField(x, y, 416, "webhook url", props.getWebhookUrl());
-        y += 30;
-        addButton(x, y, 116, 20, "Restart API", () -> {
+        addButton(x, y, 100, 20, "Hook " + onOff(props.isWebhookEnabled()), () -> {
+            props.setWebhookEnabled(!props.isWebhookEnabled());
+            rebuild();
+        });
+        addButton(x + 108, y, 132, 20,
+                "Format " + (props.isWebhookDiscord() ? "Discord" : "JSON"), () -> {
+                    props.setWebhookDiscord(!props.isWebhookDiscord());
+                    rebuild();
+                });
+        addButton(x + 248, y, 76, 20, "Test", this::testWebhook);
+        addButton(x + 332, y, 84, 20, "Restart API", () -> {
             ApiServer server = MoarMod.getApiServer();
             if (server != null) {
                 server.close();
@@ -322,6 +334,33 @@ public final class MoarScreen extends Screen {
                 notice(server.isRunning() ? "API server restarted." : "API server is stopped.");
             }
         });
+        y += 30;
+        addButton(x, y, 78, 20, "Nav " + onOff(props.isWebhookNavigation()), () -> {
+            props.setWebhookNavigation(!props.isWebhookNavigation());
+            rebuild();
+        });
+        addButton(x + 86, y, 104, 20, "Disconnect " + onOff(props.isWebhookDisconnect()), () -> {
+            props.setWebhookDisconnect(!props.isWebhookDisconnect());
+            rebuild();
+        });
+        addButton(x + 198, y, 88, 20, "Arrival " + onOff(props.isWebhookArrival()), () -> {
+            props.setWebhookArrival(!props.isWebhookArrival());
+            rebuild();
+        });
+        addButton(x + 294, y, 80, 20, "Abort " + onOff(props.isWebhookAbort()), () -> {
+            props.setWebhookAbort(!props.isWebhookAbort());
+            rebuild();
+        });
+        y += 30;
+        addButton(x, y, 80, 20, "Scan " + onOff(props.isWebhookScan()), () -> {
+            props.setWebhookScan(!props.isWebhookScan());
+            rebuild();
+        });
+        addButton(x + 88, y, 128, 20,
+                "Share Coords " + onOff(props.isWebhookIncludeCoordinates()), () -> {
+                    props.setWebhookIncludeCoordinates(!props.isWebhookIncludeCoordinates());
+                    rebuild();
+                });
     }
 
     /*? if >=26.1 {*//*
@@ -370,7 +409,10 @@ public final class MoarScreen extends Screen {
             case RETRIEVE -> drawRetrieveInfo(context, x, y + 96);
             case PRINTER -> drawPrinterInfo(context, x, y + 92);
             case SPAWNPROOF -> drawSpawnproofInfo(context, x, y + 92);
-            case API -> drawApiInfo(context, x, y + 112);
+            case API -> {
+                drawApiLabels(context, x, y);
+                drawApiInfo(context, x, y + 208);
+            }
         }
     }
 
@@ -482,6 +524,15 @@ public final class MoarScreen extends Screen {
     }
 
     /*? if >=26.1 {*//*
+    private void drawApiLabels(GuiGraphicsExtractor context, int x, int y) {
+    *//*?} else {*/
+    private void drawApiLabels(DrawContext context, int x, int y) {
+    /*?}*/
+        drawText(context, "MOAR API Server", x, y + 2, 0xFFFFFFFF);
+        drawText(context, "Discord / Generic Webhook", x, y + 78, 0xFFFFFFFF);
+    }
+
+    /*? if >=26.1 {*//*
     private void drawApiInfo(GuiGraphicsExtractor context, int x, int y) {
     *//*?} else {*/
     private void drawApiInfo(DrawContext context, int x, int y) {
@@ -494,6 +545,16 @@ public final class MoarScreen extends Screen {
                 x, y, 0xFFE8E8E8);
         drawText(context, "URL: http://" + props.getApiBindAddress() + ":" + props.getApiPort()
                 + "/api/v1/status", x, y + 14, 0xFFBBBBBB);
+        WebhookService.Status hook = MoarMod.getWebhookService().status();
+        drawText(context, "Webhook: " + onOff(hook.enabled())
+                + " | " + (hook.configured() ? "configured" : "no URL")
+                + " | " + (hook.discord() ? "Discord" : "JSON"),
+                x, y + 28, 0xFFBBBBBB);
+        drawText(context, "Queue: " + hook.queued()
+                + " | sent: " + hook.delivered()
+                + " | failed: " + hook.failed()
+                + " | dropped: " + hook.dropped(),
+                x, y + 42, 0xFFBBBBBB);
     }
 
     private void createKit() {
@@ -702,6 +763,11 @@ public final class MoarScreen extends Screen {
         if (apiKey == null) return;
         String webhook = sanitizeWebhookUrl(textValue(webhookField));
         if (webhook == null) return;
+        if (props.isWebhookDiscord() && !webhook.isEmpty()
+                && !WebhookService.isDiscordWebhookUrl(webhook)) {
+            notice("Discord format requires a Discord webhook URL.");
+            return;
+        }
         int port = parseBoundedInt(textValue(apiPortField), 1, 65535, props.getApiPort(), "API port");
         if (port < 0) return;
 
@@ -711,6 +777,24 @@ public final class MoarScreen extends Screen {
         props.setWebhookUrl(webhook);
         syncApiServer();
         notice("API config applied.");
+    }
+
+    private void testWebhook() {
+        MoarProperties props = MoarMod.getProperties();
+        if (props == null) return;
+        String webhook = sanitizeWebhookUrl(textValue(webhookField));
+        if (webhook == null || webhook.isEmpty()) {
+            notice("Enter a webhook URL before testing.");
+            return;
+        }
+        if (props.isWebhookDiscord() && !WebhookService.isDiscordWebhookUrl(webhook)) {
+            notice("Discord format requires a Discord webhook URL.");
+            return;
+        }
+        props.setWebhookUrl(webhook);
+        notice(MoarMod.getWebhookService().sendTest()
+                ? "Webhook test queued."
+                : "Webhook test could not be queued.");
     }
 
     private void syncApiServer() {
