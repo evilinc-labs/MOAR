@@ -366,7 +366,7 @@ public final class HighwayDetectorBridge {
 
         if (widths.size() < minSamples) return null;
         int medianWidth = median(widths);
-        if (medianWidth < 2 || medianWidth > 9) return null;
+        if (medianWidth < 3 || medianWidth > 5) return null;
 
         int stableSamples = 0;
         for (int width : widths) {
@@ -432,7 +432,7 @@ public final class HighwayDetectorBridge {
         }
 
         int width = left + right + 1;
-        if (width < 2 || width > 9) return null;
+        if (width < 3 || width > 5) return null;
 
         int leftBoundaryX = centerX - axis.perpDx() * (left + 1);
         int leftBoundaryZ = centerZ - axis.perpDz() * (left + 1);

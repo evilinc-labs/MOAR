@@ -41,6 +41,7 @@ public final class BounceController {
     // Flag a wall ahead so TravelManager can detour without aborting.
     private boolean wallAhead;
     private String wallReason;
+    private int wallDistance;
     // Distinguish falls from generic no-progress stalls.
     private boolean stuckFromFall;
     private int     ticksActive;
@@ -61,10 +62,14 @@ public final class BounceController {
     private int launchRequests;
     private int launchAttemptsThisJump;
     private int sprintReadyWaitTicks;
+    private boolean launchSprintLossRecorded;
+    private int consecutiveLaunchSprintLosses;
     private boolean takeoffSprinting;
     private int firstLaunchAirborneTicks;
     private double firstLaunchRise;
     private double firstLaunchVelocityY;
+    private double firstLaunchHorizontalGain;
+    private boolean firstLaunchSprinting;
     private int firstGlideAirborneTicks;
     private double firstGlideRise;
     private double firstGlideVelocityY;
@@ -119,16 +124,24 @@ public final class BounceController {
     private double previousTouchdownSpeed;
     private double observedCycleGain;
     private double filteredCycleGain;
+    private double launchCaptureEfficiency;
+    private double idealPostJumpSpeed;
+    private double cycleSpeedRetention;
+    private double observedCycleEnergy;
+    private double observedCycleEnergyRate;
     private boolean apexPassed;
     private int tangentialDecelerationTicks;
     private float minimumGlidePitch;
     private float maximumGlidePitch;
     private boolean launchArmed;
     private boolean setbackHolding;
+    private boolean terrainHolding;
     private int launchRearmTicks;
     private boolean elytraLaunchEnabled;
     private boolean jumpingEnabled;
     private int wallObservationTicks;
+    private int fallObservationTicks;
+    private double fallDepth;
     private int correctionEpisodeBaseline;
     private double lastPerpOffset;
     private float lastPerpCorrection;
@@ -155,6 +168,7 @@ public final class BounceController {
         stuck          = false;
         wallAhead      = false;
         wallReason     = "none";
+        wallDistance   = 0;
         stuckFromFall  = false;
         ticksActive    = 0;
         launchPhase    = LaunchPhase.GROUNDED;
@@ -164,10 +178,14 @@ public final class BounceController {
         launchRequests = 0;
         launchAttemptsThisJump = 0;
         sprintReadyWaitTicks = 0;
+        launchSprintLossRecorded = false;
+        consecutiveLaunchSprintLosses = 0;
         takeoffSprinting = false;
         firstLaunchAirborneTicks = 0;
         firstLaunchRise = Double.NaN;
         firstLaunchVelocityY = Double.NaN;
+        firstLaunchHorizontalGain = Double.NaN;
+        firstLaunchSprinting = false;
         firstGlideAirborneTicks = 0;
         firstGlideRise = Double.NaN;
         firstGlideVelocityY = Double.NaN;
@@ -193,15 +211,19 @@ public final class BounceController {
         previousTouchdownSpeed = Double.NaN;
         observedCycleGain = Double.NaN;
         filteredCycleGain = Double.NaN;
+        resetCycleEnergyBudget();
         diveTicks = 0;
         peakHorizontalSpeed = 0.0;
         resetArcModel();
         launchArmed = false;
         setbackHolding = false;
+        terrainHolding = false;
         launchRearmTicks = 0;
         elytraLaunchEnabled = true;
         jumpingEnabled = true;
         wallObservationTicks = 0;
+        fallObservationTicks = 0;
+        fallDepth = 0.0;
         correctionEpisodeBaseline = SetbackMonitor.get().totalCorrectionEpisodes();
         lastPerpOffset = 0.0;
         lastPerpCorrection = 0.0f;
@@ -222,9 +244,24 @@ public final class BounceController {
     // Check whether a wall was seen this tick.
     public boolean isWallAhead()     { return wallAhead; }
     public String wallReason()       { return wallReason; }
+    public int wallDistance()        { return wallDistance; }
     // Check whether the stuck state came from a fall.
     public boolean isStuckFromFall() { return stuckFromFall; }
+    public boolean isDeepHighwayFall() {
+        return fallDepth >= BounceTuning.FALL_IMMEDIATE_DEPTH;
+    }
+    public double fallDepth() { return fallDepth; }
     public int     ticksActive() { return ticksActive; }
+
+    // Drop a stale fall decision after a server correction.
+    public void clearFallAlarmAfterCorrection() {
+        if (!stuckFromFall) return;
+        LOGGER.info("[Bounce] clearing pre-correction highway fall alarm");
+        stuckFromFall = false;
+        stuck = false;
+        fallObservationTicks = 0;
+        fallDepth = 0.0;
+    }
 
     // ──────────────────────────────────────────────────────────────
     // Tick — called by TravelManager via driveOwner() when BOUNCE owns
@@ -264,13 +301,9 @@ public final class BounceController {
         double px = mc.player.getX();
         double pz = mc.player.getZ();
 
-        // ── Fall detection ───────────────────────────────────────
-        if (highway != null && highway.floorY > Integer.MIN_VALUE
-                && pos.getY() < highway.floorY - BounceTuning.FALL_Y_THRESHOLD) {
-            LOGGER.warn("[Bounce] fell off highway y={} floorY={}", pos.getY(), highway.floorY);
-            stuckFromFall = true;
-            stuck = true;
-            releaseKeys();
+        if (terrainHolding) {
+            noProgressTicks = 0;
+            progressSeeded = false;
             return;
         }
 
@@ -281,6 +314,7 @@ public final class BounceController {
         } else {
             wallObservationTicks = 0;
             wallReason = "none";
+            wallDistance = 0;
         }
         wallAhead = wallObservationTicks >= BounceTuning.WALL_CONFIRM_TICKS;
         if (wallAhead) return; // skip stuck-detection this tick
@@ -341,6 +375,17 @@ public final class BounceController {
             launchRearmTicks--;
         }
 
+        if (!hasLoadedHighwayWindow(mc)) {
+            enterTerrainHold(mc);
+            return;
+        }
+        if (terrainHolding) {
+            resumeAfterTerrainHold(mc);
+        }
+        if (handleHighwayFall(mc)) {
+            return;
+        }
+
         // ── Yaw alignment ────────────────────────────────────────
         float targetYaw = yawForDirection(travelDx, travelDz);
         lastPerpOffset = 0.0;
@@ -392,27 +437,6 @@ public final class BounceController {
             *//*?} else {*/
             mc.player.setYaw(curYaw + step);
             /*?}*/
-        }
-
-        // ── Emergency fall detection ──────────────────────────────
-        // Player has dropped below the highway floor — there is a gap underfoot.
-        // Set pitch to level so the recovery request carries the player horizontally.
-        // Also arm stuckFromFall+stuck immediately so TravelManager can transition
-        // to elytra recovery on the same tick without waiting for tick() to run.
-        if (highway != null && highway.floorY > Integer.MIN_VALUE
-                && mc.player.getY() < highway.floorY - 0.5) {
-            /*? if >=26.1 {*//*
-            mc.player.setXRot(0.0f);
-            *//*?} else {*/
-            mc.player.setPitch(0.0f);
-            /*?}*/
-            sendEmergencyStartFlying();
-            if (!stuckFromFall) {
-                stuckFromFall = true;
-                stuck         = true;
-                releaseKeys();
-            }
-            return;
         }
 
         // Use real vanilla state for every launch transition.
@@ -525,6 +549,13 @@ public final class BounceController {
                     recordLaunchRejected("grounded-before-ack", mc.player.getY(), velocityY, rise);
                     setLaunchPhase(LaunchPhase.GROUNDED);
                 } else {
+                    if (glideConfirmationTicks > 0) {
+                        LOGGER.info("[Bounce] provisional glide rolled back after {}t y={} rise={} vy={}",
+                                glideConfirmationTicks,
+                                formatArcValue(mc.player.getY()),
+                                formatArcValue(rise),
+                                formatArcValue(velocityY));
+                    }
                     glideConfirmationTicks = 0;
                     if (launchAttemptsThisJump < BounceTuning.LAUNCH_ATTEMPTS_PER_JUMP
                             && shouldRetryLaunch(velocityY)
@@ -542,6 +573,7 @@ public final class BounceController {
                     updateLaunchImpulseEstimate();
                     double touchdownSpeed = horizontalSpeed();
                     updateCycleGain(touchdownSpeed);
+                    updateCycleEnergyBudget(touchdownSpeed);
                     if (correctionRecoveryBounces > 0) {
                         correctionRecoveryBounces--;
                     }
@@ -555,10 +587,12 @@ public final class BounceController {
                         double glideLoss = Double.isFinite(glideStartHorizontalSpeed)
                                 ? glideStartHorizontalSpeed - touchdownSpeed
                                 : Double.NaN;
-                        LOGGER.info("[Bounce] touchdown #{} speed={} takeoffSpeed={} takeoffSprinting={} glideStartSpeed={} glideLoss={} launchImpulse={} launchAttempts={} firstLaunchAirTicks={} firstLaunchRise={} firstLaunchVy={} firstGlideAirTicks={} firstGlideRise={} firstGlideVy={} observedCycleGain={} filteredCycleGain={} peakSpeed={} apexSpeed={} speedLoss={} targetDemand={} targetBias={} normalBias={} tangentBias={} gainScale={} initialModelPitch={} initialTerminalPitch={} initialHoldTicks={} initialModelSpeed={} initialModelTicks={} initialCycleGain={} modelPitch={} modelTerminalPitch={} modelHoldTicks={} modelSpeed={} modelTicks={} modelLift={} modelDrag={} cycleGain={} cycleEnergyRate={} peakRise={} ceiling={} mode={} launchPitch={} glidePitch={} activePitch={} pitchRange={}-{} diveTicks={} ay={} at={} an={} requiredAy={} requiredAn={} pathAngle={} landingTicks={} offset={} steer={}",
+                        LOGGER.info("[Bounce] touchdown #{} speed={} takeoffSpeed={} takeoffSprinting={} firstLaunchSprinting={} touchdownGliding={} glideStartSpeed={} glideLoss={} launchImpulse={} launchAttempts={} firstLaunchAirTicks={} firstLaunchRise={} firstLaunchVy={} firstLaunchGain={} firstGlideAirTicks={} firstGlideRise={} firstGlideVy={} touchdownDeltaY={} observedCycleGain={} filteredCycleGain={} peakSpeed={} apexSpeed={} speedLoss={} targetDemand={} targetBias={} normalBias={} tangentBias={} gainScale={} initialModelPitch={} initialTerminalPitch={} initialHoldTicks={} initialModelSpeed={} initialModelTicks={} initialCycleGain={} modelPitch={} modelTerminalPitch={} modelHoldTicks={} modelSpeed={} modelTicks={} modelLift={} modelDrag={} cycleGain={} cycleEnergyRate={} peakRise={} ceiling={} mode={} launchPitch={} glidePitch={} activePitch={} pitchRange={}-{} diveTicks={} ay={} at={} an={} requiredAy={} requiredAn={} pathAngle={} landingTicks={} offset={} steer={}",
                                 completedBounces, String.format("%.3f", touchdownSpeed),
                                 formatArcValue(takeoffHorizontalSpeed),
                                 takeoffSprinting,
+                                firstLaunchSprinting,
+                                gliding,
                                 formatArcValue(glideStartHorizontalSpeed),
                                 formatArcValue(glideLoss),
                                 formatArcValue(learnedLaunchImpulse),
@@ -566,9 +600,11 @@ public final class BounceController {
                                 firstLaunchAirborneTicks,
                                 formatArcValue(firstLaunchRise),
                                 formatArcValue(firstLaunchVelocityY),
+                                formatArcValue(firstLaunchHorizontalGain),
                                 firstGlideAirborneTicks,
                                 formatArcValue(firstGlideRise),
                                 formatArcValue(firstGlideVelocityY),
+                                formatArcValue(rise),
                                 formatArcValue(observedCycleGain),
                                 formatArcValue(filteredCycleGain),
                                 String.format("%.3f", peakHorizontalSpeed),
@@ -613,6 +649,14 @@ public final class BounceController {
                                 formatArcValue(predictedLandingTicks),
                                 String.format("%.3f", lastPerpOffset),
                                 String.format("%.2f", lastPerpCorrection));
+                        LOGGER.info("[Bounce] energy #{} launchCapture={} idealPostJump={} retention={} net={} rate={} airborneTicks={}",
+                                completedBounces,
+                                formatArcValue(launchCaptureEfficiency),
+                                formatArcValue(idealPostJumpSpeed),
+                                formatArcValue(cycleSpeedRetention),
+                                formatArcValue(observedCycleEnergy),
+                                formatArcValue(observedCycleEnergyRate),
+                                airborneCycleTicks);
                     }
                     if (jumpingEnabled && requestGroundJump()) {
                         setLaunchPhase(LaunchPhase.GROUND_JUMP_REQUESTED);
@@ -639,6 +683,141 @@ public final class BounceController {
     // ──────────────────────────────────────────────────────────────
     // Internals
     // ──────────────────────────────────────────────────────────────
+
+    private boolean handleHighwayFall(
+            /*? if >=26.1 {*//* Minecraft mc *//*?} else {*/ MinecraftClient mc /*?}*/) {
+        if (mc.player == null || highway == null
+                || highway.floorY == Integer.MIN_VALUE) {
+            fallObservationTicks = 0;
+            fallDepth = 0.0;
+            return false;
+        }
+
+        double drop = highway.floorY - mc.player.getY();
+        fallDepth = Math.max(0.0, drop);
+        if (drop <= BounceTuning.FALL_TRIGGER_DEPTH) {
+            if (fallObservationTicks > 0) {
+                LOGGER.info("[Bounce] fall recovery settled after {}t y={} floorY={}",
+                        fallObservationTicks,
+                        String.format("%.3f", mc.player.getY()), highway.floorY);
+            }
+            fallObservationTicks = 0;
+            fallDepth = 0.0;
+            if (stuckFromFall) {
+                LOGGER.info("[Bounce] clearing settled highway fall alarm");
+                stuckFromFall = false;
+                stuck = false;
+            }
+            return false;
+        }
+
+        fallObservationTicks++;
+        setPitch(0.0f);
+        if (!playerGliding(mc)) {
+            sendEmergencyStartFlying();
+        }
+        releaseKeys();
+
+        boolean confirmed = fallObservationTicks >= BounceTuning.FALL_CONFIRM_TICKS;
+        boolean deep = drop >= BounceTuning.FALL_IMMEDIATE_DEPTH;
+        if ((confirmed || deep) && !stuckFromFall) {
+            LOGGER.warn("[Bounce] confirmed highway fall y={} floorY={} drop={} observations={} deep={}",
+                    String.format("%.3f", mc.player.getY()), highway.floorY,
+                    String.format("%.3f", drop), fallObservationTicks, deep);
+            stuckFromFall = true;
+            stuck = true;
+        }
+        return true;
+    }
+
+    private boolean hasLoadedHighwayWindow(
+            /*? if >=26.1 {*//* Minecraft mc *//*?} else {*/ MinecraftClient mc /*?}*/) {
+        if (mc.player == null || highway == null || exitColumn == null
+                || highway.floorY == Integer.MIN_VALUE) {
+            return true;
+        }
+
+        int directionScale = travelDx * travelDx + travelDz * travelDz;
+        long playerProjection = (long) Math.floor(mc.player.getX()) * travelDx
+                + (long) Math.floor(mc.player.getZ()) * travelDz;
+        long exitProjection = (long) exitColumn.getX() * travelDx
+                + (long) exitColumn.getZ() * travelDz;
+        int remaining = directionScale == 0
+                ? 0
+                : (int) Math.max(0L, (exitProjection - playerProjection) / directionScale);
+        int scanAhead = Math.min(BounceTuning.TERRAIN_LOAD_SCAN_AHEAD, remaining);
+        for (int distance = 0; distance <= scanAhead; distance += 4) {
+            BlockPos sample = new BlockPos(
+                    (int) Math.floor(mc.player.getX()) + travelDx * distance,
+                    highway.floorY,
+                    (int) Math.floor(mc.player.getZ()) + travelDz * distance);
+            if (!isChunkLoaded(mc, sample)) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    private void enterTerrainHold(
+            /*? if >=26.1 {*//* Minecraft mc *//*?} else {*/ MinecraftClient mc /*?}*/) {
+        releaseKeys();
+        noProgressTicks = 0;
+        progressSeeded = false;
+        if (highway != null && highway.floorY > Integer.MIN_VALUE
+                && mc.player != null
+                && highway.floorY - mc.player.getY() > BounceTuning.FALL_TRIGGER_DEPTH) {
+            setPitch(0.0f);
+            if (!playerGliding(mc)) {
+                sendEmergencyStartFlying();
+            }
+        }
+        if (!terrainHolding) {
+            terrainHolding = true;
+            LOGGER.warn("[Bounce] waiting for highway terrain near {},{}",
+                    (int) Math.floor(mc.player.getX()), (int) Math.floor(mc.player.getZ()));
+        }
+    }
+
+    private void resumeAfterTerrainHold(
+            /*? if >=26.1 {*//* Minecraft mc *//*?} else {*/ MinecraftClient mc /*?}*/) {
+        terrainHolding = false;
+        fallObservationTicks = 0;
+        launchRearmTicks = Math.max(
+                launchRearmTicks, BounceTuning.CORRECTION_REARM_TICKS);
+        LaunchPhase resumedPhase = playerGrounded(mc)
+                ? LaunchPhase.GROUNDED
+                : playerGliding(mc) ? LaunchPhase.GLIDING : LaunchPhase.LANDING;
+        setLaunchPhase(resumedPhase);
+        LOGGER.info("[Bounce] highway terrain loaded; resuming phase={}", resumedPhase);
+    }
+
+    private static boolean playerGrounded(
+            /*? if >=26.1 {*//* Minecraft mc *//*?} else {*/ MinecraftClient mc /*?}*/) {
+        /*? if >=26.1 {*//*
+        return mc.player != null && mc.player.onGround();
+        *//*?} else {*/
+        return mc.player != null && mc.player.isOnGround();
+        /*?}*/
+    }
+
+    private static boolean playerGliding(
+            /*? if >=26.1 {*//* Minecraft mc *//*?} else {*/ MinecraftClient mc /*?}*/) {
+        /*? if >=26.1 {*//*
+        return mc.player != null && mc.player.isFallFlying();
+        *//*?} else {*/
+        return mc.player != null && mc.player.isGliding();
+        /*?}*/
+    }
+
+    private static boolean isChunkLoaded(
+            /*? if >=26.1 {*//* Minecraft mc, *//*?} else {*/ MinecraftClient mc, /*?}*/
+            BlockPos pos) {
+        /*? if >=26.1 {*//*
+        return mc.level != null && mc.level.isLoaded(pos);
+        *//*?} else {*/
+        return mc.world != null && mc.world.isChunkLoaded(pos.getX() >> 4, pos.getZ() >> 4);
+        /*?}*/
+    }
 
     // True once the player passes the exit column in the travel direction.
     private boolean hasPassedExit(BlockPos pos) {
@@ -696,7 +875,8 @@ public final class BounceController {
                 BlockPos launchHeadroom = new BlockPos(bx, feetY + 2, bz);
                 boolean bodyBlocked = hasCollision(mc, feet) || hasCollision(mc, head);
                 boolean launchBlocked = hasCollision(mc, launchHeadroom);
-                boolean laneBlocked = bodyBlocked || launchBlocked;
+                // Let the arc controller handle roofs above a clear body corridor.
+                boolean laneBlocked = bodyBlocked;
                 if (laneBlocked) {
                     blockedLanes++;
                     if (lane == 0) {
@@ -707,6 +887,7 @@ public final class BounceController {
                 }
             }
             if (centerBlocked) {
+                wallDistance = d;
                 wallReason = "corridor@" + centerX + "," + feetY + "," + centerZ
                         + " d=" + d + " lanes=" + blockedLanes
                         + " body=" + centerBodyBlocked + " launch=" + centerLaunchBlocked;
@@ -729,7 +910,7 @@ public final class BounceController {
         /*?}*/
     }
 
-    // Pulse vanilla jump input and let normal movement create the jump.
+    // Confirm sprint before pulsing vanilla jump input.
     private boolean requestGroundJump() {
         if (!MoarNetworkManager.canAct(MoarNetworkManager.OWNER_BOUNCE)) {
             return false;
@@ -737,19 +918,14 @@ public final class BounceController {
         /*? if >=26.1 {*//*
         Minecraft mc = Minecraft.getInstance();
         if (mc.player == null) return false;
-        mc.options.keyJump.setDown(true);
         *//*?} else {*/
         MinecraftClient mc = MinecraftClient.getInstance();
         if (mc.player == null) return false;
-        mc.options.jumpKey.setPressed(true);
         /*?}*/
         takeoffSprinting = mc.player.isSprinting();
         if (!takeoffSprinting) {
             sprintReadyWaitTicks++;
             mc.player.setSprinting(true);
-            takeoffSprinting = mc.player.isSprinting();
-        }
-        if (!takeoffSprinting) {
             /*? if >=26.1 {*//*
             mc.options.keyJump.setDown(false);
             *//*?} else {*/
@@ -762,6 +938,11 @@ public final class BounceController {
             return false;
         }
         sprintReadyWaitTicks = 0;
+        /*? if >=26.1 {*//*
+        mc.options.keyJump.setDown(true);
+        *//*?} else {*/
+        mc.options.jumpKey.setPressed(true);
+        /*?}*/
         double speed = horizontalSpeed();
         double accelerationThreshold = acceleratingArc
                 ? BounceTuning.TARGET_HORIZONTAL_SPEED
@@ -792,13 +973,17 @@ public final class BounceController {
         airborneLaunchTicks = 0;
         glideConfirmationTicks = 0;
         launchAttemptsThisJump = 0;
+        launchSprintLossRecorded = false;
         firstLaunchAirborneTicks = 0;
         firstLaunchRise = Double.NaN;
         firstLaunchVelocityY = Double.NaN;
+        firstLaunchHorizontalGain = Double.NaN;
+        firstLaunchSprinting = false;
         firstGlideAirborneTicks = 0;
         firstGlideRise = Double.NaN;
         firstGlideVelocityY = Double.NaN;
         airborneCycleTicks = 0;
+        resetCycleEnergyBudget();
         LOGGER.debug("[Bounce] ground jump requested");
         return true;
     }
@@ -1332,6 +1517,36 @@ public final class BounceController {
         previousTouchdownSpeed = touchdownSpeed;
     }
 
+    private void updateCycleEnergyBudget(double touchdownSpeed) {
+        if (!Double.isFinite(takeoffHorizontalSpeed)
+                || !Double.isFinite(touchdownSpeed)) {
+            resetCycleEnergyBudget();
+            return;
+        }
+        double impulse = BounceTuning.SPRINT_JUMP_HORIZONTAL_IMPULSE;
+        launchCaptureEfficiency = Double.isFinite(firstLaunchHorizontalGain)
+                && impulse > 0.0
+                ? firstLaunchHorizontalGain / impulse
+                : Double.NaN;
+        idealPostJumpSpeed = takeoffHorizontalSpeed + impulse;
+        cycleSpeedRetention = idealPostJumpSpeed > 0.0
+                ? touchdownSpeed / idealPostJumpSpeed
+                : Double.NaN;
+        observedCycleEnergy = 0.5 * (touchdownSpeed * touchdownSpeed
+                - takeoffHorizontalSpeed * takeoffHorizontalSpeed);
+        observedCycleEnergyRate = airborneCycleTicks > 0
+                ? observedCycleEnergy / airborneCycleTicks
+                : Double.NaN;
+    }
+
+    private void resetCycleEnergyBudget() {
+        launchCaptureEfficiency = Double.NaN;
+        idealPostJumpSpeed = Double.NaN;
+        cycleSpeedRetention = Double.NaN;
+        observedCycleEnergy = Double.NaN;
+        observedCycleEnergyRate = Double.NaN;
+    }
+
     private static double solveLandingTicks(double rise, double velocityY, double accelerationY) {
         if (rise <= 0.0) return 0.0;
         if (!Double.isFinite(accelerationY) || Math.abs(accelerationY) < 1.0E-6) {
@@ -1396,19 +1611,43 @@ public final class BounceController {
         boolean reachedLaunchPoint = airborneLaunchTicks >= BounceTuning.LAUNCH_MIN_AIRBORNE_TICKS
                 && (velocityY <= BounceTuning.ELYTRA_ACTIVATE_VY_THRESHOLD
                 || rise >= BounceTuning.ELYTRA_ACTIVATE_MAX_RISE);
-        if (!elytraLaunchEnabled || launchRearmTicks > 0 || !reachedLaunchPoint
-                || !requestStartFlying(y, velocityY, rise)) {
+        if (!elytraLaunchEnabled || launchRearmTicks > 0 || !reachedLaunchPoint) {
             return false;
         }
+        if (!playerSprinting()) {
+            recordLaunchSprintLoss(y, velocityY, rise);
+            return false;
+        }
+        if (!requestStartFlying(y, velocityY, rise)) {
+            return false;
+        }
+        consecutiveLaunchSprintLosses = 0;
         launchRequests++;
         launchAttemptsThisJump++;
         firstLaunchAirborneTicks = airborneLaunchTicks;
         firstLaunchRise = rise;
         firstLaunchVelocityY = velocityY;
+        firstLaunchHorizontalGain = horizontalSpeed() - takeoffHorizontalSpeed;
+        firstLaunchSprinting = playerSprinting();
         launchArmed = true;
         glideConfirmationTicks = 0;
         setLaunchPhase(LaunchPhase.LAUNCH_REQUESTED);
         return true;
+    }
+
+    // Recover the lane instead of repeating low-energy launch arcs.
+    private void recordLaunchSprintLoss(double y, double velocityY, double rise) {
+        if (launchSprintLossRecorded) return;
+        launchSprintLossRecorded = true;
+        consecutiveLaunchSprintLosses++;
+        LOGGER.warn("[Bounce] sprint lost before launch losses={}/{} y={} vy={} rise={} speed={}",
+                consecutiveLaunchSprintLosses, BounceTuning.SPRINT_LOSS_RECOVERY_JUMPS,
+                formatArcValue(y), formatArcValue(velocityY), formatArcValue(rise),
+                formatArcValue(horizontalSpeed()));
+        if (consecutiveLaunchSprintLosses < BounceTuning.SPRINT_LOSS_RECOVERY_JUMPS) return;
+        LOGGER.warn("[Bounce] repeated sprint loss; requesting lane recovery");
+        stuck = true;
+        releaseKeys();
     }
 
     private boolean retryLaunch(double y, double velocityY, double rise) {
@@ -1426,15 +1665,8 @@ public final class BounceController {
     }
 
     private boolean shouldRetryLaunch(double velocityY) {
-        boolean highSpeed = Double.isFinite(takeoffHorizontalSpeed)
-                && takeoffHorizontalSpeed >= BounceTuning.ACCEL_MID_SPEED_THRESHOLD;
-        int retryAfterTicks = highSpeed
-                ? BounceTuning.LAUNCH_HIGH_SPEED_RETRY_AFTER_TICKS
-                : BounceTuning.LAUNCH_RETRY_AFTER_TICKS;
-        double maximumVelocityY = highSpeed
-                ? BounceTuning.LAUNCH_HIGH_SPEED_RETRY_MAX_ASCENT_VELOCITY
-                : BounceTuning.ELYTRA_ACTIVATE_VY_THRESHOLD;
-        return launchPhaseTicks >= retryAfterTicks && velocityY <= maximumVelocityY;
+        return launchPhaseTicks >= BounceTuning.LAUNCH_RETRY_AFTER_TICKS
+                && velocityY <= BounceTuning.LAUNCH_RETRY_MAX_ASCENT_VELOCITY;
     }
 
     // Let vanilla serialize one flight command per jump arc.
@@ -1581,6 +1813,16 @@ public final class BounceController {
         double z = mc.player.getVelocity().z;
         /*?}*/
         return Math.sqrt(x * x + z * z);
+    }
+
+    private static boolean playerSprinting() {
+        /*? if >=26.1 {*//*
+        Minecraft mc = Minecraft.getInstance();
+        return mc.player != null && mc.player.isSprinting();
+        *//*?} else {*/
+        MinecraftClient mc = MinecraftClient.getInstance();
+        return mc.player != null && mc.player.isSprinting();
+        /*?}*/
     }
 
     private static void setPitch(float pitch) {

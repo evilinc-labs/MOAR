@@ -1,5 +1,6 @@
 {
   "category.moar": "MOAR",
+  "key.moar.emergency_stop": "Emergency Stop Travel",
   "key.moar.gui": "Open MOAR GUI",
   "key.moar.toggle": "Toggle Printer"
 }

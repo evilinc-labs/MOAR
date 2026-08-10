@@ -249,6 +249,16 @@ public final class ElytraManager {
         startFireworkRestock(true);
     }
 
+    public void disconnectForTravelSafety(String reason) {
+        resetAll();
+        disconnectOnFailure = true;
+        /*? if >=26.1 {*//*
+        fail(Minecraft.getInstance(), reason);
+        *//*?} else {*/
+        fail(MinecraftClient.getInstance(), reason);
+        /*?}*/
+    }
+
     private void startFireworkRestock(boolean disconnectOnFailure) {
         resetAll();
         fireworkMode = true;

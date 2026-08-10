@@ -625,9 +625,7 @@ public final class PathWalker {
 
     // Stop all pathing and release keys.
     public static void stop() {
-        if (active && (!BARITONE_AVAILABLE || vanillaFallback)) {
-            releaseKeys();
-        }
+        releaseKeys();
         if (BARITONE_AVAILABLE) {
             if (placementEnabled) {
                 BaritoneDelegate.restorePlacement();
@@ -676,8 +674,13 @@ public final class PathWalker {
 
     // Start Baritone elytra pathing.
     public static void startElytra(BlockPos dest) {
+        startElytra(dest, false);
+    }
+
+    // Start Baritone elytra pathing without forcing a Y goal.
+    public static void startElytra(BlockPos dest, boolean horizontalGoal) {
         elytraTarget = dest;
-        if (BARITONE_AVAILABLE) BaritoneDelegate.startElytra(dest);
+        if (BARITONE_AVAILABLE) BaritoneDelegate.startElytra(dest, horizontalGoal);
     }
 
     // True while Baritone owns elytra flight.
@@ -710,6 +713,11 @@ public final class PathWalker {
     // Stop Baritone elytra pathing.
     public static void stopElytra() {
         if (BARITONE_AVAILABLE) BaritoneDelegate.stopElytra();
+        elytraTarget = null;
+    }
+
+    // Forget the target after Baritone has stopped itself.
+    public static void clearElytraTarget() {
         elytraTarget = null;
     }
 
@@ -1203,7 +1211,9 @@ public final class PathWalker {
         private static Method isActiveMethod;  // IBaritoneProcess.isActive()
         private static Method getElytraProcess;   // IBaritone.getElytraProcess()
         private static Method elytraPathTo;       // IElytraProcess.pathTo(BlockPos)
+        private static Method elytraPathToGoal;   // IElytraProcess.pathTo(Goal)
         private static boolean elytraReady;
+        private static Constructor<?> goalXZCtor;
         private static Constructor<?> goalBlockCtor;
         private static Constructor<?> goalGetToBlockCtor;
         private static Constructor<?> goalNearCtor;
@@ -1279,6 +1289,14 @@ public final class PathWalker {
                     getElytraProcess = iBaritoneE.getMethod("getElytraProcess");
                     Class<?> iElytraProcess = Class.forName("baritone.api.process.IElytraProcess");
                     elytraPathTo = iElytraProcess.getMethod("pathTo", BlockPos.class);
+                    try {
+                        Class<?> goal = Class.forName("baritone.api.pathing.goals.Goal");
+                        Class<?> goalXZ = Class.forName("baritone.api.pathing.goals.GoalXZ");
+                        elytraPathToGoal = iElytraProcess.getMethod("pathTo", goal);
+                        goalXZCtor = goalXZ.getConstructor(int.class, int.class);
+                    } catch (ReflectiveOperationException e) {
+                        LOGGER.info("PathWalker: Baritone X/Z elytra goals unavailable ({})", e.getMessage());
+                    }
                     elytraReady = true;
                     LOGGER.info("PathWalker: Baritone elytra process available");
                 } catch (Exception e) {
@@ -1631,11 +1649,16 @@ public final class PathWalker {
         }
 
         // Start Baritone elytra pathing.
-        static void startElytra(BlockPos dest) {
+        static void startElytra(BlockPos dest, boolean horizontalGoal) {
             if (!elytraReady) return;
             try {
                 Object process = getElytraProcess.invoke(getPrimary());
-                elytraPathTo.invoke(process, dest);
+                if (horizontalGoal && elytraPathToGoal != null && goalXZCtor != null) {
+                    Object goal = goalXZCtor.newInstance(dest.getX(), dest.getZ());
+                    elytraPathToGoal.invoke(process, goal);
+                } else {
+                    elytraPathTo.invoke(process, dest);
+                }
             } catch (Exception e) {
                 LOGGER.error("PathWalker[Baritone]: failed to start elytra flight", e);
             }
@@ -2071,6 +2094,11 @@ public final class PathWalker {
         options.keySprint.setDown(false);
         *//*?} else {*/
         options.sprintKey.setPressed(false);
+        /*?}*/
+        /*? if >=26.1 {*//*
+        options.keyJump.setDown(false);
+        *//*?} else {*/
+        options.jumpKey.setPressed(false);
         /*?}*/
     }
 

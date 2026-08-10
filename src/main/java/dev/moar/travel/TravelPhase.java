@@ -22,6 +22,8 @@ public enum TravelPhase {
     MINING_TO_FREENETHER,
     // Run the elytra resupply playbook.
     ELYTRA_RESUPPLY,
+    // Land safely before opening inventory.
+    LANDING_FOR_RESUPPLY,
     // Launch the elytra.
     LAUNCH,
     // Let Baritone own elytra flight.
@@ -38,7 +40,8 @@ public enum TravelPhase {
     // Keep milestone-gated phases grouped in one check.
     public boolean isReserved() {
         return this == BOUNCING || this == VERIFYING_DETOUR || this == DETOURING
-                || this == LAUNCH || this == ELYTRA_CRUISE || this == ELYTRA_FALLBACK;
+                || this == LANDING_FOR_RESUPPLY || this == LAUNCH
+                || this == ELYTRA_CRUISE || this == ELYTRA_FALLBACK;
     }
 
     // Terminal phases fall back to IDLE automatically.

@@ -13,7 +13,7 @@ public final class HighwayGeometry {
     // Known ring-road distances from spawn.
     public static final double[] RING_DISTANCES = {
             500, 1000, 1500, 2000, 2500, 7500.5,
-            55000, 62500, 100000, 125000, 250000, 500000,
+            55000, 100000, 125000, 250000, 500000,
             750000, 1_000_000, 1_250_000, 1_875_000, 2_500_000, 3_750_000
     };
 
