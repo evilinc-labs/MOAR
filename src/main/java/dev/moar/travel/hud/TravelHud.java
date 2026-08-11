@@ -134,8 +134,7 @@ public final class TravelHud {
             case PLANNING                -> 0xFFFF55;
             case APPROACH_ONRAMP         -> 0x55FFFF;
             case BOUNCING                -> 0x00FF00;
-            case LAUNCH, ELYTRA_CRUISE,
-                 ELYTRA_FALLBACK         -> 0xAA00FF;
+            case LAUNCH, ELYTRA_CRUISE   -> 0xAA00FF;
             case MINING_TO_FREENETHER,
                  OFFRAMP_HANDOFF         -> 0xFF9900;
             case VERIFYING_DETOUR,

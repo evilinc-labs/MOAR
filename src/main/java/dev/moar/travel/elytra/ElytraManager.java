@@ -467,8 +467,18 @@ public final class ElytraManager {
     /*?}*/
         int rockets = countItemInInventory(mc, "minecraft:firework_rocket");
         if (rockets >= FIREWORK_RESTOCK_TARGET) {
-            LOGGER.info("[Elytra] firework restock already satisfied ({})", rockets);
-            transition(State.DONE);
+            if (countItemInHotbar(mc, "minecraft:firework_rocket") >= FIREWORK_RESTOCK_THRESHOLD) {
+                LOGGER.info("[Elytra] firework restock ready ({}, hotbar accessible)", rockets);
+                transition(State.DONE);
+                return;
+            }
+            int sourceSlot = findLargestItemSlot(mc, "minecraft:firework_rocket", 9, 36);
+            int hotbarSlot = findTravelSupplyHotbarSlot(mc, "minecraft:firework_rocket");
+            if (sourceSlot < 0 || hotbarSlot < 0) {
+                fail(mc, "Fireworks are in inventory, but no safe hotbar slot is available");
+                return;
+            }
+            stageInventorySlotInHotbar(mc, sourceSlot, hotbarSlot);
             return;
         }
 
@@ -2398,12 +2408,105 @@ public final class ElytraManager {
     }
 
     /*? if >=26.1 {*//*
+    private static int countItemInHotbar(Minecraft mc, String itemId) {
+    *//*?} else {*/
+    private static int countItemInHotbar(MinecraftClient mc, String itemId) {
+    /*?}*/
+        if (mc.player == null) return 0;
+        int count = 0;
+        for (int i = 0; i < 9; i++) {
+            /*? if >=26.1 {*//*
+            ItemStack stack = mc.player.getInventory().getItem(i);
+            *//*?} else {*/
+            ItemStack stack = mc.player.getInventory().getStack(i);
+            /*?}*/
+            if (!stack.isEmpty() && ItemIdentifier.getItemId(stack).equals(itemId)) {
+                count += stack.getCount();
+            }
+        }
+        return count;
+    }
+
+    /*? if >=26.1 {*//*
     public static boolean needsFireworksRestock(Minecraft mc) {
     *//*?} else {*/
     public static boolean needsFireworksRestock(MinecraftClient mc) {
     /*?}*/
-        return countItemInInventory(mc, "minecraft:firework_rocket") < FIREWORK_RESTOCK_THRESHOLD;
+        return countItemInHotbar(mc, "minecraft:firework_rocket") < FIREWORK_RESTOCK_THRESHOLD;
     }
+
+    /*? if >=26.1 {*//*
+    private static int findLargestItemSlot(Minecraft mc, String itemId, int from, int to) {
+    *//*?} else {*/
+    private static int findLargestItemSlot(MinecraftClient mc, String itemId, int from, int to) {
+    /*?}*/
+        if (mc.player == null) return -1;
+        int bestSlot = -1;
+        int bestCount = -1;
+        for (int i = from; i < to; i++) {
+            /*? if >=26.1 {*//*
+            ItemStack stack = mc.player.getInventory().getItem(i);
+            *//*?} else {*/
+            ItemStack stack = mc.player.getInventory().getStack(i);
+            /*?}*/
+            if (!stack.isEmpty() && ItemIdentifier.getItemId(stack).equals(itemId)
+                    && stack.getCount() > bestCount) {
+                bestSlot = i;
+                bestCount = stack.getCount();
+            }
+        }
+        return bestSlot;
+    }
+
+    /*? if >=26.1 {*//*
+    private static int findTravelSupplyHotbarSlot(Minecraft mc, String itemId) {
+        if (mc.player == null) return -1;
+        Inventory inv = mc.player.getInventory();
+        for (int i = 0; i < 9; i++) {
+            if (inv.getItem(i).isEmpty()) return i;
+        }
+        for (int i = 0; i < 9; i++) {
+            if (DISPOSABLE_TRAVEL_ITEM_IDS.contains(ItemIdentifier.getItemId(inv.getItem(i)))) return i;
+        }
+        for (int i = 0; i < 9; i++) {
+            if (ItemIdentifier.getItemId(inv.getItem(i)).equals(itemId)) return i;
+        }
+        return -1;
+    }
+
+    private void stageInventorySlotInHotbar(Minecraft mc, int inventorySlot, int hotbarSlot) {
+        if (!tryElytraInventory(SWAP_SETTLE)) return;
+        mc.gameMode.handleContainerInput(
+                mc.player.containerMenu.containerId, inventorySlot, hotbarSlot,
+                ContainerInput.SWAP, mc.player);
+        actionCooldown = SWAP_SETTLE;
+        LOGGER.info("[Elytra] staged fireworks inventory slot {} -> hotbar {}", inventorySlot, hotbarSlot);
+    }
+    *//*?} else {*/
+    private static int findTravelSupplyHotbarSlot(MinecraftClient mc, String itemId) {
+        if (mc.player == null) return -1;
+        PlayerInventory inv = mc.player.getInventory();
+        for (int i = 0; i < 9; i++) {
+            if (inv.getStack(i).isEmpty()) return i;
+        }
+        for (int i = 0; i < 9; i++) {
+            if (DISPOSABLE_TRAVEL_ITEM_IDS.contains(ItemIdentifier.getItemId(inv.getStack(i)))) return i;
+        }
+        for (int i = 0; i < 9; i++) {
+            if (ItemIdentifier.getItemId(inv.getStack(i)).equals(itemId)) return i;
+        }
+        return -1;
+    }
+
+    private void stageInventorySlotInHotbar(MinecraftClient mc, int inventorySlot, int hotbarSlot) {
+        if (!tryElytraInventory(SWAP_SETTLE)) return;
+        mc.interactionManager.clickSlot(
+                mc.player.currentScreenHandler.syncId, inventorySlot, hotbarSlot,
+                SlotActionType.SWAP, mc.player);
+        actionCooldown = SWAP_SETTLE;
+        LOGGER.info("[Elytra] staged fireworks inventory slot {} -> hotbar {}", inventorySlot, hotbarSlot);
+    }
+    /*?}*/
 
     private String currentWantedItemId() {
         if (fireworkMode) return "minecraft:firework_rocket";
@@ -2830,7 +2933,7 @@ public final class ElytraManager {
                 mendTicks = 0;
                 postShulkerState = State.MENDING;
             } else {
-                postShulkerState = State.DONE;
+                postShulkerState = State.CHECKING;
             }
             snapshotShulkerSlots(mc);
             shulkerPhase = 6;

@@ -143,6 +143,9 @@ public final class PathWalker {
     private static boolean stuck;
     private static int ticksWalking;
     private static BlockPos elytraTarget;
+    private static boolean elytraHorizontalGoal;
+    private static long elytraCommandNanos;
+    private static final long ELYTRA_COMMAND_DEDUPE_NANOS = 5_000_000_000L;
     // Ticks where Baritone has a goal but isn't executing a path step;
     // exceeding STUCK_THRESHOLD means it's stuck on an impossible route.
     private static int noPathTicks;
@@ -679,7 +682,18 @@ public final class PathWalker {
 
     // Start Baritone elytra pathing without forcing a Y goal.
     public static void startElytra(BlockPos dest, boolean horizontalGoal) {
+        long now = System.nanoTime();
+        boolean sameGoal = dest != null && dest.equals(elytraTarget)
+                && horizontalGoal == elytraHorizontalGoal;
+        if (!active && sameGoal && (isElytraActive()
+                || now - elytraCommandNanos < ELYTRA_COMMAND_DEDUPE_NANOS)) {
+            return;
+        }
+        if (active) stop();
+        BaritoneDelegate.enableElytraSupport();
         elytraTarget = dest;
+        elytraHorizontalGoal = horizontalGoal;
+        elytraCommandNanos = now;
         if (BARITONE_AVAILABLE) BaritoneDelegate.startElytra(dest, horizontalGoal);
     }
 
@@ -713,12 +727,16 @@ public final class PathWalker {
     // Stop Baritone elytra pathing.
     public static void stopElytra() {
         if (BARITONE_AVAILABLE) BaritoneDelegate.stopElytra();
-        elytraTarget = null;
+        BaritoneDelegate.restoreElytraSupport();
+        clearElytraTarget();
     }
 
     // Forget the target after Baritone has stopped itself.
     public static void clearElytraTarget() {
         elytraTarget = null;
+        elytraHorizontalGoal = false;
+        elytraCommandNanos = 0L;
+        if (!isElytraActive()) BaritoneDelegate.restoreElytraSupport();
     }
 
     // Toggle Baritone's master allowBreak. When false, no block is mined
@@ -1226,6 +1244,7 @@ public final class PathWalker {
         private static Object allowParkourSetting;  // Settings.Setting<Boolean>
         private static Object allowBreakSetting;    // Settings.Setting<Boolean>
         private static Object allowInventorySetting; // Settings.Setting<Boolean>
+        private static Object elytraAutoJumpSetting; // Settings.Setting<Boolean>
         private static Object maxFallHeightSetting;   // Settings.Setting<Integer>
         private static Object throwawayItemsSetting; // Settings.Setting<List<Item>>
         private static Method settingGetValue;      // Setting.value field getter
@@ -1238,6 +1257,8 @@ public final class PathWalker {
         private static boolean savedAllowInventory;
         private static int savedMaxFallHeight;
         private static Object savedThrowawayItems; // List<Item> — saved original list
+        private static boolean savedElytraAutoJump;
+        private static boolean elytraSupportEnabled;
 
         static {
             try {
@@ -1346,6 +1367,14 @@ public final class PathWalker {
                     java.lang.reflect.Field allowInventoryField =
                             settingsInstance.getClass().getField("allowInventory");
                     allowInventorySetting = allowInventoryField.get(settingsInstance);
+
+                    try {
+                        java.lang.reflect.Field autoJumpField =
+                                settingsInstance.getClass().getField("elytraAutoJump");
+                        elytraAutoJumpSetting = autoJumpField.get(settingsInstance);
+                    } catch (NoSuchFieldException ignored) {
+                        elytraAutoJumpSetting = null;
+                    }
 
                     // maxFallHeightNoWater — default is 3 which is too
                     // conservative for scaffolded descents.  We raise it
@@ -1491,6 +1520,31 @@ public final class PathWalker {
                 settingValueField.set(allowBreakSetting, allowed);
             } catch (Exception e) {
                 LOGGER.warn("PathWalker: failed to set Baritone allowBreak={}", allowed, e);
+            }
+        }
+
+        // Let Baritone initiate grounded flights.
+        static void enableElytraSupport() {
+            if (!settingsReady || elytraAutoJumpSetting == null || elytraSupportEnabled) return;
+            try {
+                savedElytraAutoJump = (Boolean) settingValueField.get(elytraAutoJumpSetting);
+                settingValueField.set(elytraAutoJumpSetting, true);
+                elytraSupportEnabled = true;
+                LOGGER.info("PathWalker: enabled Baritone grounded elytra launch");
+            } catch (Exception e) {
+                LOGGER.warn("PathWalker: failed to enable Baritone elytraAutoJump", e);
+            }
+        }
+
+        // Restore the user's launch setting.
+        static void restoreElytraSupport() {
+            if (!settingsReady || elytraAutoJumpSetting == null || !elytraSupportEnabled) return;
+            try {
+                settingValueField.set(elytraAutoJumpSetting, savedElytraAutoJump);
+            } catch (Exception e) {
+                LOGGER.warn("PathWalker: failed to restore Baritone elytraAutoJump", e);
+            } finally {
+                elytraSupportEnabled = false;
             }
         }
 

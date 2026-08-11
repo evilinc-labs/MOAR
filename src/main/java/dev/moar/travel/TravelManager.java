@@ -8,7 +8,6 @@ import dev.moar.travel.bounce.BounceController;
 import dev.moar.travel.bridge.TravelBaritoneBridge;
 import dev.moar.travel.detour.DetourPlanner;
 import dev.moar.travel.elytra.ElytraManager;
-import dev.moar.travel.flight.FlightController;
 import dev.moar.travel.highway.HighwayDetectorBridge;
 import dev.moar.travel.highway.HighwayVerifier;
 import dev.moar.travel.highway.IntegrityReport;
@@ -57,7 +56,6 @@ public final class TravelManager {
     private final TravelState          state    = new TravelState();
     private final TravelBaritoneBridge bridge   = TravelBaritoneBridge.get();
     private final BounceController     bounce   = BounceController.get();
-    private final FlightController     flight   = FlightController.get();
     private final HighwayPlanner       planner  = new HighwayPlanner();
     private final HighwayDetectorBridge detector = HighwayDetectorBridge.get();
     private final HighwayVerifier      verifier = HighwayVerifier.get();
@@ -86,7 +84,7 @@ public final class TravelManager {
     private static final int TAKEOFF_SEARCH_STEP = 4;
     private static final int TAKEOFF_SEARCH_LATERAL = 10;
     private static final int TAKEOFF_FALLBACK_EXTENSION = 32;
-    private static final int TAKEOFF_SEARCH_UP = 2;
+    private static final int TAKEOFF_SEARCH_UP = 12;
     private static final int TAKEOFF_SEARCH_DOWN = 40;
     private static final int BOUNCE_ENTRY_ALIGN_RADIUS = 3;
     private static final int MINING_DESCENT_THRESHOLD = 4;
@@ -115,22 +113,16 @@ public final class TravelManager {
     private static final int RESUPPLY_LOCAL_SETTLE_TICKS = 40;
     private static final int RESUPPLY_BARITONE_QUIET_TICKS = 10;
     private static final int RESUPPLY_LANDING_SEARCH_TIMEOUT_TICKS = 60;
-    private static final int FLIGHT_PROGRESS_TIMEOUT_TICKS = 200;
-    private static final int FLIGHT_GLIDE_LOSS_TIMEOUT_TICKS = 40;
-    private static final int FLIGHT_PROGRESS_MIN_BLOCKS = 4;
-    private static final int BARITONE_FLIGHT_RECOVERY_TICKS = 160;
     private static final int BARITONE_FLIGHT_RETRY_TICKS = 40;
-    private static final int MAX_FLIGHT_RECOVERY_ATTEMPTS = 2;
     private static final int MAX_FLIGHT_ESCAPE_ATTEMPTS = 3;
     private static final int MAX_LAUNCH_CANDIDATES = 24;
     private static final int LAUNCH_CORRIDOR_DISTANCE = 24;
-    private static final int MANUAL_RECOVERY_CORRIDOR_DISTANCE = 24;
+    private static final int BARITONE_AUTO_JUMP_LEVEL = 31;
+    private static final int BARITONE_AUTO_JUMP_MIN_DROP = 8;
     private static final int HEALTH_LOSS_WINDOW_TICKS = 60;
     private static final float MIN_SAFE_TRAVEL_HEALTH = 14.0F;
     private static final float CRITICAL_TRAVEL_HEALTH = 8.0F;
     private static final float MAX_RECENT_HEALTH_LOSS = 6.0F;
-    private static final float MANUAL_RECOVERY_MIN_HEALTH = 18.0F;
-    private static final float MANUAL_RECOVERY_MAX_RECENT_LOSS = 2.0F;
 
     private int miningRetargetAttempts = 0;
     private MiningTraversal miningTraversal = MiningTraversal.NONE;
@@ -152,12 +144,6 @@ public final class TravelManager {
     private boolean connectionPaused;
     private boolean connectionResumePending;
     private BlockPos connectionResumeTarget;
-    private BlockPos flightProgressTarget;
-    private int flightBestDistance = Integer.MAX_VALUE;
-    private int flightNoProgressTicks;
-    private int flightNotGlidingTicks;
-    private int baritoneFlightRecoveryTicks;
-    private int flightRecoveryAttempts;
     private int flightEscapeAttempts;
     private boolean flightEscapePrerequisite;
     private BlockPos lastAutoResumeAbortPos;
@@ -191,7 +177,6 @@ public final class TravelManager {
         }
         bridge.cancelAll();
         bounce.stop();
-        flight.stop();
         elytra.stop();
         state.reset();
         verifier.clear();
@@ -213,7 +198,6 @@ public final class TravelManager {
         detourMinSafeY = Integer.MIN_VALUE;
         clearPendingResupply();
         clearConnectionCheckpoint();
-        clearFlightProgress();
         clearFlightRecovery();
         resetTravelSafetyMonitor();
         transition(TravelPhase.PLANNING, "user start: " + mission);
@@ -235,13 +219,11 @@ public final class TravelManager {
         detourMinSafeY = Integer.MIN_VALUE;
         clearPendingResupply();
         clearConnectionCheckpoint();
-        clearFlightProgress();
         clearFlightRecovery();
         resetTravelSafetyMonitor();
         elytra.stop();
         bridge.cancelAll();
         bounce.stop();
-        flight.stop();
         state.owner = MovementOwner.NONE;
         if (state.phase == TravelPhase.IDLE) {
             state.abortReason = "user stop";
@@ -303,7 +285,6 @@ public final class TravelManager {
         if (state.phase == TravelPhase.IDLE || state.phase.isTerminal() || state.mission == null) {
             bridge.cancelAll();
             bounce.stop();
-            flight.stop();
             return;
         }
         TravelPhase from = state.phase;
@@ -437,7 +418,6 @@ public final class TravelManager {
             case SETTLE                 -> tickSettle();
             case LAUNCH                 -> tickLaunch();
             case ELYTRA_CRUISE          -> tickElytraCruise();
-            case ELYTRA_FALLBACK        -> tickElytraFallback();
             default -> { /* IDLE handled above */ }
         }
     }
@@ -445,7 +425,6 @@ public final class TravelManager {
     private void driveOwner() {
         if      (state.owner == MovementOwner.BARITONE) bridge.tick();
         else if (state.owner == MovementOwner.BOUNCE)   bounce.tick();
-        else if (state.owner == MovementOwner.FLIGHT)   flight.tick();
     }
 
     private void tickVerifier() {
@@ -690,7 +669,6 @@ public final class TravelManager {
             releaseOwner(state.owner);
             state.owner = MovementOwner.NONE;
             bridge.cancelAll();
-            flight.stop();
             LOGGER.error("[Travel] no verified resupply landing in loaded chunks; coasting while rescanning");
         }
         transition(TravelPhase.LANDING_FOR_RESUPPLY,
@@ -778,7 +756,6 @@ public final class TravelManager {
         }
         state.owner = MovementOwner.NONE;
         bridge.clearElytraTarget();
-        flight.stop();
         resupplyLandingTarget = null;
         resupplyGroundedTicks = 0;
         resupplyLocalSettleTicks = 0;
@@ -1145,11 +1122,6 @@ public final class TravelManager {
             if (startElytraResupplyIfNeeded()) return;
             if (startFireworkRestockIfNeeded()) return;
         }
-        if (flight.isCruising() && isPlayerGliding()) {
-            LOGGER.info("[Travel] LAUNCH -> ELYTRA_FALLBACK (manual flight entered cruise)");
-            transition(TravelPhase.ELYTRA_FALLBACK, "manual flight entered cruise");
-            return;
-        }
         if (bridge.isElytraOwning() && isPlayerGliding()) {
             LOGGER.info("[Travel] LAUNCH -> ELYTRA_CRUISE (Baritone elytra active, t={})", state.ticksInPhase);
             acquireOwner(MovementOwner.BARITONE);
@@ -1160,28 +1132,14 @@ public final class TravelManager {
         BlockPos dest = currentFlightDestination();
         if (dest == null && state.mission != null) dest = state.mission.destination;
 
-        if (flight.isArrived()) {
-            completeFlightLeg("manual launch reached destination before Baritone takeover");
-            return;
-        }
-        if (flight.isStuck()) {
-            handleUnsafeFlightFailure(dest, "manual elytra launch assist failed");
-            return;
-        }
-
         // Retry the flight goal without flooding Baritone.
         if (bridge.isAvailable() && dest != null
                 && state.ticksInPhase % BARITONE_FLIGHT_RETRY_TICKS == 0) {
             startBaritoneElytraFlight(dest);
         }
 
-        if (state.ticksInPhase > 200) {
-            if (flight.isActive()) {
-                LOGGER.warn("[Travel] Baritone elytra did not start within 200 ticks — continuing on manual flight");
-                transition(TravelPhase.ELYTRA_FALLBACK, "Baritone elytra launch timeout, continuing manually");
-            } else {
-                handleUnsafeFlightFailure(dest, "Baritone elytra did not start within 200 ticks");
-            }
+        if (state.ticksInPhase > 200 && !bridge.isElytraOwning()) {
+            handleUnsafeFlightFailure(dest, "Baritone elytra did not start within 200 ticks");
         }
     }
 
@@ -1195,45 +1153,19 @@ public final class TravelManager {
             completeFlightLeg("elytra cruise arrived");
             return;
         }
-        if (dest != null && isBaritoneFlightProgressStalled(dest)) {
-            recoverStalledBaritoneFlight(dest);
-            return;
-        }
         if (bridge.isElytraStuck() || !bridge.isElytraOwning()) {
-            LOGGER.warn("[Travel] ELYTRA_CRUISE: Baritone elytra lost ownership");
-            if (dest != null) {
-                recoverStalledBaritoneFlight(dest);
-            } else {
+            LOGGER.warn("[Travel] ELYTRA_CRUISE: Baritone elytra process ended before arrival");
+            if (dest == null) {
                 abort("Baritone elytra lost and no flight destination");
+                return;
             }
-        }
-    }
-
-    // Fly manually when Baritone cannot claim elytra movement.
-    private void tickElytraFallback() {
-        if (startElytraResupplyIfNeeded()) return;
-        if (startFireworkRestockIfNeeded()) return;
-        BlockPos dest = currentFlightDestination();
-        if (dest == null && state.mission != null) dest = state.mission.destination;
-        if (baritoneFlightRecoveryTicks > 0) baritoneFlightRecoveryTicks--;
-        if (baritoneFlightRecoveryTicks == 0 && bridge.isElytraOwning()) {
-            LOGGER.info("[Travel] ELYTRA_FALLBACK -> ELYTRA_CRUISE (Baritone took over mid-flight)");
-            acquireOwner(MovementOwner.BARITONE);
-            resetFlightProgress(currentFlightDestination());
-            transition(TravelPhase.ELYTRA_CRUISE, "Baritone took over from manual flight");
-            return;
-        }
-        if (flight.isArrived()) {
-            completeFlightLeg("manual elytra flight arrived");
-            return;
-        }
-        if (flight.isStuck()) {
-            handleUnsafeFlightFailure(dest, "manual elytra flight stuck");
-            return;
-        }
-        if (baritoneFlightRecoveryTicks == 0 && bridge.isAvailable() && dest != null
-                && state.ticksInPhase % BARITONE_FLIGHT_RETRY_TICKS == 0) {
+            if (!isPlayerGliding()) {
+                handleUnsafeFlightFailure(dest, "Baritone elytra process ended before arrival");
+                return;
+            }
+            bridge.clearElytraTarget();
             startBaritoneElytraFlight(dest);
+            transition(TravelPhase.LAUNCH, "resubmitting active flight leg to Baritone");
         }
     }
 
@@ -1260,99 +1192,11 @@ public final class TravelManager {
         releaseOwner(state.owner);
         state.owner = MovementOwner.NONE;
         bridge.stopElytra();
-        flight.stop();
-        clearFlightProgress();
         clearFlightRecovery();
         advanceLeg(reason);
     }
 
-    private boolean isBaritoneFlightProgressStalled(BlockPos destination) {
-        BlockPos pos = currentPlayerPos();
-        if (pos == null) return false;
-        if (flightProgressTarget == null || !flightProgressTarget.equals(destination)) {
-            resetFlightProgress(destination);
-        }
-        if (!isPlayerGliding()) {
-            if (SetbackMonitor.get().isCalm()) flightNotGlidingTicks++;
-            return flightNotGlidingTicks >= FLIGHT_GLIDE_LOSS_TIMEOUT_TICKS;
-        }
-        flightNotGlidingTicks = 0;
-        int distance = horizontalDistance(pos, destination);
-        if (flightBestDistance == Integer.MAX_VALUE
-                || distance + FLIGHT_PROGRESS_MIN_BLOCKS <= flightBestDistance) {
-            flightBestDistance = distance;
-            flightNoProgressTicks = 0;
-            return false;
-        }
-        if (SetbackMonitor.get().isCalm()) flightNoProgressTicks++;
-        return flightNoProgressTicks >= FLIGHT_PROGRESS_TIMEOUT_TICKS;
-    }
-
-    private void recoverStalledBaritoneFlight(BlockPos destination) {
-        BlockPos pos = currentPlayerPos();
-        int stalledTicks = Math.max(flightNoProgressTicks, flightNotGlidingTicks);
-        flightRecoveryAttempts++;
-        if (flightRecoveryAttempts > MAX_FLIGHT_RECOVERY_ATTEMPTS) {
-            stopUnsafeFlight("Baritone flight repeatedly stalled; recovery budget exhausted");
-            return;
-        }
-        if (!isPlayerGliding()) {
-            if (startEnclosedFlightEscape(destination, pos, stalledTicks)) return;
-            stopUnsafeFlight("unsafe enclosed takeoff; no escape route found");
-            return;
-        }
-        String unsafeReason = manualFlightRecoveryUnsafeReason(pos, destination);
-        if (unsafeReason != null) {
-            LOGGER.warn("[Travel] manual flight recovery blocked at {}: {}",
-                    pos, unsafeReason);
-            ChatHelper.labelled("Travel", "§cFlight recovery stopped: " + unsafeReason + ".");
-            stopUnsafeFlight("manual flight recovery unsafe: " + unsafeReason);
-            return;
-        }
-        LOGGER.warn("[Travel] Baritone elytra made no destination progress for {}t at {}; "
-                        + "switching to manual recovery toward {} (attempt {}/{})",
-                stalledTicks, pos, destination.toShortString(),
-                flightRecoveryAttempts, MAX_FLIGHT_RECOVERY_ATTEMPTS);
-        releaseOwner(state.owner);
-        state.owner = MovementOwner.NONE;
-        acquireOwner(MovementOwner.FLIGHT);
-        flight.start(destination);
-        baritoneFlightRecoveryTicks = BARITONE_FLIGHT_RECOVERY_TICKS;
-        resetFlightProgress(destination);
-        transition(TravelPhase.ELYTRA_FALLBACK, "Baritone elytra progress stalled; manual recovery");
-    }
-
-    private String manualFlightRecoveryUnsafeReason(BlockPos pos, BlockPos destination) {
-        if (pos == null || destination == null) return "missing flight position";
-        float health = currentEffectiveHealth();
-        if (health < MANUAL_RECOVERY_MIN_HEALTH) {
-            return String.format("health is %.1f/20", health);
-        }
-        if (recentHealthLoss > MANUAL_RECOVERY_MAX_RECENT_LOSS) {
-            return String.format("recent damage is %.1f", recentHealthLoss);
-        }
-        if (isPlayerInLava()) return "player entered lava";
-        if (isPlayerColliding()) return "player is colliding with terrain";
-        if (!hasClearFlightCorridor(pos, destination, MANUAL_RECOVERY_CORRIDOR_DISTANCE)) {
-            return "forward flight corridor is blocked or unloaded";
-        }
-        return null;
-    }
-
-    private void resetFlightProgress(BlockPos destination) {
-        flightProgressTarget = destination;
-        flightBestDistance = Integer.MAX_VALUE;
-        flightNoProgressTicks = 0;
-        flightNotGlidingTicks = 0;
-    }
-
-    private void clearFlightProgress() {
-        resetFlightProgress(null);
-        baritoneFlightRecoveryTicks = 0;
-    }
-
     private void clearFlightRecovery() {
-        flightRecoveryAttempts = 0;
         flightEscapeAttempts = 0;
         flightEscapePrerequisite = false;
     }
@@ -1375,7 +1219,6 @@ public final class TravelManager {
         releaseOwner(state.owner);
         state.owner = MovementOwner.NONE;
         bridge.cancelAll();
-        flight.stop();
         currentLegIndex--;
         miningRetargetAttempts = 0;
         LOGGER.warn("[Travel] flight lost glide for {}t in enclosed terrain; mining escape to {} "
@@ -1400,9 +1243,15 @@ public final class TravelManager {
 
         String reason = null;
         boolean disconnect = false;
-        if (isPlayerInLava()) {
-            reason = "player entered lava";
+        if (isDelegatedBaritoneFlight()) {
+            if (health > CRITICAL_TRAVEL_HEALTH) return false;
+            reason = String.format("critical health %.1f/20", health);
             disconnect = true;
+        } else if (isPlayerInLava()) {
+            reason = "player entered lava";
+            disconnect = health <= CRITICAL_TRAVEL_HEALTH
+                    || (health <= MIN_SAFE_TRAVEL_HEALTH
+                    && recentHealthLoss >= MAX_RECENT_HEALTH_LOSS);
         } else if (health <= CRITICAL_TRAVEL_HEALTH) {
             reason = String.format("critical health %.1f/20", health);
             disconnect = true;
@@ -1420,6 +1269,11 @@ public final class TravelManager {
         stopUnsafeFlight("safety interlock: " + reason);
         if (disconnect) elytra.disconnectForTravelSafety(reason);
         return true;
+    }
+
+    private boolean isDelegatedBaritoneFlight() {
+        return state.phase == TravelPhase.ELYTRA_CRUISE
+                && state.owner == MovementOwner.BARITONE;
     }
 
     private void updateTravelSafetyMonitor(float health) {
@@ -1444,7 +1298,6 @@ public final class TravelManager {
         autoResumeAttempts = MAX_AUTO_RESUME_ATTEMPTS;
         bridge.cancelAll();
         bounce.stop();
-        flight.stop();
         elytra.stop();
         state.owner = MovementOwner.NONE;
         state.abortReason = reason;
@@ -1553,7 +1406,6 @@ public final class TravelManager {
         } else if (leg instanceof HighwayRoute.FlightLeg flightLeg) {
             if (flightEscapePrerequisite) {
                 flightEscapePrerequisite = false;
-                flightRecoveryAttempts = 0;
             } else {
                 clearFlightRecovery();
             }
@@ -1571,8 +1423,9 @@ public final class TravelManager {
                     stopUnsafeFlight("flight leg has no verified open-nether launch anchor");
                     return;
                 }
-                acquireOwner(MovementOwner.FLIGHT);
-                flight.start(flightLeg.destination());
+                acquireOwner(MovementOwner.BARITONE);
+                LOGGER.info("[Travel] handing raw flight to Baritone dest={}",
+                        flightLeg.destination().toShortString());
                 startBaritoneElytraFlight(flightLeg.destination());
                 transition(TravelPhase.LAUNCH, reason + " -> launching to " + flightLeg.destination().toShortString());
             } else {
@@ -1858,12 +1711,10 @@ public final class TravelManager {
         autoResumeTicks = 0;
         autoResumeAttempts = MAX_AUTO_RESUME_ATTEMPTS;
         clearPendingResupply();
-        clearFlightProgress();
         clearFlightRecovery();
         elytra.stop();
         bridge.cancelAll();
         bounce.stop();
-        flight.stop();
         state.owner = MovementOwner.NONE;
         state.abortReason = "player died";
         transition(TravelPhase.ABORTED, "player died; automation halted");
@@ -1879,7 +1730,6 @@ public final class TravelManager {
         switch (cur) {
             case BARITONE        -> bridge.cancelAll();
             case BOUNCE          -> bounce.stop();
-            case FLIGHT          -> flight.stop();
             case NONE            -> { /* nothing */ }
         }
     }
@@ -1887,7 +1737,6 @@ public final class TravelManager {
     private void transition(TravelPhase next, String reason) {
         TravelPhase from = state.phase;
         if (from == next) return;
-        if (next == TravelPhase.LAUNCH) clearFlightProgress();
         if (from == TravelPhase.DETOURING && next != TravelPhase.DETOURING) {
             detourMinSafeY = Integer.MIN_VALUE;
         }
@@ -2018,8 +1867,7 @@ public final class TravelManager {
         BlockPos flightTarget = currentFlightDestination();
         if (flightTarget == null && state.mission != null) flightTarget = state.mission.destination;
         if ((state.phase == TravelPhase.LAUNCH
-                || state.phase == TravelPhase.ELYTRA_CRUISE
-                || state.phase == TravelPhase.ELYTRA_FALLBACK)
+                || state.phase == TravelPhase.ELYTRA_CRUISE)
                 && flightTarget != null) {
             resupplyResumePhase = TravelPhase.LAUNCH;
             resupplyResumeTarget = flightTarget;
@@ -2053,8 +1901,7 @@ public final class TravelManager {
     }
 
     private BlockPos checkpointTargetFor(TravelPhase phase) {
-        if (phase == TravelPhase.LAUNCH || phase == TravelPhase.ELYTRA_CRUISE
-                || phase == TravelPhase.ELYTRA_FALLBACK) {
+        if (phase == TravelPhase.LAUNCH || phase == TravelPhase.ELYTRA_CRUISE) {
             BlockPos target = currentFlightDestination();
             return target != null ? target : state.mission.destination;
         }
@@ -2088,10 +1935,8 @@ public final class TravelManager {
             }
             return;
         }
-        if (resumePhase == TravelPhase.LAUNCH || resumePhase == TravelPhase.ELYTRA_CRUISE
-                || resumePhase == TravelPhase.ELYTRA_FALLBACK) {
+        if (resumePhase == TravelPhase.LAUNCH || resumePhase == TravelPhase.ELYTRA_CRUISE) {
             bridge.cancelAll();
-            flight.stop();
             state.owner = MovementOwner.NONE;
             state.route = null;
             currentLegIndex = -1;
@@ -2164,8 +2009,13 @@ public final class TravelManager {
         if (resupplyResumePhase == TravelPhase.LAUNCH && resupplyResumeTarget != null) {
             BlockPos target = resupplyResumeTarget;
             clearResupplyResumeContext();
-            acquireOwner(MovementOwner.FLIGHT);
-            flight.start(target);
+            BlockPos pos = currentPlayerPos();
+            if (pos != null && !isPlayerGliding() && !isStrongLaunchAnchor(pos, target)) {
+                if (startEnclosedFlightEscape(target, pos, 0)) return true;
+                stopUnsafeFlight("resupply completed without a launch-capable anchor");
+                return true;
+            }
+            acquireOwner(MovementOwner.BARITONE);
             startBaritoneElytraFlight(target);
             transition(TravelPhase.LAUNCH, reason + " -> resuming flight to " + target.toShortString());
             return true;
@@ -2291,7 +2141,35 @@ public final class TravelManager {
         int score = scoreTakeoffCandidate(pos, dirX, dirZ);
         if (score < 56) return false;
         return hasLaunchBubble(pos, 4, 4)
-                && hasClearLaunchCorridor(pos, dirX, dirZ, LAUNCH_CORRIDOR_DISTANCE);
+                && hasClearLaunchCorridor(pos, dirX, dirZ, LAUNCH_CORRIDOR_DISTANCE)
+                && hasBaritoneAutoJumpDrop(pos, dirX, dirZ);
+    }
+
+    private static boolean hasBaritoneAutoJumpDrop(BlockPos pos, int dirX, int dirZ) {
+        if (pos.getY() - BARITONE_AUTO_JUMP_LEVEL < BARITONE_AUTO_JUMP_MIN_DROP) return false;
+
+        int perpX = dirZ;
+        int perpZ = -dirX;
+        for (int step = 1; step <= 3; step++) {
+            for (int side = -1; side <= 1; side++) {
+                BlockPos edge = new BlockPos(
+                        pos.getX() + dirX * step + perpX * side,
+                        pos.getY(),
+                        pos.getZ() + dirZ * step + perpZ * side);
+                boolean clearDrop = true;
+                for (int depth = 1; depth <= BARITONE_AUTO_JUMP_MIN_DROP; depth++) {
+                    BlockPos feet = new BlockPos(edge.getX(), edge.getY() - depth, edge.getZ());
+                    BlockPos head = new BlockPos(feet.getX(), feet.getY() + 1, feet.getZ());
+                    if (!isChunkLoaded(feet) || !isChunkLoaded(head)
+                            || hasCollision(feet) || hasCollision(head)) {
+                        clearDrop = false;
+                        break;
+                    }
+                }
+                if (clearDrop) return true;
+            }
+        }
+        return false;
     }
 
     private static boolean hasLaunchBubble(BlockPos pos, int radius, int height) {
@@ -2465,7 +2343,8 @@ public final class TravelManager {
         for (ScoredLaunchAnchor candidate : candidates) {
             if (hasLaunchBubble(candidate.position(), 4, 4)
                     && hasClearLaunchCorridor(candidate.position(), dirX, dirZ,
-                    LAUNCH_CORRIDOR_DISTANCE)) {
+                    LAUNCH_CORRIDOR_DISTANCE)
+                    && hasBaritoneAutoJumpDrop(candidate.position(), dirX, dirZ)) {
                 return candidate.position();
             }
         }

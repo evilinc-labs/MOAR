@@ -246,12 +246,14 @@ public class MoarMod implements ClientModInitializer {
 
         // Restart API server when joining a server/world
         ClientPlayConnectionEvents.JOIN.register((handler, sender, client) -> {
-            if (API_SERVER != null) API_SERVER.start();
-            TravelManager.get().onReconnect();
+            client.execute(() -> {
+                if (API_SERVER != null) API_SERVER.start();
+                TravelManager.get().onReconnect();
+            });
         });
 
         // Clean up all state when leaving a server/world
-        ClientPlayConnectionEvents.DISCONNECT.register((handler, client) -> {
+        ClientPlayConnectionEvents.DISCONNECT.register((handler, client) -> client.execute(() -> {
             PRINTER.onDisconnect();
             QUEUE_MANAGER.onDisconnect();
             STASH_MANAGER.stop();
@@ -266,7 +268,7 @@ public class MoarMod implements ClientModInitializer {
             PrinterDatabase.clearScaffold();
             DATABASE.close();
             if (API_SERVER != null) API_SERVER.close();
-        });
+        }));
 
         LOGGER.info("MOAR initialized.");
     }

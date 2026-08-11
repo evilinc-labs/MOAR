@@ -28,8 +28,6 @@ public enum TravelPhase {
     LAUNCH,
     // Let Baritone own elytra flight.
     ELYTRA_CRUISE,
-    // Fly manually with rockets.
-    ELYTRA_FALLBACK,
     // Mission finished.
     ARRIVED,
     // Mission aborted.
@@ -41,7 +39,7 @@ public enum TravelPhase {
     public boolean isReserved() {
         return this == BOUNCING || this == VERIFYING_DETOUR || this == DETOURING
                 || this == LANDING_FOR_RESUPPLY || this == LAUNCH
-                || this == ELYTRA_CRUISE || this == ELYTRA_FALLBACK;
+                || this == ELYTRA_CRUISE;
     }
 
     // Terminal phases fall back to IDLE automatically.

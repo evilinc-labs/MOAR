@@ -52,7 +52,7 @@ public final class TravelBaritoneBridge {
     // Stop all Baritone movement.
     public void cancelAll() {
         PathWalker.stop();
-        PathWalker.clearElytraTarget();
+        PathWalker.stopElytra();
     }
 
     public boolean isPathing()   { return PathWalker.isActive() && !PathWalker.hasArrived() && !PathWalker.isStuck(); }
