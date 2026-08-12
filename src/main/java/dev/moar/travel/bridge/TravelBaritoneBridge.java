@@ -63,7 +63,12 @@ public final class TravelBaritoneBridge {
 
     // Start Baritone elytra flight.
     public void startElytraFlight(BlockPos dest) {
-        PathWalker.startElytra(dest);
+        startElytraFlight(dest, false);
+    }
+
+    // Start flight with an optional X/Z-only goal.
+    public void startElytraFlight(BlockPos dest, boolean horizontalGoal) {
+        PathWalker.startElytra(dest, horizontalGoal);
     }
 
     // Check whether Baritone owns elytra movement.
@@ -84,6 +89,11 @@ public final class TravelBaritoneBridge {
     // Stop Baritone elytra flight.
     public void stopElytra() {
         PathWalker.stopElytra();
+    }
+
+    // Forget a completed elytra target without cancelling Baritone again.
+    public void clearElytraTarget() {
+        PathWalker.clearElytraTarget();
     }
 
     // Tick PathWalker while Baritone owns movement.

@@ -16,6 +16,9 @@ public final class TravelMission {
     // Final destination.
     public final BlockPos destination;
 
+    // Treat the final destination as X/Z-only.
+    public final boolean horizontalDestination;
+
     // Allow free-nether flight.
     public final boolean useElytra;
 
@@ -36,6 +39,7 @@ public final class TravelMission {
 
     private TravelMission(Builder b) {
         this.destination = b.destination;
+        this.horizontalDestination = b.horizontalDestination;
         this.useElytra = b.useElytra;
         this.allowDetour = b.allowDetour;
         this.autoResume = b.autoResume;
@@ -51,6 +55,7 @@ public final class TravelMission {
     @Override
     public String toString() {
         return "TravelMission#" + id + "{dest=" + destination.toShortString()
+                + ", xzOnly=" + horizontalDestination
                 + ", elytra=" + useElytra + ", detour=" + allowDetour
                 + ", autoResume=" + autoResume
                 + ", flightThreshold=" + freeNetherFlightThreshold + "}";
@@ -58,6 +63,7 @@ public final class TravelMission {
 
     public static final class Builder {
         private final BlockPos destination;
+        private boolean horizontalDestination;
         private boolean useElytra = true;
         private boolean allowDetour = true;
         private boolean autoResume = true;
@@ -68,6 +74,7 @@ public final class TravelMission {
             this.destination = destination;
         }
 
+        public Builder horizontalDestination(boolean v)   { this.horizontalDestination = v; return this; }
         public Builder useElytra(boolean v)              { this.useElytra = v; return this; }
         public Builder allowDetour(boolean v)            { this.allowDetour = v; return this; }
         public Builder autoResume(boolean v)             { this.autoResume = v; return this; }

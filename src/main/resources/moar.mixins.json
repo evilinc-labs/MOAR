@@ -6,7 +6,9 @@
   "client": [
     "KeyboardInputMixin",
     "PlacementMovementSuppressMixin",
-    "PacketTelemetryMixin"
+    "PacketTelemetryMixin",
+    "BaritoneNetherPathfinderContextMixin",
+    "BaritoneBlockStateOctreeMixin"
   ],
   "injectors": {
     "defaultRequire": 1

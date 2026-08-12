@@ -38,6 +38,7 @@ import org.slf4j.LoggerFactory;
 public final class TravelCommand {
 
     private static final Logger LOGGER = LoggerFactory.getLogger("MOAR/Travel");
+    private static final int HORIZONTAL_GOAL_REFERENCE_Y = 64;
 
     private TravelCommand() {}
 
@@ -81,7 +82,8 @@ public final class TravelCommand {
                                             .executes(ctx -> doElytraResupplyCount(
                                                     IntegerArgumentType.getInteger(ctx, "count")))))
                             .then(ClientCommands.literal("repair")
-                                    .executes(ctx -> doRepairElytras()))));
+                                    .executes(ctx -> doRepairElytras()))))
+                    .then(ClientCommands.literal("stop").executes(ctx -> doStop()));
             *//*?} else {*/
             var root = ClientCommandManager.literal("moar").then(ClientCommandManager.literal("travel")
                     .then(ClientCommandManager.literal("goto")
@@ -120,7 +122,8 @@ public final class TravelCommand {
                                             .executes(ctx -> doElytraResupplyCount(
                                                     IntegerArgumentType.getInteger(ctx, "count")))))
                             .then(ClientCommandManager.literal("repair")
-                                    .executes(ctx -> doRepairElytras()))));
+                                    .executes(ctx -> doRepairElytras()))))
+                    .then(ClientCommandManager.literal("stop").executes(ctx -> doStop()));
             /*?}*/
             dispatcher.register(root);
             LOGGER.info("TravelCommand: /moar travel registered");
@@ -165,7 +168,9 @@ public final class TravelCommand {
                 origin.getX() + dx * 500_000,
                 origin.getY(),
                 origin.getZ() + dz * 500_000);
-        TravelMission m = TravelMission.to(dest).build();
+        TravelMission m = TravelMission.to(dest)
+                .horizontalDestination(true)
+                .build();
         boolean ok = TravelManager.get().start(m);
         if (ok) {
             chat("§a[Travel] bounce started → axis (" + dx + "," + dz
@@ -182,10 +187,12 @@ public final class TravelCommand {
             chat("§c[Travel] no player");
             return 0;
         }
-        int nx = overworldCoords ? x / 8 : x;
-        int nz = overworldCoords ? z / 8 : z;
-        BlockPos dest = new BlockPos(nx, origin.getY(), nz);
-        TravelMission m = TravelMission.to(dest).build();
+        int nx = overworldCoords ? Math.floorDiv(x, 8) : x;
+        int nz = overworldCoords ? Math.floorDiv(z, 8) : z;
+        BlockPos dest = new BlockPos(nx, HORIZONTAL_GOAL_REFERENCE_Y, nz);
+        TravelMission m = TravelMission.to(dest)
+                .horizontalDestination(true)
+                .build();
         boolean ok = TravelManager.get().start(m);
         if (ok) {
             String note = overworldCoords
@@ -208,7 +215,7 @@ public final class TravelCommand {
 
     private static int doStop() {
         TravelManager.get().stop();
-        chat("§e[Travel] stop requested");
+        chat("§e[Travel] stopped");
         return 1;
     }
 

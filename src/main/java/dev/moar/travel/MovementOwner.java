@@ -4,6 +4,5 @@ package dev.moar.travel;
 public enum MovementOwner {
     NONE,
     BARITONE,
-    BOUNCE,
-    FLIGHT
+    BOUNCE
 }

@@ -5,8 +5,17 @@ public final class BounceTuning {
 
     private BounceTuning() {}
 
-    // Abort before a fall reaches lava.
-    public static int FALL_Y_THRESHOLD = 2;
+    // Begin recovery below the highway.
+    public static double FALL_TRIGGER_DEPTH = 0.5;
+
+    // Confirm a fall before abandoning the highway leg.
+    public static int FALL_CONFIRM_TICKS = 3;
+
+    // Abort immediately after a deep drop.
+    public static double FALL_IMMEDIATE_DEPTH = 5.0;
+
+    // Stop before entering unavailable highway terrain.
+    public static int TERRAIN_LOAD_SCAN_AHEAD = 12;
 
     // Abort when progress stalls.
     public static int STUCK_TICKS = 100;
@@ -38,8 +47,11 @@ public final class BounceTuning {
     // Retry just after the apex before horizontal speed decays.
     public static double ELYTRA_ACTIVATE_VY_THRESHOLD = -0.02;
 
-    // Wait for the server-visible jump before launching.
+    // Leave one release tick before the flight key edge.
     public static int LAUNCH_MIN_AIRBORNE_TICKS = 2;
+
+    // Match vanilla's sprint-jump horizontal impulse.
+    public static double SPRINT_JUMP_HORIZONTAL_IMPULSE = 0.20;
 
     // Flatten the arc before the player's head reaches a low ceiling.
     public static double ELYTRA_ACTIVATE_MAX_RISE = 0.35;
@@ -53,10 +65,9 @@ public final class BounceTuning {
     // Confirm glide before advancing the launch phase.
     public static int LAUNCH_CONFIRM_TICKS = 3;
 
-    // Retry one missed launch after its key edge clears.
-    public static int LAUNCH_RETRY_AFTER_TICKS = 4;
-    public static int LAUNCH_HIGH_SPEED_RETRY_AFTER_TICKS = 4;
-    public static double LAUNCH_HIGH_SPEED_RETRY_MAX_ASCENT_VELOCITY = 0.04;
+    // Give the first launch edge time to settle before retrying.
+    public static int LAUNCH_RETRY_AFTER_TICKS = 3;
+    public static double LAUNCH_RETRY_MAX_ASCENT_VELOCITY = 0.04;
     public static int LAUNCH_ATTEMPTS_PER_JUMP = 2;
 
     // Suspend launch during repeated correction episodes.
@@ -91,9 +102,9 @@ public final class BounceTuning {
     public static float GLIDE_ACCEL_DIVE_MIN_PITCH = 50.0f;
     public static float GLIDE_ACCEL_DIVE_MAX_PITCH = 72.0f;
     public static float GLIDE_ACCEL_DIVE_MAX_DOWN_STEP = 1.25f;
-    public static float GLIDE_ACCEL_DIVE_MAX_UP_STEP = 2.00f;
+    public static float GLIDE_ACCEL_DIVE_MAX_UP_STEP = 4.00f;
     public static float GLIDE_ACCEL_APEX_MAX_PITCH_STEP = 0.35f;
-    public static float GLIDE_ACCEL_HIGH_SPEED_APEX_MAX_UP_STEP = 1.50f;
+    public static float GLIDE_ACCEL_HIGH_SPEED_APEX_MAX_UP_STEP = 2.50f;
     public static double GLIDE_ACCEL_APEX_VELOCITY_BAND = 0.08;
     public static double GLIDE_ACCEL_VERTICAL_ACCEL_FILTER = 0.25;
     public static double GLIDE_ACCEL_VERTICAL_ACCEL_LIMIT = 0.10;
@@ -123,7 +134,7 @@ public final class BounceTuning {
     public static double GLIDE_MODEL_INITIAL_LAUNCH_IMPULSE = 0.15;
     public static double GLIDE_MODEL_LAUNCH_IMPULSE_FILTER = 0.20;
     public static double GLIDE_MODEL_MAX_LAUNCH_IMPULSE = 0.30;
-    public static double GLIDE_MODEL_MIN_TOUCHDOWN_SPEED = 2.0;
+    public static double GLIDE_MODEL_MIN_TOUCHDOWN_SPEED = 1.90;
     public static double GLIDE_MODEL_MAX_CYCLE_SPEED_DROP = 0.03;
     public static double GLIDE_MODEL_CYCLE_GAIN_FILTER = 0.15;
     public static double ELYTRA_GRAVITY = 0.08;
@@ -143,5 +154,8 @@ public final class BounceTuning {
 
     // Re-arm flight only after corrected movement has settled.
     public static int CORRECTION_REARM_TICKS = 80;
+
+    // Recenter after repeated sprint loss during launch.
+    public static int SPRINT_LOSS_RECOVERY_JUMPS = 3;
 
 }

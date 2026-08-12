@@ -18,6 +18,10 @@ base {
     archivesName = property("mod.id") as String
 }
 
+repositories {
+    maven("https://babbaj.github.io/maven/")
+}
+
 val requiredJava = when {
     isUnobfuscated -> JavaVersion.toVersion(25)
     sc.current.parsed >= "1.20.5" -> JavaVersion.VERSION_21
@@ -41,6 +45,9 @@ dependencies {
     // SQLite JDBC — bundled into the mod jar
     val sqlite = "implementation"("org.xerial:sqlite-jdbc:3.49.1.0")!!
     "include"(sqlite)
+
+    // Compile the optional Baritone native-call compatibility mixin.
+    "compileOnly"("dev.babbaj:nether-pathfinder:1.4.1")
 }
 
 extensions.configure<net.fabricmc.loom.api.LoomGradleExtensionAPI> {

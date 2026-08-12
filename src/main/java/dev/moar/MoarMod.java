@@ -45,9 +45,13 @@ import net.minecraft.client.util.InputUtil;
 /*?}*/
 /*? if >=26.1 {*//*
 import net.minecraft.resources.Identifier;
+import net.minecraft.network.chat.Component;
 *//*?} else if >=1.21.10 {*//*
 import net.minecraft.util.Identifier;
-*//*?}*/
+import net.minecraft.text.Text;
+*//*?} else {*/
+import net.minecraft.text.Text;
+/*?}*/
 import org.lwjgl.glfw.GLFW;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -73,9 +77,11 @@ public class MoarMod implements ClientModInitializer {
     /*? if >=26.1 {*//*
     private static KeyMapping toggleKey;
     private static KeyMapping guiKey;
+    private static KeyMapping emergencyStopKey;
     *//*?} else {*/
     private static KeyBinding toggleKey;
     private static KeyBinding guiKey;
+    private static KeyBinding emergencyStopKey;
     /*?}*/
 
     @Override
@@ -119,6 +125,21 @@ public class MoarMod implements ClientModInitializer {
                 InputUtil.Type.KEYSYM,
                 /*?}*/
                 GLFW.GLFW_KEY_KP_9,
+                keyCategory
+        ));
+
+        /*? if >=26.1 {*//*
+        emergencyStopKey = KeyMappingHelper.registerKeyMapping(new KeyMapping(
+        *//*?} else {*/
+        emergencyStopKey = KeyBindingHelper.registerKeyBinding(new KeyBinding(
+        /*?}*/
+                "key.moar.emergency_stop",
+                /*? if >=26.1 {*//*
+                InputConstants.Type.KEYSYM,
+                *//*?} else {*/
+                InputUtil.Type.KEYSYM,
+                /*?}*/
+                GLFW.GLFW_KEY_END,
                 keyCategory
         ));
 
@@ -169,6 +190,24 @@ public class MoarMod implements ClientModInitializer {
                 requestGuiOpen();
             }
 
+            /*? if >=26.1 {*//*
+            while (emergencyStopKey.consumeClick()) {
+            *//*?} else {*/
+            while (emergencyStopKey.wasPressed()) {
+            /*?}*/
+                TravelManager.get().stop();
+                LOGGER.warn("Emergency travel stop requested");
+                /*? if >=26.1 {*//*
+                if (client.player != null) {
+                    client.player.sendSystemMessage(Component.literal("§c[MOAR] Emergency travel stop"));
+                }
+                *//*?} else {*/
+                if (client.player != null) {
+                    client.player.sendMessage(Text.literal("§c[MOAR] Emergency travel stop"), false);
+                }
+                /*?}*/
+            }
+
             if (guiOpenRequested) {
                 guiOpenRequested = false;
                 /*? if >=26.2 {*//*
@@ -207,11 +246,14 @@ public class MoarMod implements ClientModInitializer {
 
         // Restart API server when joining a server/world
         ClientPlayConnectionEvents.JOIN.register((handler, sender, client) -> {
-            if (API_SERVER != null) API_SERVER.start();
+            client.execute(() -> {
+                if (API_SERVER != null) API_SERVER.start();
+                TravelManager.get().onReconnect();
+            });
         });
 
         // Clean up all state when leaving a server/world
-        ClientPlayConnectionEvents.DISCONNECT.register((handler, client) -> {
+        ClientPlayConnectionEvents.DISCONNECT.register((handler, client) -> client.execute(() -> {
             PRINTER.onDisconnect();
             QUEUE_MANAGER.onDisconnect();
             STASH_MANAGER.stop();
@@ -219,14 +261,14 @@ public class MoarMod implements ClientModInitializer {
             STASH_MANAGER.getRetriever().stop();
             LANE_MANAGER.stop();
             SPAWN_PROOFER.stop();
-            TravelManager.get().stop();
+            TravelManager.get().onDisconnect();
             PathWalker.stop();
             VelocityMonitor.get().reset();
             SetbackMonitor.get().reset();
             PrinterDatabase.clearScaffold();
             DATABASE.close();
             if (API_SERVER != null) API_SERVER.close();
-        });
+        }));
 
         LOGGER.info("MOAR initialized.");
     }
