@@ -23,20 +23,20 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Set;
 
-// Short-lived packet trace for debugging strict server validation placement rollbacks.
+// Trace packet ordering during server validation failures.
 public final class PacketTelemetry {
 
     private static final Logger LOGGER = LoggerFactory.getLogger("MOAR/Packets");
-    private static final String TRACE_BUILD = "fix75-launch-geometry";
+    private static final String TRACE_BUILD = "fix78-resupply-safety-state";
     private static final int MAX_EVENTS = 768;
     private static final int MAX_FIELDS = 14;
     private static final int MAX_VALUE_LENGTH = 220;
     private static final DateTimeFormatter FILE_TS =
             DateTimeFormatter.ofPattern("yyyyMMdd-HHmmss");
     private static final Set<String> QUIET_PACKET_NAMES = Set.of(
-            "class_2859", // advancement tab noise
-            "class_6374", // recipe/advancement acknowledgement noise
-            "class_9836"  // recipe book noise
+            "class_2859",
+            "class_6374",
+            "class_9836"
     );
 
     private static final Event[] EVENTS = new Event[MAX_EVENTS];
@@ -252,7 +252,7 @@ public final class PacketTelemetry {
                     sb.append(field.getName()).append('=').append(describeValue(value));
                     count++;
                 } catch (Throwable ignored) {
-                    // Some packet internals are intentionally inaccessible.
+                    // Skip inaccessible packet fields.
                 }
             }
         }
@@ -266,7 +266,7 @@ public final class PacketTelemetry {
                 method.setAccessible(true);
                 return method.invoke(target);
             } catch (ReflectiveOperationException ignored) {
-                // Try superclass.
+                // Continue through the class hierarchy.
             } catch (Throwable ignored) {
                 return null;
             }
@@ -322,7 +322,7 @@ public final class PacketTelemetry {
                     sb.append(field.getName()).append('=').append(trim(safe(String.valueOf(nested))));
                     count++;
                 } catch (Throwable ignored) {
-                    // Leave inaccessible nested fields out of the compact trace.
+                    // Skip inaccessible nested fields.
                 }
             }
         }

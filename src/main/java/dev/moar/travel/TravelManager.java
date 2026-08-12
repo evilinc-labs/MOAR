@@ -45,7 +45,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 
-// Travel mission state machine; owns phase progression and movement handoffs.
+// Coordinate travel phases and movement ownership.
 public final class TravelManager {
 
     private static final Logger LOGGER = LoggerFactory.getLogger("MOAR/Travel");
@@ -63,7 +63,7 @@ public final class TravelManager {
 
     private int currentLegIndex = -1;
 
-    // Bounce-leg exit to re-enter after a detour/resupply; null when none active.
+    // Preserve the bounce exit across detours and resupply.
     private BlockPos detourResumeExit;
 
     private int  settleTicks  = 0;
@@ -71,11 +71,10 @@ public final class TravelManager {
     private int  settleYawDx  = 0;
     private int  settleYawDz  = 0;
 
-    // Retry aborted missions after a short delay.
-    private int autoResumeTicks    = 0; // ticks until next re-plan; 0 = none pending
-    private int autoResumeAttempts = 0; // consecutive retries since mission start
-    private static final int AUTO_RESUME_DELAY_TICKS = 100; // 5 s between retries
-    static final int MAX_AUTO_RESUME_ATTEMPTS = 10;          // cap on retry budget
+    private int autoResumeTicks = 0;
+    private int autoResumeAttempts = 0;
+    private static final int AUTO_RESUME_DELAY_TICKS = 100;
+    static final int MAX_AUTO_RESUME_ATTEMPTS = 10;
     private static final int MAX_NO_PROGRESS_AUTO_RESUMES = 3;
     private static final int AUTO_RESUME_PROGRESS_BLOCKS = 8;
     private static final int MAX_MINING_RETARGET_ATTEMPTS = 6;
@@ -280,7 +279,7 @@ public final class TravelManager {
         }
     }
 
-    // Preserve the active leg across an involuntary disconnect.
+    // Preserve the active leg across disconnects.
     public synchronized void onDisconnect() {
         if (state.phase == TravelPhase.IDLE || state.phase.isTerminal() || state.mission == null) {
             bridge.cancelAll();
@@ -306,18 +305,18 @@ public final class TravelManager {
                 from, currentLegIndex, connectionResumeTarget);
     }
 
-    // Resume only after the joined Nether world is available.
+    // Resume after the Nether world loads.
     public synchronized void onReconnect() {
         if (connectionPaused && state.mission != null && state.mission.autoResume) {
             connectionResumePending = true;
         }
     }
 
-    // EC position for ElytraManager resupply.
+    // Register the resupply ender chest.
     public synchronized void setEnderChestPos(BlockPos pos) { elytra.setEnderChestPos(pos); }
     public synchronized BlockPos getEnderChestPos()         { return elytra.getEnderChestPos(); }
 
-    // Repair worn elytra without a travel mission; returns to IDLE when done.
+    // Repair elytra outside a travel mission.
     public synchronized boolean startStandaloneRepair() {
         if (state.phase != TravelPhase.IDLE) {
             LOGGER.warn("[Travel] startStandaloneRepair rejected: phase={}", state.phase);
@@ -351,7 +350,7 @@ public final class TravelManager {
 
     public synchronized TravelPhase currentPhase() { return state.phase; }
 
-    // Drive bounce before movement physics.
+    // Apply bounce controls before movement physics.
     public synchronized void preTick(Object client) {
         if (state.phase == TravelPhase.BOUNCING) {
             bounce.preTick();
@@ -363,7 +362,7 @@ public final class TravelManager {
 
     public synchronized void tick(Object client) {
         if (state.phase == TravelPhase.IDLE) {
-            // Replan when the retry delay expires.
+            // Replan after the retry delay.
             if (autoResumeTicks > 0) {
                 autoResumeTicks--;
                 if (autoResumeTicks == 0 && state.mission != null) {
@@ -466,7 +465,7 @@ public final class TravelManager {
         advanceLeg("planning complete");
     }
 
-    // Fly toward a plausible highway when no route is confirmed.
+    // Acquire a plausible highway before replanning.
     private boolean tryStartDirectFlightFallback(BlockPos origin, HighwayPlanner.Options opts) {
         if (state.mission == null || !state.mission.useElytra) return false;
         if (horizontalDistance(origin, state.mission.destination) < state.mission.freeNetherFlightThreshold) {
@@ -576,7 +575,7 @@ public final class TravelManager {
         if (bounce.isArrived()) { advanceLeg("bounce arrived"); }
     }
 
-    // Drive ElytraManager; resume bounce on done, abort on failure, IDLE for standalone.
+    // Advance resupply and restore travel state.
     private void tickElytraResupply() {
         elytra.tick();
         if (elytra.isDone()) {
@@ -600,7 +599,7 @@ public final class TravelManager {
         }
     }
 
-    // Request a safe landing before repairing the elytra.
+    // Land before repairing the elytra.
     private void startElytraResupply() {
         requestResupply(ResupplyRequest.ELYTRA, "elytra durability critical");
     }
@@ -761,6 +760,7 @@ public final class TravelManager {
         resupplyLocalSettleTicks = 0;
         resupplyBaritoneQuietTicks = 0;
         resupplyUsedBaritone = false;
+        resetTravelSafetyMonitor();
         if (request == ResupplyRequest.FIREWORKS) {
             LOGGER.warn("[Travel] safe ground confirmed — entering firework resupply");
             elytra.startFireworkRestockForTravel();
@@ -772,7 +772,7 @@ public final class TravelManager {
         transition(TravelPhase.ELYTRA_RESUPPLY, reason);
     }
 
-    // Plan detour waypoints and hand off to Baritone.
+    // Hand detour waypoints to Baritone.
     private void tickVerifyingDetour() {
         BlockPos pos = currentPlayerPos();
         if (pos == null) { abort("no player pos during detour verification"); return; }
@@ -796,7 +796,7 @@ public final class TravelManager {
                 + rep.griefStartOffset() + "," + rep.griefEndOffset() + "]");
     }
 
-    // Resume bounce when Baritone finishes the detour.
+    // Resume bounce after the detour.
     private void tickDetouring() {
         int correctionEpisodes = SetbackMonitor.get().totalCorrectionEpisodes()
                 - detourCorrectionEpisodeBaseline;
@@ -806,7 +806,7 @@ public final class TravelManager {
             abort("detour rejected by server correction");
             return;
         }
-        // Ignore correction displacement while Baritone initializes.
+        // Ignore corrections during Baritone startup.
         if (state.ticksInPhase >= DETOUR_FALL_GRACE_TICKS
                 && SetbackMonitor.get().isCalm()
                 && detourMinSafeY != Integer.MIN_VALUE) {
@@ -817,7 +817,7 @@ public final class TravelManager {
                 return;
             }
         }
-        // Keep detours on the active bounce leg.
+        // Keep detours on the active leg.
         if (bridge.isElytraOwning()) {
             BlockPos target = bridge.currentTarget();
             LOGGER.warn("[Travel] DETOURING: rejecting unexpected Baritone elytra ownership");
@@ -855,7 +855,7 @@ public final class TravelManager {
         }
     }
 
-    // Resume only after the player is stably grounded.
+    // Resume after stable ground contact.
     private void tickSettle() {
         settleTicks++;
         if (isPlayerGrounded() && !isPlayerGliding()) {
@@ -873,7 +873,7 @@ public final class TravelManager {
                 detourResumeExit = null;
                 settleTicks = 0;
                 settleGroundedTicks = 0;
-                autoResumeAttempts = 0; // detour succeeded: reset retry budget
+                autoResumeAttempts = 0;
                 transition(TravelPhase.BOUNCING, "settle complete, resuming bounce");
             } else {
                 detourResumeExit = null;
@@ -1111,7 +1111,7 @@ public final class TravelManager {
         }
     }
 
-    // Wait for Baritone to claim elytra movement.
+    // Wait for Baritone to claim flight.
     private void tickLaunch() {
         /*? if >=26.1 {*//*
         Minecraft mc = Minecraft.getInstance();
@@ -1132,7 +1132,7 @@ public final class TravelManager {
         BlockPos dest = currentFlightDestination();
         if (dest == null && state.mission != null) dest = state.mission.destination;
 
-        // Retry the flight goal without flooding Baritone.
+        // Retry without flooding Baritone.
         if (bridge.isAvailable() && dest != null
                 && state.ticksInPhase % BARITONE_FLIGHT_RETRY_TICKS == 0) {
             startBaritoneElytraFlight(dest);
@@ -1143,7 +1143,7 @@ public final class TravelManager {
         }
     }
 
-    // Restore Baritone flight ownership when lost.
+    // Restore lost Baritone flight ownership.
     private void tickElytraCruise() {
         if (startElytraResupplyIfNeeded()) return;
         if (startFireworkRestockIfNeeded()) return;
@@ -1169,7 +1169,7 @@ public final class TravelManager {
         }
     }
 
-    // Return the active flight destination.
+    // Resolve the active flight destination.
     private BlockPos currentFlightDestination() {
         HighwayRoute.FlightLeg flightLeg = currentFlightLeg();
         return flightLeg != null ? flightLeg.destination() : null;
@@ -1230,9 +1230,17 @@ public final class TravelManager {
 
     private void handleUnsafeFlightFailure(BlockPos destination, String reason) {
         BlockPos pos = currentPlayerPos();
-        if (destination != null && !isPlayerGliding()
-                && startEnclosedFlightEscape(destination, pos, state.ticksInPhase)) {
-            return;
+        if (destination != null && !isPlayerGliding()) {
+            if (!isPlayerGrounded()) {
+                bridge.clearElytraTarget();
+                acquireOwner(MovementOwner.BARITONE);
+                startBaritoneElytraFlight(destination);
+                state.ticksInPhase = 0;
+                state.lastTransitionReason = "airborne launch recovery: " + reason;
+                LOGGER.warn("[Travel] {}; re-submitting Baritone flight while airborne", reason);
+                return;
+            }
+            if (startEnclosedFlightEscape(destination, pos, state.ticksInPhase)) return;
         }
         stopUnsafeFlight(reason);
     }
@@ -1243,7 +1251,7 @@ public final class TravelManager {
 
         String reason = null;
         boolean disconnect = false;
-        if (isDelegatedBaritoneFlight()) {
+        if (isDelegatedBaritoneAerialControl()) {
             if (health > CRITICAL_TRAVEL_HEALTH) return false;
             reason = String.format("critical health %.1f/20", health);
             disconnect = true;
@@ -1271,9 +1279,12 @@ public final class TravelManager {
         return true;
     }
 
-    private boolean isDelegatedBaritoneFlight() {
-        return state.phase == TravelPhase.ELYTRA_CRUISE
-                && state.owner == MovementOwner.BARITONE;
+    private boolean isDelegatedBaritoneAerialControl() {
+        if (state.owner != MovementOwner.BARITONE) return false;
+        if (state.phase == TravelPhase.ELYTRA_CRUISE
+                || state.phase == TravelPhase.LANDING_FOR_RESUPPLY) return true;
+        return state.phase == TravelPhase.LAUNCH
+                && (isPlayerGliding() || !isPlayerGrounded());
     }
 
     private void updateTravelSafetyMonitor(float health) {
@@ -1304,7 +1315,7 @@ public final class TravelManager {
         transition(TravelPhase.ABORTED, reason);
     }
 
-    // Return the nearest remaining flight destination.
+    // Resolve the nearest remaining flight destination.
     private BlockPos plannedFlightDestination() {
         if (state.route == null) return null;
         int start = Math.max(currentLegIndex, 0);
@@ -1315,7 +1326,7 @@ public final class TravelManager {
         return null;
     }
 
-    // Replan when confirmed legs end before the destination.
+    // Replan after the confirmed route ends.
     private static final int FINAL_ARRIVAL_RADIUS = 32;
 
     private boolean isNearMissionDestination() {
@@ -1417,12 +1428,6 @@ public final class TravelManager {
                 return;
             }
             if (state.mission != null && state.mission.useElytra) {
-                if (pos != null && !isPlayerGliding()
-                        && !isStrongLaunchAnchor(pos, flightLeg.destination())) {
-                    if (startEnclosedFlightEscape(flightLeg.destination(), pos, 0)) return;
-                    stopUnsafeFlight("flight leg has no verified open-nether launch anchor");
-                    return;
-                }
                 acquireOwner(MovementOwner.BARITONE);
                 LOGGER.info("[Travel] handing raw flight to Baritone dest={}",
                         flightLeg.destination().toShortString());
@@ -1602,8 +1607,8 @@ public final class TravelManager {
     private static final int WALL_BYPASS_CLEARANCE     =  8;
     private static final int BYPASS_TARGET_RADIUS      =  1;
     private static final int STALL_BYPASS_DISTANCE     = 64;
-    private static final int KNOCKBACK_PERP_THRESHOLD  =  5; // off-axis blocks before recovery
-    private static final int KNOCKBACK_RECOVERY_LEAD   =  8; // stay moving toward the exit after re-entry
+    private static final int KNOCKBACK_PERP_THRESHOLD = 5;
+    private static final int KNOCKBACK_RECOVERY_LEAD = 8;
 
     private void triggerWallBypass() {
         int distance = Math.max(WALL_BYPASS_DISTANCE,
@@ -1638,7 +1643,7 @@ public final class TravelManager {
         transition(TravelPhase.DETOURING, reason + ": goal=" + goal.toShortString());
     }
 
-    // Detect displacement beyond the highway lane.
+    // Detect movement outside the highway lane.
     private boolean isPlayerKnockedOffHighway() {
         HighwayRoute.BounceLeg bounceLeg = currentBounceLeg();
         if (bounceLeg == null) return false;
@@ -1648,14 +1653,13 @@ public final class TravelManager {
         if (hw.entry == null) return false;
         int perpDx = hw.axis.perpDx();
         int perpDz = hw.axis.perpDz();
-        int perpSq = perpDx * perpDx + perpDz * perpDz; // 1 cardinal, 2 diagonal
-        // Compare squared offsets without division.
+        int perpSq = perpDx * perpDx + perpDz * perpDz;
         int dot = (pos.getX() - hw.entry.getX()) * perpDx
                 + (pos.getZ() - hw.entry.getZ()) * perpDz;
         return Math.abs(dot) > KNOCKBACK_PERP_THRESHOLD * perpSq;
     }
 
-    // Walk back to the active highway axis.
+    // Return to the active highway axis.
     private void triggerKnockbackRecovery() {
         BlockPos pos = currentPlayerPos();
         HighwayRoute.BounceLeg bounceLeg = currentBounceLeg();
@@ -1679,7 +1683,7 @@ public final class TravelManager {
                 return;
             }
         }
-        // Project the player onto the highway axis.
+        // Project onto the highway axis.
         int ex = hw.entry.getX(), ez = hw.entry.getZ();
         int dx = bounceLeg.travelDx(), dz = bounceLeg.travelDz();
         int dSq = dx * dx + dz * dz;
@@ -2009,12 +2013,6 @@ public final class TravelManager {
         if (resupplyResumePhase == TravelPhase.LAUNCH && resupplyResumeTarget != null) {
             BlockPos target = resupplyResumeTarget;
             clearResupplyResumeContext();
-            BlockPos pos = currentPlayerPos();
-            if (pos != null && !isPlayerGliding() && !isStrongLaunchAnchor(pos, target)) {
-                if (startEnclosedFlightEscape(target, pos, 0)) return true;
-                stopUnsafeFlight("resupply completed without a launch-capable anchor");
-                return true;
-            }
             acquireOwner(MovementOwner.BARITONE);
             startBaritoneElytraFlight(target);
             transition(TravelPhase.LAUNCH, reason + " -> resuming flight to " + target.toShortString());
@@ -2371,7 +2369,7 @@ public final class TravelManager {
         return Math.max(Math.abs(a.getX() - b.getX()), Math.abs(a.getZ() - b.getZ()));
     }
 
-    // Route steep vertical hops through Baritone.
+    // Route vertical hops through Baritone.
     private static boolean isMostlyVerticalHop(BlockPos pos, BlockPos target) {
         int horiz = horizontalDistance(pos, target);
         int vert = Math.abs(target.getY() - pos.getY());
@@ -2502,12 +2500,12 @@ public final class TravelManager {
         /*?}*/
     }
 
-    // MC yaw in degrees for a travel direction vector.
+    // Convert a direction vector to Minecraft yaw.
     private static float yawForDir(int dx, int dz) {
         return (float) Math.toDegrees(Math.atan2(-dx, dz));
     }
 
-    // Set the player's view yaw (Stonecutter-safe).
+    // Set view yaw across supported versions.
     private static void setPlayerYaw(float yaw) {
         /*? if >=26.1 {*//*
         Minecraft mc = Minecraft.getInstance();
