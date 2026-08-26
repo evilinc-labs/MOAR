@@ -234,8 +234,7 @@ public final class PlacementEngine {
     private static final int  HOTBAR_SELECT_VALIDATE_FAILURE_COOLDOWN_TICKS = 100;
     private static final int  HOTBAR_SELECT_SETTLE_TICKS = 2;
     private static final int  HOTBAR_SELECT_PACKET_SETTLE_TICKS = 3;
-    // One settle tick between aim and interact so the look packet precedes the
-    // place on the wire, without throttling throughput.
+    // One settle tick so the look packet precedes the click (Grim Post).
     private static final int  PRE_PLACE_LOOK_SYNC_TICKS = 1;
     private static final int  INVENTORY_SWAP_SETTLE_TICKS = 7;
     private static final int  INVENTORY_SWAP_ITEM_VARIETY_SETTLE_TICKS = 4;
@@ -250,19 +249,17 @@ public final class PlacementEngine {
     private static int        itemVarietyCooldownTicks;
     private static final int  ITEM_VARIETY_SETTLE_TICKS = 3;
     private static final int  SETBACK_RECENT_WINDOW_TICKS = 40;
-    private static final double SAFE_PLACE_REACH_BLOCKS = 3.85;
+    private static final double SAFE_PLACE_REACH_BLOCKS = 3.5;
     // Tolerance subtracted from block_interaction_range when computing reach;
-    // absorbs minor client/server eye desync. Stationary printer needs little.
-    // Grim measures reach from its lagged player position, so ~3.87 client-side
-    // reads as 4.0+ and gets dropped. 0.9 margin => ~3.6 effective; relocate
-    // closer past that.
-    private static final double REACH_AC_SAFETY_MARGIN = 0.8;
+    // absorbs Grim's lagged-eye reach check. 2b2t trace: ~3.87 client-side
+    // reads as 4.0+ and gets dropped. Cap at 3.5 (printer default scan range).
+    private static final double REACH_AC_SAFETY_MARGIN = 1.0;
     // Sane upper bound that prevents runaway in case of a misconfigured attribute.
     private static final double REACH_HARD_CEILING = 6.0;
-    // Small margin over the 0.6 hitbox for Grim's padded player box. 0.35 was
-    // too aggressive once reach pulled in - head-height cells looped body-
-    // clearance forever.
-    private static final double PLACEMENT_ENTITY_MARGIN = 0.24;
+    // Only reject when the placed cube actually overlaps the player.
+    // 0.24 inflate treated every adjacent wall cell as a collision, so
+    // obvious in-reach blocks never got a click.
+    private static final double PLACEMENT_ENTITY_MARGIN = 0.0;
     private static final Direction[] NORMAL_PLACE_FACE_ORDER = {
             Direction.DOWN,
             Direction.NORTH,
@@ -294,12 +291,11 @@ public final class PlacementEngine {
         }
     };
     private static final int MAX_CORRECTION_ATTEMPTS = 2;
-    // Turn budget to face the block before placing. Fast snap at MAX_TURN_SPEED
-    // reaches any aim in 1-2 ticks; 4 ticks covers a 180 swing. Placing mid-turn
-    // was the main ghost source.
-    private static final int  MAX_ROTATE_TICKS = 4;
-    private static final float CONVERGE_THRESHOLD = 1.0f;
-    private static final float MAX_TURN_SPEED = 90.0f;
+    // Turn budget to face the block before placing. 60°/tick covers a 180°
+    // swing in 3 ticks without the 90° Grim Rotation snap.
+    private static final int  MAX_ROTATE_TICKS = 5;
+    private static final float CONVERGE_THRESHOLD = 1.5f;
+    private static final float MAX_TURN_SPEED = 60.0f;
 
     private static boolean silentRotation = false;
 
@@ -392,10 +388,10 @@ public final class PlacementEngine {
     // AIMD congestion control on the placement rate (TCP-style): additive-
     // increase on each confirmed place, multiplicative-decrease on any failure.
     // Self-settles just under Grim's tolerance.
-    private static final double AIMD_MIN_BPS      = 4.0;   // always trickle
-    private static final double AIMD_START_BPS    = 8.0;   // start at the user's target rate
-    private static final double AIMD_INCREASE     = 0.8;   // ramp back to ceiling fast when accepting
-    private static final double AIMD_DECREASE     = 0.6;   // back off on failure (gentler than halving)
+    private static final double AIMD_MIN_BPS      = 8.0;
+    private static final double AIMD_START_BPS    = 16.0;
+    private static final double AIMD_INCREASE     = 2.0;
+    private static final double AIMD_DECREASE     = 0.6;
     private static double effectiveBps            = AIMD_START_BPS;
 
     // Set by the printer's per-tick scan: use a single center ray instead of the
@@ -467,7 +463,9 @@ public final class PlacementEngine {
     // serializing through the server's queue. Throughput is limited to
     // ~1 placement per server processing cycle (~109 ticks = 5.45s under
     // heavy load), but every packet lands cleanly.
-    private static final int MAX_INFLIGHT_PLACEMENT_VERIFICATIONS = 4;
+    // Up to 3 unacked places so we can start the next aim before the last
+    // ACK. Collapses to 1 after a failure. Still one UseItemOn per client tick.
+    private static final int MAX_INFLIGHT_PLACEMENT_VERIFICATIONS = 3;
 
     // Fix #22: placement queue — pre-planned candidates filled while the
     // current placement is awaiting server ACK.  When canPlace() is checked
@@ -487,8 +485,8 @@ public final class PlacementEngine {
     // time that crawled contiguous walls. Bump up if fresh supports ghost.
     private static final int RECENT_SUPPORT_SETTLE_TICKS = 2;
     private static final int MAX_RECENT_ACCEPTED_SUPPORTS = 128;
-    private static final int POST_PLACE_SETTLE_TICKS = 1;
-    private static final int PLACE_ROTATION_PRESERVE_TICKS = 1;
+    private static final int POST_PLACE_SETTLE_TICKS = 0;
+    private static final int PLACE_ROTATION_PRESERVE_TICKS = 0;
     private static int lastSentSelectedSlot = -1;
     private static boolean suppressVanillaMoveOnce = false;
     private static int consecutiveFailures = 0;
@@ -559,7 +557,7 @@ public final class PlacementEngine {
     private static BlockPos lastRayFragileTarget;
     // Ticks to wait for the game's crosshair to settle on the target before
     // giving up (mc.crosshairTarget updates in the render loop, lagging rotation).
-    private static final int CROSSHAIR_SETTLE_LIMIT_TICKS = 4;
+    private static final int CROSSHAIR_SETTLE_LIMIT_TICKS = 0;
     private static int crosshairSettleTicks = 0;
 
     // Drains the most recent send-time ray-fragile abort target (once), so the
@@ -1283,8 +1281,9 @@ public final class PlacementEngine {
     }
 
     public static boolean isBusy() {
+        // Don't block the next aim on server ACK. Verification still runs in
+        // the background; canPlace()/inflight caps the click rate.
         return phase != PlacePhase.IDLE
-                || hasPendingPlacementVerification()
                 || postPlaceSettleTicks > 0;
     }
 
@@ -1293,13 +1292,9 @@ public final class PlacementEngine {
     }
 
     public static boolean shouldFreezeMovementInputs() {
-        if (postPlaceSettleTicks > 0) {
-            return true;
-        }
-        return switch (phase) {
-            case SELECTING, ROTATING, SYNCING_LOOK, PLACING, FINISHING -> true;
-            default -> false;
-        };
+        // Walk-and-place: never yank WASD. Freezing mid-stride is a Grim
+        // Movement flag and is what made the printer pause while walking.
+        return false;
     }
 
     public static boolean shouldSuppressVanillaMovementPackets() {
@@ -1830,6 +1825,68 @@ public final class PlacementEngine {
         return ItemSelectionResult.STAGED;
     }
 
+    // Keep the camera on the click point as the player walks so the next
+    // tick's place isn't aimed at last stance's hit.
+    private static void retargetPendingLook() {
+        if (pendingTarget == null || pendingDesired == null) return;
+        /*? if >=26.1 {*//*
+        Minecraft mc = Minecraft.getInstance();
+        if (mc.player == null || mc.level == null) return;
+        LocalPlayer player = mc.player;
+        Vec3 eyePos = player.getEyePosition();
+        VisiblePlacementHit visibleHit = findBestVisiblePlacementHit(
+                player, mc.level, pendingTarget, pendingDesired, eyePos, pendingSupportFilter);
+        *//*?} else {*/
+        MinecraftClient mc = MinecraftClient.getInstance();
+        if (mc.player == null || mc.world == null) return;
+        ClientPlayerEntity player = mc.player;
+        Vec3d eyePos = player.getEyePos();
+        VisiblePlacementHit visibleHit = findBestVisiblePlacementHit(
+                player, mc.world, pendingTarget, pendingDesired, eyePos, pendingSupportFilter);
+        /*?}*/
+        if (visibleHit == null) return;
+        pendingFace = visibleHit.face;
+        /*? if >=26.1 {*//*
+        Vec3 hitPos = visibleHit.hit.getLocation();
+        Vec3 toHit = hitPos.subtract(eyePos);
+        *//*?} else {*/
+        Vec3d hitPos = visibleHit.hit.getPos();
+        Vec3d toHit = hitPos.subtract(eyePos);
+        /*?}*/
+        double horizDist = Math.sqrt(toHit.x * toHit.x + toHit.z * toHit.z);
+        /*? if >=26.1 {*//*
+        float hitYaw = (float) (Mth.atan2(toHit.z, toHit.x) * (180.0 / Math.PI)) - 90.0f;
+        float hitPitch = (float) -(Mth.atan2(toHit.y, horizDist) * (180.0 / Math.PI));
+        *//*?} else {*/
+        float hitYaw = (float) (MathHelper.atan2(toHit.z, toHit.x) * (180.0 / Math.PI)) - 90.0f;
+        float hitPitch = (float) -(MathHelper.atan2(toHit.y, horizDist) * (180.0 / Math.PI));
+        /*?}*/
+        float desiredYaw = hitYaw;
+        float desiredPitch = hitPitch;
+        Float facingYaw = getRequiredYaw(pendingDesired);
+        Float facingPitch = getRequiredPitch(pendingDesired);
+        if (facingYaw != null) {
+            float orientationYaw = facingYaw;
+            float orientationPitch = facingPitch != null
+                    ? facingPitch
+                    : computePitchToward(eyePos, hitPos);
+            if (isOrientationLookCloseToHit(orientationYaw, orientationPitch, hitYaw, hitPitch)) {
+                desiredYaw = orientationYaw;
+                desiredPitch = orientationPitch;
+            }
+        } else if (facingPitch != null
+                && isOrientationLookCloseToHit(hitYaw, facingPitch, hitYaw, hitPitch)) {
+            desiredPitch = facingPitch;
+        }
+        /*? if >=26.1 {*//*
+        targetYaw = snapToMouseGCD(desiredYaw, player.getYRot());
+        targetPitch = Mth.clamp(snapToMouseGCD(desiredPitch, player.getXRot()), -90.0f, 90.0f);
+        *//*?} else {*/
+        targetYaw = snapToMouseGCD(desiredYaw, player.getYaw());
+        targetPitch = MathHelper.clamp(snapToMouseGCD(desiredPitch, player.getPitch()), -90.0f, 90.0f);
+        /*?}*/
+    }
+
     private static boolean tickRotate() {
         /*? if >=26.1 {*//*
         Minecraft mc = Minecraft.getInstance();
@@ -1838,6 +1895,7 @@ public final class PlacementEngine {
         /*?}*/
         if (mc.player == null) { reset(); return false; }
 
+        retargetPendingLook();
         rotateTicks++;
 
         if (silentRotation && usesDirectLookPackets()) {
@@ -1889,9 +1947,9 @@ public final class PlacementEngine {
         /*?}*/
         float pitchDiff = targetPitch - currentPitch;
 
-        // Fast snap: turn up to MAX_TURN_SPEED/tick (1-2 ticks to any aim). Wrap
-        // to [-180,180] so adding the shortest-path delta doesn't grow raw yaw
-        // unbounded (saw 2069deg, Grim-flaggable).
+        // Turn up to MAX_TURN_SPEED/tick. Wrap to [-180,180] so adding the
+        // shortest-path delta doesn't grow raw yaw unbounded (saw 2069deg,
+        // Grim-flaggable).
         /*? if >=26.1 {*//*
         float newYaw = Mth_wrap(currentYaw + Mth.clamp(yawDiff, -MAX_TURN_SPEED, MAX_TURN_SPEED));
         float newPitch = currentPitch + Mth.clamp(pitchDiff, -MAX_TURN_SPEED, MAX_TURN_SPEED);
@@ -1969,6 +2027,17 @@ public final class PlacementEngine {
             return false;
         }
 
+        // Track the block as the player walks so the click tick isn't aimed
+        // at last stance. Vanilla's flying packet carries this look.
+        retargetPendingLook();
+        /*? if >=26.1 {*//*
+        mc.player.setYRot(targetYaw);
+        mc.player.setXRot(targetPitch);
+        *//*?} else {*/
+        mc.player.setYaw(targetYaw);
+        mc.player.setPitch(targetPitch);
+        /*?}*/
+
         // Don't send our own look packet: ROTATING already set the rotation and
         // vanilla's movement packet streamed it. A duplicate is Grim's
         // AimDuplicateLook. Wait the settle tick, then place.
@@ -2021,6 +2090,8 @@ public final class PlacementEngine {
         }
 
         if (!isPlacementWindowSafe()) {
+            // Knockback / the teleport-confirm tick — wait, but do not abort
+            // just because the player is walking.
             return false;
         }
 
@@ -2118,9 +2189,10 @@ public final class PlacementEngine {
             hitBlockPos = pendingTarget;
             hitSide = airFace;
         } else {
-            // Prefer the game's own crosshair hit when the camera is on the
-            // surface, but don't wait/abort for it - fall through to the synthetic
-            // hit (proven correct) and place now. Stalling dropped it to ~1/min.
+            // Grim ray-traces the last look. The game's crosshair is the hit
+            // that matches that ray; a synthetic cursor is what 2b2t rubber-bands.
+            // Wait a few ticks for the render-thread crosshair to catch the aim
+            // before falling back.
             BlockHitResult crosshair = vanillaCrosshairPlacement(mc, player,
                     pendingTarget, pendingSupportFilter);
             if (crosshair != null) {
@@ -2133,6 +2205,9 @@ public final class PlacementEngine {
                 /*?}*/
                 pendingFace = hitSide.getOpposite();
                 usedVanillaCrosshair = true;
+            } else if (crosshairSettleTicks < CROSSHAIR_SETTLE_LIMIT_TICKS) {
+                crosshairSettleTicks++;
+                return false;
             } else {
                 /*? if >=26.1 {*//*
                 VisiblePlacementHit visibleHit = findBestVisiblePlacementHit(
@@ -2381,8 +2456,25 @@ public final class PlacementEngine {
 
         if (placed) {
             recordPlacement();
-            finishingTicks = PLACE_ROTATION_PRESERVE_TICKS;
-            phase = PlacePhase.FINISHING;
+            // Stay aimed at the build so the next cell is a small turn, not a
+            // snap back to the pre-place look. Release sneak and go idle now.
+            if (pendingNeedsSneak) {
+                if (SneakOverride.isForceAbsoluteSneak()) {
+                    pressSneakPacket(player);
+                } else {
+                    releaseSneakPacket();
+                }
+            }
+            phase = PlacePhase.IDLE;
+            pendingTarget = null;
+            pendingDesired = null;
+            pendingFace = null;
+            pendingNeedsSneak = false;
+            pendingAirPlace = false;
+            pendingSupportFilter = null;
+            pendingItem = null;
+            lookSyncedForPendingPlacement = false;
+            clearPendingSelectionState();
         } else {
             if (!singleTickInProgress) {
                 if (!silentRotation) {
@@ -2429,21 +2521,7 @@ public final class PlacementEngine {
             } else {
                 releaseSneakPacket();
             }
-            if (!singleTickInProgress) {
-                if (!silentRotation) {
-                    restoreLook(mc.player);
-                } else if (usesDirectLookPackets()) {
-                    if (!PrinterNetworkCoordinator.tryAcquire(
-                            PrinterNetworkCoordinator.Lane.LOOK, NETWORK_OWNER, 1, 1)) {
-                        return false;
-                    }
-                    /*? if >=26.1 {*//*
-                    sendSilentLookPacket(mc.player, mc.player.getYRot(), mc.player.getXRot());
-                    *//*?} else {*/
-                    sendSilentLookPacket(mc.player, mc.player.getYaw(), mc.player.getPitch());
-                    /*?}*/
-                }
-            }
+            // Keep the printer aimed at the build between blocks.
         }
         phase = PlacePhase.IDLE;
         pendingTarget = null;
@@ -2958,12 +3036,8 @@ public final class PlacementEngine {
     }
     /*?}*/
 
-    // Effective max placement reach (blocks). Reads block_interaction_range
-    // (1.20.5+) so survival gets 4.5, creative 6.0, server overrides honored.
-    // Subtracts a small safety margin and floors at SAFE_PLACE_REACH_BLOCKS.
-    // Vanilla sends placement packets to the attribute value and strict
-    // validation follows the same attribute; the old hardcoded 3.85 was too
-    // conservative and rejected legitimate edge-of-reach placements.
+    // Effective max placement reach (blocks). Survival attribute is 4.5;
+    // Grim measures from a lagged eye so we cap at 3.5 (printer scan range).
     /*? if >=26.1 {*//*
     private static double effectivePlaceReach(LocalPlayer player) {
         double attr;
@@ -2974,7 +3048,7 @@ public final class PlacementEngine {
         }
         if (attr <= 0.0 || Double.isNaN(attr)) attr = 4.5;
         double effective = Math.min(REACH_HARD_CEILING, attr) - REACH_AC_SAFETY_MARGIN;
-        return Math.max(SAFE_PLACE_REACH_BLOCKS, effective);
+        return Math.max(3.0, Math.min(SAFE_PLACE_REACH_BLOCKS, effective));
     }
     *//*?} else {*/
     private static double effectivePlaceReach(ClientPlayerEntity player) {
@@ -2986,7 +3060,7 @@ public final class PlacementEngine {
         }
         if (attr <= 0.0 || Double.isNaN(attr)) attr = 4.5;
         double effective = Math.min(REACH_HARD_CEILING, attr) - REACH_AC_SAFETY_MARGIN;
-        return Math.max(SAFE_PLACE_REACH_BLOCKS, effective);
+        return Math.max(3.0, Math.min(SAFE_PLACE_REACH_BLOCKS, effective));
     }
     /*?}*/
 
@@ -4362,20 +4436,14 @@ public final class PlacementEngine {
     }
     /*?}*/
 
-    // Consecutive grounded+still ticks required before placing. A single-frame
-    // onGround check let placement fire during a jump arc's ground-touch, which
-    // setbacks the position desync.
-    private static final int PLACEMENT_STILL_TICKS_REQUIRED = 3;
-    // Horizontal speed only: a grounded player has constant gravity Y-velocity,
-    // so including Y would make "still" unreachable and stall the build. The
-    // vertical bounce is caught by requiring N consecutive grounded ticks.
+    // Consecutive grounded+still ticks. Kept for diagnostics; placement no
+    // longer waits for a full stop — walking while placing is the point.
+    private static final int PLACEMENT_STILL_TICKS_REQUIRED = 1;
     private static final double PLACEMENT_STILL_HSPEED_SQ = 0.015 * 0.015;
     private static int consecutiveStillTicks = 0;
 
-    // Manual mode (user drives movement) vs AutoBuild (bot stops to place). A
-    // human walking and placing is normal to Grim, so manual drops the near-zero
-    // speed clause (only there to stop the bot firing mid-path) that otherwise
-    // caused a "loading" pause and left holes. The grounded-ticks guard stays.
+    // Manual mode (user drives movement) vs AutoBuild (bot also places while
+    // the walker is running).
     private static volatile boolean manualPlacementMode = false;
     public static void setManualPlacementMode(boolean v) { manualPlacementMode = v; }
 
@@ -4394,10 +4462,7 @@ public final class PlacementEngine {
         boolean grounded = player.isOnGround();
         /*?}*/
         double hSpeedSq = v.x * v.x + v.z * v.z;
-        // Manual: grounded is enough (walk-and-place like vanilla). AutoBuild:
-        // also require near-stationary so the bot never fires mid-path.
-        boolean stillEnough = grounded
-                && (manualPlacementMode || hSpeedSq < PLACEMENT_STILL_HSPEED_SQ);
+        boolean stillEnough = grounded && hSpeedSq < PLACEMENT_STILL_HSPEED_SQ;
         if (stillEnough) {
             if (consecutiveStillTicks < PLACEMENT_STILL_TICKS_REQUIRED) consecutiveStillTicks++;
         } else {
@@ -4409,18 +4474,9 @@ public final class PlacementEngine {
         if (VelocityMonitor.get().isSettling()) {
             return false;
         }
-        SetbackMonitor monitor = SetbackMonitor.get();
-        // `isCalm()` already means we've gone a full quiet window since the
-        // last setback. Requiring zero "recent" setbacks on top of that can
-        // freeze the printer in a post-setback limbo where it can aim and
-        // path, but never actually advances into the place step.
-        if (!monitor.isCalm()) {
-            return false;
-        }
-        // The player must be settled - grounded and near-stationary for a few
-        // ticks - not merely touching ground this frame. Placing mid-bounce
-        // is the confirmed setback source.
-        return consecutiveStillTicks >= PLACEMENT_STILL_TICKS_REQUIRED;
+        // Walk-and-place: do not require a full stop or the 1.5s travel calm
+        // window. Only skip the teleport-confirm ticks after a real setback.
+        return SetbackMonitor.get().isQuietEnoughToPlace();
     }
 
     /*? if >=26.1 {*//*

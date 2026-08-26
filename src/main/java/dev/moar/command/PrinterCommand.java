@@ -150,19 +150,11 @@ public final class PrinterCommand {
                                 && horizontalDistance(bestMatch, mc.player.getX(), mc.player.getZ()) < 200;
 
                         BlockPos pos = null;
-                        if (!nearbyUnsupportedPlacement) {
-                            pos = LitematicaDetector.detectAnchorFromSchematicWorld(
-                                    printer.getSchematic());
-                            if (pos != null) {
-                                ChatHelper.info("§aAligned anchor from hologram blocks.");
-                            }
-                        } else {
+                        if (nearbyUnsupportedPlacement) {
                             warnUnsupportedPlacement(bestMatch);
                             ChatHelper.info("§7Skipping hologram alignment because MOAR can't map"
                                     + " transformed Litematica placements yet.");
-                        }
-
-                        if (pos == null) {
+                        } else {
                             bestMatch = findClosestPlacement(placements,
                                     mc.player.getX(), mc.player.getY(), mc.player.getZ(), null, true);
                             if (bestMatch != null && horizontalDistance(bestMatch, mc.player.getX(), mc.player.getZ()) < 200) {
@@ -171,13 +163,22 @@ public final class PrinterCommand {
                                         bestMatch.originY() + printer.getSchematic().getOriginOffsetY(),
                                         bestMatch.originZ() + printer.getSchematic().getOriginOffsetZ());
                                 ChatHelper.info("§aSnapped to Litematica placement origin.");
-                            } else {
-                                /*? if >=26.1 {*//*
-                                pos = mc.player.blockPosition();
-                                *//*?} else {*/
-                                pos = mc.player.getBlockPos();
-                                /*?}*/
                             }
+                            if (pos == null) {
+                                pos = LitematicaDetector.detectAnchorFromSchematicWorld(
+                                        printer.getSchematic());
+                                if (pos != null) {
+                                    ChatHelper.info("§aAligned anchor from hologram blocks.");
+                                }
+                            }
+                        }
+
+                        if (pos == null) {
+                            /*? if >=26.1 {*//*
+                            pos = mc.player.blockPosition();
+                            *//*?} else {*/
+                            pos = mc.player.getBlockPos();
+                            /*?}*/
                         }
 
                         printer.overrideAnchor(pos);
@@ -657,7 +658,7 @@ public final class PrinterCommand {
 
                         if (qm.hasActiveTask()) {
                             printer.toggle();
-                            return 1;
+                            return printer.isEnabled() ? 1 : 0;
                         }
 
                         if (qm.hasQueuedTasks() && qm.startNextIfIdle()) {
@@ -665,7 +666,7 @@ public final class PrinterCommand {
                         }
 
                         printer.toggle();
-                        return 1;
+                        return printer.isEnabled() ? 1 : 0;
                     })
             );
 
@@ -1594,8 +1595,10 @@ public final class PrinterCommand {
                 }
             }
 
-            // Use hologram correlation for a final anchor fix.
-            if (!sawUnsupportedPlacement) {
+            // Hologram correlation is a fallback only. A matched Litematica
+            // origin is authoritative; the heuristic mis-anchors large
+            // repetitive builds (thousands of identical blocks).
+            if (!matchedPlacement && !sawUnsupportedPlacement) {
                 BlockPos correlated = LitematicaDetector.detectAnchorFromSchematicWorld(
                         printer.getSchematic());
                 if (correlated != null) {
