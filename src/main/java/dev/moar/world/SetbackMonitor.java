@@ -28,19 +28,25 @@ public final class SetbackMonitor {
     private static final Logger LOGGER = LoggerFactory.getLogger("MOAR/Setback");
 
     // Stable ticks required after the last setback before isCalm() returns true.
-    // 2b2t trace: placements sent ~0.6s after a rubber-band still got
-    // swallowed - Grim ignores actions between issuing a teleport and the
-    // client's confirm settling, and that grace outlasts the old 12-tick
-    // window on real-world latency. 30 ticks (1.5s) clears it with margin.
+    // Travel / elytra / restock keep this long window. Printer placement uses
+    // PLACEMENT_RESUME_TICKS instead so walk-and-place isn't frozen for 1.5s
+    // after every small rubber-band.
     private static final int CALM_WINDOW_TICKS = 30;
+    // Ticks after a real setback before the printer may click again. Long
+    // enough for teleport-confirm to leave the packet stream, short enough
+    // that walking doesn't stall the placer.
+    private static final int PLACEMENT_RESUME_TICKS = 2;
+    // Don't freeze every network lane for the full calm window — that is the
+    // "printer pauses while I walk" symptom on 2b2t.
+    private static final int AUTOMATION_PAUSE_TICKS = 3;
 
     // Ring buffer length for recentSetbackCount().
     private static final int HISTORY_SIZE = 64;
 
     // Movement below this per-tick delta counts as stationary.
     private static final double STATIONARY_DELTA_BLOCKS = 0.025;
-    // Ignore position syncs too small to represent a rubber-band.
-    private static final double MIN_CORRECTION_DISTANCE_BLOCKS = 0.10;
+    // Ignore walk-sync / jitter. Real Grim placement flags on 2b2t were ~0.57+.
+    private static final double MIN_CORRECTION_DISTANCE_BLOCKS = 0.40;
 
     private final AtomicInteger pendingCorrections = new AtomicInteger();
     private final AtomicInteger pendingAcknowledgements = new AtomicInteger();
@@ -211,11 +217,11 @@ public final class SetbackMonitor {
         totalSetbacks++;
         setbackTicks[historyHead] = currentTick;
         historyHead = (historyHead + 1) % HISTORY_SIZE;
-        MoarNetworkManager.pauseAutomation(CALM_WINDOW_TICKS, source);
+        MoarNetworkManager.pauseAutomation(AUTOMATION_PAUSE_TICKS, source);
         if ("server-correction".equals(source)) {
             totalServerCorrections++;
             LOGGER.warn("[Setback] server correction #{}; holding automation for {}t",
-                    totalServerCorrections, CALM_WINDOW_TICKS);
+                    totalServerCorrections, AUTOMATION_PAUSE_TICKS);
         }
         PacketTelemetry.markSetback(totalSetbacks, ticksSinceSetback, source);
     }
@@ -223,6 +229,12 @@ public final class SetbackMonitor {
     // True when no setback has occurred in the last CALM_WINDOW_TICKS ticks.
     public boolean isCalm() {
         return pendingCorrections.get() == 0 && ticksSinceSetback >= CALM_WINDOW_TICKS;
+    }
+
+    // Printer-only: skip the teleport-confirm tick, then keep placing even if
+    // the long travel calm window hasn't elapsed (walking on 2b2t).
+    public boolean isQuietEnoughToPlace() {
+        return pendingCorrections.get() == 0 && ticksSinceSetback >= PLACEMENT_RESUME_TICKS;
     }
 
     // Ticks elapsed since the most recent setback (capped at CALM_WINDOW_TICKS).

@@ -155,20 +155,33 @@ public final class MoarNetworkManager {
         if (automationPauseTicks > 0) {
             return false;
         }
-        if (tickOwner != null && !owner.equals(tickOwner)) {
+        if (tickOwner != null && !ownersCompatible(tickOwner, owner)) {
             return false;
         }
         for (String activeOwner : laneOwners.values()) {
-            if (!owner.equals(activeOwner)) {
+            if (!ownersCompatible(activeOwner, owner)) {
                 return false;
             }
         }
         for (String leasedOwner : ownerLeases.keySet()) {
-            if (!owner.equals(leasedOwner)) {
+            if (!ownersCompatible(leasedOwner, owner)) {
                 return false;
             }
         }
         return true;
+    }
+
+    // Walk-and-place: the printer aims/clicks while PathWalker keeps WASD
+    // pressed. Exclusive ownership used to freeze walking on every place.
+    private static boolean ownersCompatible(String a, String b) {
+        if (a.equals(b)) {
+            return true;
+        }
+        return isWalkAndPlaceOwner(a) && isWalkAndPlaceOwner(b);
+    }
+
+    private static boolean isWalkAndPlaceOwner(String owner) {
+        return "PlacementEngine".equals(owner) || "PathWalker".equals(owner);
     }
 
     private static void holdOwner(String owner, int ticks) {

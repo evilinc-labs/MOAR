@@ -17,8 +17,10 @@ import net.minecraft.client.MinecraftClient;
 /*?}*/
 /*? if >=26.1 {*//*
 import net.minecraft.core.BlockPos;
+import net.minecraft.core.Vec3i;
 *//*?} else {*/
 import net.minecraft.util.math.BlockPos;
+import net.minecraft.util.math.Vec3i;
 /*?}*/
 /*? if >=26.1 {*//*
 import net.minecraft.world.level.Level;
@@ -28,13 +30,16 @@ import net.minecraft.world.World;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.io.File;
 import java.io.IOException;
 import java.io.Reader;
 import java.nio.file.DirectoryStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 
 // Read Litematica placements via reflection or JSON fallback.
 public final class LitematicaDetector {
@@ -102,19 +107,16 @@ public final class LitematicaDetector {
         String currentDimension = getCurrentDimensionSuffix();
         List<DetectedPlacement> live = detectFromMemory();
         List<DetectedPlacement> configPlacements = detectFromConfig(currentContext, currentDimension);
-
-        // Prefer current-world config files when available. They are scoped to
-        // the active server/world, which avoids stale placements lingering in
-        // Litematica's in-memory manager after a singleplayer world or server
-        // switch. Fall back to live data when no scoped config exists yet.
-        List<DetectedPlacement> result;
-        if (!configPlacements.isEmpty()) {
-            result = configPlacements;
-        } else if (!live.isEmpty()) {
-            result = live;
-        } else {
-            result = configPlacements;
+        // Exact server-address match can miss (connect.2b2t.org vs 2b2t.org).
+        // If that yields nothing, accept any placement file for this dimension.
+        if (configPlacements.isEmpty() && currentContext != null) {
+            configPlacements = detectFromConfig(null, currentDimension);
         }
+
+        // Live Litematica state is the source of truth while in-game. Config
+        // JSON is only flushed on save/logout, so a placement you just created
+        // exists in memory first. Prefer live whenever it has results.
+        List<DetectedPlacement> result = !live.isEmpty() ? live : configPlacements;
         cachedPlacements = result;
         cachedPlacementsExpiryMs = now + DETECT_CACHE_TTL_MS;
         return result;
@@ -166,58 +168,139 @@ public final class LitematicaDetector {
                     .invoke(placementMgr);
 
             for (Object p : placements) {
-                Class<?> pClass = p.getClass();
-
-                boolean enabled;
                 try {
-                    enabled = (boolean) pClass.getMethod("isEnabled").invoke(p);
-                } catch (NoSuchMethodException e) {
-                    enabled = true;
+                    DetectedPlacement detected = readLivePlacement(p);
+                    if (detected != null) {
+                        results.add(detected);
+                        LOGGER.info("Live-detected Litematica placement: '{}' at ({}, {}, {}) file={} rotation={} mirror={} modifiedSubRegions={}",
+                                detected.name(), detected.originX(), detected.originY(), detected.originZ(),
+                                detected.schematicPath(), detected.rotation(), detected.mirror(),
+                                detected.modifiedSubRegionCount());
+                    }
+                } catch (Exception e) {
+                    LOGGER.warn("Failed reading one Litematica placement: {}", e.toString());
                 }
-                if (!enabled) continue;
-
-                // Read the placement origin.
-                Object origin = pClass.getMethod("getOrigin").invoke(p);
-                int ox = (int) origin.getClass().getMethod("getX").invoke(origin);
-                int oy = (int) origin.getClass().getMethod("getY").invoke(origin);
-                int oz = (int) origin.getClass().getMethod("getZ").invoke(origin);
-
-                // Read the backing .litematic path.
-                java.io.File schematicFile = (java.io.File) pClass
-                        .getMethod("getSchematicFile").invoke(p);
-                if (schematicFile == null) continue;
-                Path schematicPath = schematicFile.toPath().normalize();
-                if (!schematicPath.toString().endsWith(".litematic")) continue;
-
-                // Keep the origin even if the file is gone.
-                if (!Files.exists(schematicPath)) {
-                    LOGGER.warn("Litematica placement '{}' file not on disk: {} — including for origin only",
-                            schematicPath.getFileName(), schematicPath);
-                }
-
-                String name;
-                try {
-                    name = (String) pClass.getMethod("getName").invoke(p);
-                } catch (NoSuchMethodException e) {
-                    name = schematicPath.getFileName().toString();
-                }
-
-                String rotation = getEnumName(pClass, p, "getRotation", "NONE");
-                String mirror = getEnumName(pClass, p, "getMirror", "NONE");
-                int modifiedSubRegions = countModifiedSubRegions(pClass, p);
-
-                results.add(new DetectedPlacement(
-                        schematicPath, name, ox, oy, oz, rotation, mirror, modifiedSubRegions));
-                LOGGER.info("Live-detected Litematica placement: '{}' at ({}, {}, {}) file={} rotation={} mirror={} modifiedSubRegions={}",
-                        name, ox, oy, oz, schematicPath, rotation, mirror, modifiedSubRegions);
             }
         } catch (ClassNotFoundException e) {
             // Litematica is optional.
             LOGGER.debug("Litematica classes not found — reflection detection unavailable");
         } catch (Exception e) {
-            LOGGER.debug("Litematica reflection detection failed: {}", e.getMessage());
+            LOGGER.warn("Litematica live detection failed: {}", e.toString());
         }
         return results;
+    }
+
+    private static DetectedPlacement readLivePlacement(Object placement) throws Exception {
+        Class<?> pClass = placement.getClass();
+
+        boolean enabled;
+        try {
+            enabled = (boolean) pClass.getMethod("isEnabled").invoke(placement);
+        } catch (NoSuchMethodException e) {
+            enabled = true;
+        }
+        if (!enabled) return null;
+
+        // Cast to Vec3i so Loom remaps getX/Y/Z. String reflection on
+        // BlockPos looks for Yarn names and fails at runtime on intermediary.
+        Object origin = pClass.getMethod("getOrigin").invoke(placement);
+        BlockPos originPos = readBlockPos(origin);
+        if (originPos == null) {
+            LOGGER.warn("Could not read Litematica placement origin from {}",
+                    origin == null ? "null" : origin.getClass().getName());
+            return null;
+        }
+
+        Path schematicPath = readSchematicPath(pClass, placement);
+        if (schematicPath == null) return null;
+        if (!schematicPath.toString().endsWith(".litematic")) return null;
+
+        if (!Files.exists(schematicPath)) {
+            LOGGER.warn("Litematica placement '{}' file not on disk: {} — including for origin only",
+                    schematicPath.getFileName(), schematicPath);
+        }
+
+        String name;
+        try {
+            name = (String) pClass.getMethod("getName").invoke(placement);
+        } catch (NoSuchMethodException e) {
+            name = schematicPath.getFileName().toString();
+        }
+        if (name == null || name.isBlank()) {
+            name = schematicPath.getFileName().toString();
+        }
+
+        String rotation = getEnumName(pClass, placement, "getRotation", "NONE");
+        String mirror = getEnumName(pClass, placement, "getMirror", "NONE");
+        int modifiedSubRegions = countModifiedSubRegions(pClass, placement);
+
+        return new DetectedPlacement(
+                schematicPath, name,
+                originPos.getX(), originPos.getY(), originPos.getZ(),
+                rotation, mirror, modifiedSubRegions);
+    }
+
+    private static BlockPos readBlockPos(Object origin) {
+        if (origin instanceof BlockPos pos) {
+            return pos;
+        }
+        if (origin instanceof Vec3i vec) {
+            return new BlockPos(vec.getX(), vec.getY(), vec.getZ());
+        }
+        if (origin == null) return null;
+        try {
+            int x = ((Number) origin.getClass().getMethod("getX").invoke(origin)).intValue();
+            int y = ((Number) origin.getClass().getMethod("getY").invoke(origin)).intValue();
+            int z = ((Number) origin.getClass().getMethod("getZ").invoke(origin)).intValue();
+            return new BlockPos(x, y, z);
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    private static Path readSchematicPath(Class<?> placementClass, Object placement) {
+        Path path = toPath(invokeQuiet(placementClass, placement, "getSchematicFile"));
+        if (path == null) {
+            Object schematic = invokeQuiet(placementClass, placement, "getSchematic");
+            if (schematic != null) {
+                Class<?> schematicClass = schematic.getClass();
+                for (String method : new String[] {"getFile", "getCanonicalFile", "getPath", "getSchematicFile"}) {
+                    path = toPath(invokeQuiet(schematicClass, schematic, method));
+                    if (path != null) break;
+                }
+            }
+        }
+        if (path == null) {
+            String name = null;
+            Object rawName = invokeQuiet(placementClass, placement, "getName");
+            if (rawName instanceof String str && !str.isBlank()) {
+                name = str;
+            }
+            if (name != null) {
+                String fileName = name.endsWith(".litematic") ? name : name + ".litematic";
+                Path guess = FabricLoader.getInstance().getGameDir()
+                        .resolve("schematics").resolve(fileName);
+                if (Files.exists(guess)) {
+                    path = guess;
+                }
+            }
+        }
+        return path == null ? null : path.normalize();
+    }
+
+    private static Path toPath(Object obj) {
+        if (obj instanceof Path path) return path;
+        if (obj instanceof File file) return file.toPath();
+        if (obj instanceof String str && !str.isBlank()) return Path.of(str);
+        return null;
+    }
+
+    private static Object invokeQuiet(Class<?> type, Object target, String methodName) {
+        try {
+            return type.getMethod(methodName).invoke(target);
+        } catch (Exception e) {
+            return null;
+        }
     }
 
     private static List<DetectedPlacement> parsePlacementFile(Path jsonFile) {
@@ -305,9 +388,17 @@ public final class LitematicaDetector {
         /*? if >=26.1 {*//*
         Minecraft mc = Minecraft.getInstance();
         if (mc.player == null) return null;
+        var server = mc.getCurrentServer();
+        if (server != null && server.ip != null && !server.ip.isBlank()) {
+            return server.ip;
+        }
         *//*?} else {*/
         MinecraftClient mc = MinecraftClient.getInstance();
         if (mc.player == null) return null;
+        var server = mc.getCurrentServerEntry();
+        if (server != null && server.address != null && !server.address.isBlank()) {
+            return server.address;
+        }
         /*?}*/
 
         String singleplayerContext = extractSingleplayerContext(mc);
@@ -315,12 +406,7 @@ public final class LitematicaDetector {
             return singleplayerContext;
         }
 
-        String multiplayerContext = extractMultiplayerContext(mc);
-        if (multiplayerContext != null && !multiplayerContext.isBlank()) {
-            return multiplayerContext;
-        }
-
-        return null;
+        return extractMultiplayerContext(mc);
     }
 
     private static String extractSingleplayerContext(Object mc) {
@@ -462,26 +548,9 @@ public final class LitematicaDetector {
         /*?}*/
         int scanRadius = 64;
 
-        // Sample nearby hologram blocks.
         List<BlockPos> hologramBlocks = new ArrayList<>();
         List<BlockState> hologramStates = new ArrayList<>();
-
-        for (int dy = -scanRadius; dy <= scanRadius && hologramBlocks.size() < 20; dy++) {
-            for (int dx = -scanRadius; dx <= scanRadius && hologramBlocks.size() < 20; dx++) {
-                for (int dz = -scanRadius; dz <= scanRadius && hologramBlocks.size() < 20; dz++) {
-                    /*? if >=26.1 {*//*
-                    BlockPos wp = playerPos.offset(dx, dy, dz);
-                    *//*?} else {*/
-                    BlockPos wp = playerPos.add(dx, dy, dz);
-                    /*?}*/
-                    BlockState bs = schematicWorld.getBlockState(wp);
-                    if (!bs.isAir()) {
-                        hologramBlocks.add(wp);
-                        hologramStates.add(bs);
-                    }
-                }
-            }
-        }
+        collectHologramSamples(schematicWorld, playerPos, scanRadius, hologramBlocks, hologramStates);
 
         if (hologramBlocks.isEmpty()) {
             LOGGER.info("No hologram blocks found within {} blocks of player", scanRadius);
@@ -489,6 +558,17 @@ public final class LitematicaDetector {
         }
 
         LOGGER.info("Found {} hologram blocks near player — correlating with schematic", hologramBlocks.size());
+
+        int sampleCount = hologramBlocks.size();
+        int minimumScore = Math.max(4, (sampleCount * 3 + 3) / 4);
+
+        // Prefer a live/config Litematica origin that matches the hologram.
+        // Repetitive builds (thousands of the same block) cannot uniquely
+        // invert origin from samples alone.
+        BlockPos knownMatch = matchKnownPlacementOrigin(schematic, hologramBlocks, hologramStates);
+        if (knownMatch != null) {
+            return knownMatch;
+        }
 
         // Build anchor candidates from the first match.
         BlockPos firstWorld = hologramBlocks.get(0);
@@ -501,11 +581,9 @@ public final class LitematicaDetector {
                     for (int x = 0; x < region.absX; x++) {
                         BlockState rs = region.getBlockState(x, y, z);
                         if (rs.equals(firstState)) {
-                            // Map back to schematic-local space.
                             int sx = region.originX + x;
                             int sy = region.originY + y;
                             int sz = region.originZ + z;
-                            // Convert to an anchor candidate.
                             candidates.add(new BlockPos(
                                     firstWorld.getX() - sx,
                                     firstWorld.getY() - sy,
@@ -522,39 +600,29 @@ public final class LitematicaDetector {
             return null;
         }
 
-        // Keep the best-matching candidate.
         BlockPos bestAnchor = null;
         int bestScore = 0;
         int secondBestScore = 0;
         int bestScoreTies = 0;
+        List<BlockPos> topAnchors = new ArrayList<>();
 
         for (BlockPos candidate : candidates) {
-            int score = 0;
-            for (int i = 0; i < hologramBlocks.size(); i++) {
-                BlockPos wp = hologramBlocks.get(i);
-                BlockState expected = hologramStates.get(i);
-                int sx = wp.getX() - candidate.getX();
-                int sy = wp.getY() - candidate.getY();
-                int sz = wp.getZ() - candidate.getZ();
-                BlockState schematicState = schematic.getBlockState(sx, sy, sz);
-                if (schematicState.equals(expected)) {
-                    score++;
-                }
-            }
+            int score = scoreAnchor(candidate, hologramBlocks, hologramStates, schematic);
             if (score > bestScore) {
                 secondBestScore = bestScore;
                 bestScore = score;
                 bestAnchor = candidate;
                 bestScoreTies = 1;
+                topAnchors.clear();
+                topAnchors.add(candidate);
             } else if (score == bestScore) {
                 bestScoreTies++;
+                topAnchors.add(candidate);
             } else if (score > secondBestScore) {
                 secondBestScore = score;
             }
         }
 
-        int sampleCount = hologramBlocks.size();
-        int minimumScore = Math.max(4, (sampleCount * 3 + 3) / 4);
         if (bestAnchor == null || bestScore < minimumScore) {
             LOGGER.warn("SchematicWorld anchor confidence too low: best score {}/{}"
                     + " below minimum {} ({} candidates)",
@@ -562,16 +630,113 @@ public final class LitematicaDetector {
             return null;
         }
         if (bestScoreTies > 1 && bestScore - secondBestScore <= 1) {
+            BlockPos disambiguated = pickKnownOrigin(topAnchors, schematic);
+            if (disambiguated != null) {
+                LOGGER.info("Anchor correlated from SchematicWorld via Litematica origin: {} (score {}/{})",
+                        disambiguated, bestScore, sampleCount);
+                return disambiguated;
+            }
             LOGGER.warn("SchematicWorld anchor ambiguous: {} candidates tied at {}/{}",
                     bestScoreTies, bestScore, sampleCount);
             return null;
         }
 
-        if (bestAnchor != null) {
-            LOGGER.info("Anchor correlated from SchematicWorld: {} (score {}/{})",
-                    bestAnchor, bestScore, sampleCount);
-        }
+        LOGGER.info("Anchor correlated from SchematicWorld: {} (score {}/{})",
+                bestAnchor, bestScore, sampleCount);
         return bestAnchor;
+    }
+
+    /*? if >=26.1 {*//*
+    private static void collectHologramSamples(Level schematicWorld, BlockPos playerPos, int scanRadius,
+    *//*?} else {*/
+    private static void collectHologramSamples(World schematicWorld, BlockPos playerPos, int scanRadius,
+    /*?}*/
+                                               List<BlockPos> hologramBlocks, List<BlockState> hologramStates) {
+        Map<BlockState, Integer> perState = new HashMap<>();
+        int maxPerState = 2;
+        int maxSamples = 24;
+        int[] strides = {8, 4, 1};
+        for (int stride : strides) {
+            if (hologramBlocks.size() >= maxSamples) break;
+            for (int dy = -scanRadius; dy <= scanRadius && hologramBlocks.size() < maxSamples; dy += stride) {
+                for (int dx = -scanRadius; dx <= scanRadius && hologramBlocks.size() < maxSamples; dx += stride) {
+                    for (int dz = -scanRadius; dz <= scanRadius && hologramBlocks.size() < maxSamples; dz += stride) {
+                        /*? if >=26.1 {*//*
+                        BlockPos wp = playerPos.offset(dx, dy, dz);
+                        *//*?} else {*/
+                        BlockPos wp = playerPos.add(dx, dy, dz);
+                        /*?}*/
+                        BlockState bs = schematicWorld.getBlockState(wp);
+                        if (bs.isAir()) continue;
+                        if (perState.getOrDefault(bs, 0) >= maxPerState) continue;
+                        hologramBlocks.add(wp);
+                        hologramStates.add(bs);
+                        perState.merge(bs, 1, Integer::sum);
+                    }
+                }
+            }
+        }
+    }
+
+    private static int scoreAnchor(BlockPos candidate, List<BlockPos> hologramBlocks,
+                                   List<BlockState> hologramStates, LitematicaSchematic schematic) {
+        int score = 0;
+        for (int i = 0; i < hologramBlocks.size(); i++) {
+            BlockPos wp = hologramBlocks.get(i);
+            BlockState expected = hologramStates.get(i);
+            int sx = wp.getX() - candidate.getX();
+            int sy = wp.getY() - candidate.getY();
+            int sz = wp.getZ() - candidate.getZ();
+            if (schematic.getBlockState(sx, sy, sz).equals(expected)) {
+                score++;
+            }
+        }
+        return score;
+    }
+
+    private static BlockPos matchKnownPlacementOrigin(LitematicaSchematic schematic,
+                                                      List<BlockPos> hologramBlocks,
+                                                      List<BlockState> hologramStates) {
+        BlockPos best = null;
+        int bestScore = -1;
+        int ties = 0;
+        for (DetectedPlacement placement : detectPlacements()) {
+            if (placement.hasUnsupportedTransform()) continue;
+            BlockPos candidate = new BlockPos(
+                    placement.originX() + schematic.getOriginOffsetX(),
+                    placement.originY() + schematic.getOriginOffsetY(),
+                    placement.originZ() + schematic.getOriginOffsetZ());
+            int score = scoreAnchor(candidate, hologramBlocks, hologramStates, schematic);
+            if (score > bestScore) {
+                bestScore = score;
+                best = candidate;
+                ties = 1;
+            } else if (score == bestScore) {
+                ties++;
+            }
+        }
+        if (best != null && ties == 1 && bestScore >= hologramBlocks.size() && !hologramBlocks.isEmpty()) {
+            LOGGER.info("Anchor matched known Litematica origin: {} (score {}/{})",
+                    best, bestScore, hologramBlocks.size());
+            return best;
+        }
+        return null;
+    }
+
+    private static BlockPos pickKnownOrigin(List<BlockPos> topAnchors, LitematicaSchematic schematic) {
+        for (DetectedPlacement placement : detectPlacements()) {
+            if (placement.hasUnsupportedTransform()) continue;
+            BlockPos expected = new BlockPos(
+                    placement.originX() + schematic.getOriginOffsetX(),
+                    placement.originY() + schematic.getOriginOffsetY(),
+                    placement.originZ() + schematic.getOriginOffsetZ());
+            for (BlockPos candidate : topAnchors) {
+                if (candidate.equals(expected)) {
+                    return candidate;
+                }
+            }
+        }
+        return null;
     }
 
     private static String getEnumName(Class<?> targetClass, Object target,
