@@ -223,7 +223,7 @@ public class SchematicPrinter {
 
     // settings
 
-    private int bps = 19;
+    private int bps = 20;
     // Kept under the placement engine's effective reach (~3.7) so scanned
     // candidates' cursors stay comfortably inside Grim's lagged reach check
     // after face adjustments; the bot relocates closer for farther cells.
@@ -278,10 +278,19 @@ public class SchematicPrinter {
         };
     }
 
+    private boolean isWalkAndPlaceState() {
+        return autoState == AutoState.WALKING_TO_BUILD
+                || autoState == AutoState.WALKING_BACK;
+    }
+
     private boolean allowLiveInventorySwapsDuringBuild() {
         if (!swapItems) return false;
         if (PlacementEngine.areSwapsSuspended()) return false;
         SetbackMonitor monitor = SetbackMonitor.get();
+        if (!autoBuild) {
+            return monitor.isQuietEnoughToPlace()
+                    && PlacementEngine.getConsecutiveRejections() == 0;
+        }
         boolean stable = monitor.isCalm()
                 && monitor.recentSetbackCount(BUILD_SWAP_RECENT_SETBACK_WINDOW) == 0
                 && PlacementEngine.getConsecutiveRejections() == 0;
@@ -478,7 +487,7 @@ public class SchematicPrinter {
     private static final int BUILD_GATE_STALL_RECHECK_TICKS = 20;
     private static final int BUILD_GATE_STALL_TIMEOUT_TICKS = 80;
     private static final int PLACEMENT_START_FAILURE_TARGET_COOLDOWN_TICKS = 20;
-    private static final int NO_VISIBLE_HIT_TARGET_COOLDOWN_TICKS = 160;
+    private static final int NO_VISIBLE_HIT_TARGET_COOLDOWN_TICKS = 8;
     private static final int TIMEOUT_TARGET_COOLDOWN_TICKS = 160;
     private static final int TIMEOUT_TARGET_COOLDOWN_STEP_TICKS = 80;
     private static final int MAX_TIMEOUT_TARGET_COOLDOWN_TICKS = 600;
@@ -883,7 +892,6 @@ public class SchematicPrinter {
     }
 
     private void enable() {
-        enabled = true;
         clearBuildResult();
         // No build walk should ever sprint (sprint desyncs Grim's
         // sprint-direction check against the placement engine's silent yaw).
@@ -898,6 +906,7 @@ public class SchematicPrinter {
                 litematicaSynced = true;
             } else if (schematic == null || anchor == null) {
                 ChatHelper.info("§cNo schematic loaded. Use /printer load <file> or load one in Litematica.");
+                return;
             }
         } else {
             // Already loaded — re-sync anchor only (avoid replacing schematic).
@@ -905,6 +914,8 @@ public class SchematicPrinter {
                 litematicaSynced = true;
             }
         }
+
+        enabled = true;
 
         // SchematicWorld correlation will auto-align on next tick if needed.
 
@@ -1649,12 +1660,12 @@ public class SchematicPrinter {
         if (PathWalker.isActive()
                 || PlacementEngine.isBusy()
                 || !"IDLE".equals(PlacementEngine.getPhase())
-                || !SetbackMonitor.get().isCalm()) {
+                || !SetbackMonitor.get().isQuietEnoughToPlace()) {
             PacketTelemetry.mark("build handoff waiting ticks=" + buildHandoffSettleTicks
                     + " walker=" + PathWalker.isActive()
                     + " busy=" + PlacementEngine.isBusy()
                     + " phase=" + PlacementEngine.getPhase()
-                    + " calm=" + SetbackMonitor.get().isCalm());
+                    + " calm=" + SetbackMonitor.get().isQuietEnoughToPlace());
             return true;
         }
         buildHandoffSettleTicks--;
@@ -2194,7 +2205,7 @@ public class SchematicPrinter {
             LOGGER.debug("Setback detected while building — refreshing placement planner");
             return true;
         }
-        if (!setbackMonitor.isCalm()) {
+        if (!setbackMonitor.isQuietEnoughToPlace()) {
             return true;
         }
         return false;
@@ -2443,7 +2454,11 @@ public class SchematicPrinter {
 
     private void recordNoVisibleHitPlacementBlock(BlockPos pos, BlockState target) {
         coolDownPlacementTarget(pos, NO_VISIBLE_HIT_TARGET_COOLDOWN_TICKS);
-        recordBuildLayerAccessFailure(pos, "no visible hit");
+        // Layer-wide cooldown is AutoBuild geometry recovery. A walk-by miss
+        // in manual mode must not freeze the whole Y for 12s+.
+        if (autoBuild) {
+            recordBuildLayerAccessFailure(pos, "no visible hit");
+        }
         PacketTelemetry.mark("build no-hit cooldown target=" + pos
                 + " desired=" + (target != null ? target.getBlock() : "unknown")
                 + " ticks=" + NO_VISIBLE_HIT_TARGET_COOLDOWN_TICKS);
@@ -3104,13 +3119,11 @@ public class SchematicPrinter {
             }
         }
 
-        // Forward BPS and keep manual mode silent.
+        // Forward BPS. Never use silent look packets on Grim (2b2t): the
+        // server ray-traces the last real rotation. Camera-on turns the
+        // player; camera-off injects aim through the vanilla movement packet.
         PlacementEngine.setBps(bps);
-        if (autoBuild) {
-            PlacementEngine.setSilentRotation(false);
-        } else {
-            PlacementEngine.setSilentRotation(true);
-        }
+        PlacementEngine.setSilentRotation(false);
         // Manual mode lets the user walk and place; AutoBuild stops to place.
         PlacementEngine.setManualPlacementMode(!autoBuild);
         // /printer camera off → decoupled camera: aim via the real rotation in
@@ -3166,9 +3179,10 @@ public class SchematicPrinter {
             }
         }
 
-        // Always observe placement ACKs, but never let placement and
-        // navigation own the packet stream at the same time.
+        // Always observe placement ACKs. Walking to the next build zone now
+        // keeps placing in-reach blocks instead of pausing the pipeline.
         PlacementEngine.tickVerification();
+        boolean placeWhileWalking = autoBuild && isWalkAndPlaceState();
         if (isNavigationAutoState()) {
             if (!autoBuild) {
                 PacketTelemetry.mark("navigation cleared while autobuild disabled state=" + autoState
@@ -3181,15 +3195,21 @@ public class SchematicPrinter {
                 autoState = AutoState.IDLE;
                 return;
             }
-            if (PlacementEngine.hasActivePhase()) {
-                PacketTelemetry.mark("placement reset during navigation state=" + autoState
-                        + " phase=" + PlacementEngine.getPhase()
-                        + " active=" + PlacementEngine.hasActivePhase());
-                PlacementEngine.reset();
-                clearPendingBuildPlacement();
+            if (!placeWhileWalking) {
+                if (PlacementEngine.hasActivePhase()) {
+                    PacketTelemetry.mark("placement reset during navigation state=" + autoState
+                            + " phase=" + PlacementEngine.getPhase()
+                            + " active=" + PlacementEngine.hasActivePhase());
+                    PlacementEngine.reset();
+                    clearPendingBuildPlacement();
+                }
+                tickAutoBuild(mc);
+                return;
             }
             tickAutoBuild(mc);
-            return;
+            if (!isWalkAndPlaceState()) {
+                return;
+            }
         }
         if (PlacementEngine.isBusy()) {
             boolean staleVerificationGate = autoBuild
@@ -3241,6 +3261,24 @@ public class SchematicPrinter {
         }
 
         if (autoBuild) {
+            if (placeWhileWalking && isWalkAndPlaceState()) {
+                /*? if >=26.2 {*//*
+                if (mc.gui.screen() != null) return;
+                *//*?} else if >=26.1 {*//*
+                if (mc.screen != null) return;
+                *//*?} else {*/
+                if (mc.currentScreen != null) return;
+                /*?}*/
+                if (handlePendingBuildPlacement(mc)) return;
+                if (handlePlacementFailureRecovery(mc)) return;
+                if (!PlacementEngine.canPlace()) return;
+                /*? if >=26.1 {*//*
+                tryPlaceNextBlock(mc.player, mc.level);
+                *//*?} else {*/
+                tryPlaceNextBlock(mc.player, mc.world);
+                /*?}*/
+                return;
+            }
             tickAutoBuild(mc);
         } else {
             /*? if >=26.2 {*//*
@@ -3380,7 +3418,7 @@ public class SchematicPrinter {
             if (PlacementEngine.isBusy()
                     || placementFailurePauseTicks > 0
                     || !"IDLE".equals(PlacementEngine.getPhase())
-                    || !SetbackMonitor.get().isCalm()) {
+                    || !SetbackMonitor.get().isQuietEnoughToPlace()) {
                 buildGateStallTicks = 0;
                 return;
             }
@@ -3391,7 +3429,7 @@ public class SchematicPrinter {
                         + " busy=" + PlacementEngine.isBusy()
                         + " phase=" + PlacementEngine.getPhase()
                         + " pause=" + placementFailurePauseTicks
-                        + " calm=" + SetbackMonitor.get().isCalm()
+                        + " calm=" + SetbackMonitor.get().isQuietEnoughToPlace()
                         + " pendingBuild=" + (pendingBuildPlacementPos != null));
             }
             if (buildGateStallTicks == BUILD_GATE_STALL_RECHECK_TICKS
@@ -4395,6 +4433,12 @@ public class SchematicPrinter {
         if (totalSetbacks != observedWalkingSetbacks) {
             observedWalkingSetbacks = totalSetbacks;
             observedPlacementSetbacks = totalSetbacks;
+            if (arrivalState == AutoState.BUILDING) {
+                // Keep walking and placing. A Grim walk rubber-band used to
+                // dump the pipeline and pause 16 ticks; that is the stall.
+                noProgressTicks = 0;
+                return;
+            }
             walkingSetbackPauseTicks = WALK_SETBACK_PAUSE_TICKS;
             if (PathWalker.isActive()) {
                 PathWalker.stop();
@@ -4402,23 +4446,6 @@ public class SchematicPrinter {
             PlacementEngine.reset();
             noProgressTicks = 0;
             walkAttemptCooldown = Math.max(walkAttemptCooldown, WALK_SETBACK_PAUSE_TICKS);
-            if (arrivalState == AutoState.BUILDING) {
-                /*? if >=26.1 {*//*
-                if (canBuildFromCurrentStance(mc.player, mc.level)) {
-                *//*?} else {*/
-                if (canBuildFromCurrentStance(mc.player, mc.world)) {
-                /*?}*/
-                    placementFailurePauseTicks = Math.max(
-                            placementFailurePauseTicks, PLACEMENT_FAILURE_PAUSE_TICKS);
-                    resumeBuildFromCurrentStance("walking setback stabilized current stance");
-                    LOGGER.debug("Setback detected while walking to build — resuming from stable current stance");
-                } else {
-                    refreshPlacementPlannerState();
-                    deferBuildApproachReplan("walking setback current stance unstable");
-                    LOGGER.debug("Setback detected while walking to build — current stance unstable, replanning build approach");
-                }
-                return;
-            }
             LOGGER.debug("Setback detected while walking — pausing before replanning");
             return;
         }
@@ -4427,7 +4454,11 @@ public class SchematicPrinter {
             walkingSetbackPauseTicks--;
             return;
         }
-        if (!setbackMonitor.isCalm()) {
+        if (arrivalState == AutoState.BUILDING) {
+            if (!setbackMonitor.isQuietEnoughToPlace()) {
+                return;
+            }
+        } else if (!setbackMonitor.isCalm()) {
             return;
         }
 
@@ -12308,8 +12339,8 @@ public class SchematicPrinter {
         double py = player.getPos().y;
         double pz = player.getPos().z;
         /*?}*/
-        double halfW = 0.46;
-        double height = 1.9;
+        double halfW = 0.3;
+        double height = 1.8;
         return px + halfW > pos.getX() && px - halfW < pos.getX() + 1 &&
                py + height > pos.getY() && py < pos.getY() + 1 &&
                pz + halfW > pos.getZ() && pz - halfW < pos.getZ() + 1;
@@ -13016,10 +13047,8 @@ public class SchematicPrinter {
         double rangeSq = range * range;
         int maxReach = (int) Math.ceil(range);
 
-        // Manual discipline (default AUTO sort, no AutoBuild): place strictly
-        // below the player's feet, fill the lowest reachable layer first (build
-        // upward), and sweep outward from the stance, so the top stays walkable
-        // and no cell is sealed as an air pocket. Explicit sort modes opt out.
+        // Manual discipline (default AUTO sort, no AutoBuild): fill under the
+        // feet first and sweep outward so the top stays walkable.
         boolean playerOutwardManual = !autoBuild && sortMode == SortMode.AUTO;
 
         List<BlockPos> candidates = new ArrayList<>();
@@ -13097,10 +13126,9 @@ public class SchematicPrinter {
                     int sy = worldPos.getY() - anchor.getY();
                     int sz = worldPos.getZ() - anchor.getZ();
                     if (!schematic.contains(sx, sy, sz)) continue;
-                    // Only place strictly below the player's feet in manual mode -
-                    // under your legs and down, nothing at feet level or above, so
-                    // the top stays clear to walk while it fills beneath you.
-                    if (playerOutwardManual && worldPos.getY() >= playerPos.getY()) continue;
+                    // Manual mode: only the layer under your feet. Never place
+                    // at standing height or above.
+                    if (!autoBuild && worldPos.getY() >= playerPos.getY()) continue;
                     if (isBuildTargetCoolingDown(worldPos)) {
                         dbgCoolingDown++;
                         continue;
