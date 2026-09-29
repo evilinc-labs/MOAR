@@ -132,11 +132,14 @@ How do I...
 |---------|--------------|
 | `/moar gui` | Open the MOAR control screen (Kits, Index, Regions, Retrieve, Printer, Spawnproof, API tabs) |
 | `/moar packetlog on` | Start recording placement/interaction packet telemetry |
+| `/moar packetlog travel` | Start a focused bounce travel trace with movement, flight commands, server corrections, and local flight state |
 | `/moar packetlog off` | Stop recording telemetry |
 | `/moar packetlog status` | Show whether telemetry is enabled and how many events are buffered |
 | `/moar packetlog clear` | Clear the telemetry buffer |
 | `/moar packetlog mark` | Insert a manual marker into the trace |
 | `/moar packetlog dump` | Write the telemetry trace to a file for diagnostics |
+
+For a slow highway bounce, run `/moar packetlog travel`, let it bounce for 30–60 seconds, then run `/moar packetlog off` and `/moar packetlog dump`. The travel trace keeps up to 20,000 events and includes position coordinates; review the file before sharing it.
 
 </details>
 

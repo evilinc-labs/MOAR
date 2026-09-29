@@ -40,6 +40,10 @@ public final class HighwayCandidate {
             this.stepDz = stepDz;
         }
 
+        public boolean isParallelTo(Axis other) {
+            return stepDx * other.stepDz == stepDz * other.stepDx;
+        }
+
         // Get the perpendicular X step.
         public int perpDx() {
             return diagonal ? stepDz : (stepDz == 0 ? 0 : -stepDz);

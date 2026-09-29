@@ -2,6 +2,7 @@ package dev.moar.travel.bounce;
 
 import dev.moar.travel.plan.HighwayCandidate;
 import dev.moar.util.MoarNetworkManager;
+import dev.moar.util.PacketTelemetry;
 import dev.moar.world.SetbackMonitor;
 
 /*? if >=26.1 {*//*
@@ -27,6 +28,8 @@ public final class BounceController {
 
     private static final BounceController INSTANCE = new BounceController();
     public static BounceController get() { return INSTANCE; }
+    private final BounceLaunchTiming launchTiming = new BounceLaunchTiming();
+    private final BounceGroundHandoff groundHandoff = new BounceGroundHandoff();
 
     // ── Mission state ─────────────────────────────────────────────
     private HighwayCandidate highway;
@@ -177,6 +180,7 @@ public final class BounceController {
         glideConfirmationTicks = 0;
         launchRequests = 0;
         launchAttemptsThisJump = 0;
+        launchTiming.reset();
         sprintReadyWaitTicks = 0;
         launchSprintLossRecorded = false;
         consecutiveLaunchSprintLosses = 0;
@@ -225,6 +229,8 @@ public final class BounceController {
         fallObservationTicks = 0;
         fallDepth = 0.0;
         correctionEpisodeBaseline = SetbackMonitor.get().totalCorrectionEpisodes();
+        groundHandoff.reset(SetbackMonitor.get().recentCorrectionEpisodeCount(
+                BounceTuning.CORRECTION_STORM_WINDOW_TICKS));
         lastPerpOffset = 0.0;
         lastPerpCorrection = 0.0f;
         noProgressTicks = 0;
@@ -462,6 +468,17 @@ public final class BounceController {
         double velocityZ = mc.player.getVelocity().z;
         /*?}*/
         double horizontalSpeed = Math.hypot(velocityX, velocityZ);
+        // A proxy may report the old glide flag for another tick after landing.
+        // Vanilla refuses to emit a new START_FALL_FLYING packet while that flag
+        // remains set, even though the next jump has already begun.
+        if (onGround && gliding) {
+            PacketTelemetry.markTravel("grounded-glide-cleared");
+            /*? if >=26.1 {*//*
+            mc.player.stopFallFlying();
+            *//*?} else {*/
+            mc.player.stopGliding();
+            /*?}*/
+        }
         if (onGround) {
             airborneLaunchTicks = 0;
         } else if (launchPhase == LaunchPhase.GROUND_JUMP_REQUESTED
@@ -510,6 +527,9 @@ public final class BounceController {
             case GROUNDED -> {
                 if (!onGround) {
                     setLaunchPhase(LaunchPhase.LANDING);
+                    return;
+                }
+                if (groundHandoff.waitBeforeGroundJump()) {
                     return;
                 }
                 if (!jumpingEnabled) {
@@ -574,6 +594,22 @@ public final class BounceController {
                     double touchdownSpeed = horizontalSpeed();
                     updateCycleGain(touchdownSpeed);
                     updateCycleEnergyBudget(touchdownSpeed);
+                    BounceLaunchTiming.Change timingChange = launchTiming.observeTouchdown(
+                            launchAttemptsThisJump, firstLaunchAirborneTicks);
+                    if (timingChange == BounceLaunchTiming.Change.DELAYED) {
+                        LOGGER.info("[Bounce] first flight request moving to air tick {} after repeated retries",
+                                launchTiming.firstRequestAirTicks());
+                    } else if (timingChange == BounceLaunchTiming.Change.EARLY) {
+                        LOGGER.info("[Bounce] delayed first request still required retries; returning to air tick {}",
+                                launchTiming.firstRequestAirTicks());
+                    }
+                    PacketTelemetry.markTravel("touchdown bounce=" + completedBounces
+                            + " speed=" + formatArcValue(touchdownSpeed)
+                            + " takeoff=" + formatArcValue(takeoffHorizontalSpeed)
+                            + " requests=" + launchAttemptsThisJump
+                            + " firstAirTick=" + firstLaunchAirborneTicks
+                            + " firstGlideAirTick=" + firstGlideAirborneTicks
+                            + " nextRequestAirTick=" + launchTiming.firstRequestAirTicks());
                     if (correctionRecoveryBounces > 0) {
                         correctionRecoveryBounces--;
                     }
@@ -658,7 +694,12 @@ public final class BounceController {
                                 formatArcValue(observedCycleEnergyRate),
                                 airborneCycleTicks);
                     }
-                    if (jumpingEnabled && requestGroundJump()) {
+                    boolean holdForServer = groundHandoff.afterTouchdown(ticksActive);
+                    if (holdForServer) {
+                        PacketTelemetry.markTravel("ground-handoff extraTicks="
+                                + groundHandoff.extraGroundTicks());
+                        setLaunchPhase(LaunchPhase.GROUNDED);
+                    } else if (jumpingEnabled && requestGroundJump()) {
                         setLaunchPhase(LaunchPhase.GROUND_JUMP_REQUESTED);
                     } else {
                         setLaunchPhase(LaunchPhase.GROUNDED);
@@ -985,6 +1026,15 @@ public final class BounceController {
         airborneCycleTicks = 0;
         resetCycleEnergyBudget();
         LOGGER.debug("[Bounce] ground jump requested");
+        PacketTelemetry.markTravel("ground-jump speed=" + formatArcValue(speed)
+                + " sprint=" + takeoffSprinting
+                + " firstRequestAirTick=" + launchTiming.firstRequestAirTicks()
+                + " rearmTicks=" + launchRearmTicks
+                + " flightEnabled=" + elytraLaunchEnabled
+                + " jumpingEnabled=" + jumpingEnabled
+                + " correctionRecoveryBounces=" + correctionRecoveryBounces
+                + " groundHandoffTicks=" + groundHandoff.extraGroundTicks());
+        groundHandoff.onGroundJumpRequested(ticksActive);
         return true;
     }
 
@@ -1608,7 +1658,7 @@ public final class BounceController {
 
     // Arm flight at the first safe fractional launch point.
     private boolean tryRequestLaunch(double y, double velocityY, double rise) {
-        boolean reachedLaunchPoint = airborneLaunchTicks >= BounceTuning.LAUNCH_MIN_AIRBORNE_TICKS
+        boolean reachedLaunchPoint = airborneLaunchTicks >= launchTiming.firstRequestAirTicks()
                 && (velocityY <= BounceTuning.ELYTRA_ACTIVATE_VY_THRESHOLD
                 || rise >= BounceTuning.ELYTRA_ACTIVATE_MAX_RISE);
         if (!elytraLaunchEnabled || launchRearmTicks > 0 || !reachedLaunchPoint) {
@@ -1632,6 +1682,9 @@ public final class BounceController {
         launchArmed = true;
         glideConfirmationTicks = 0;
         setLaunchPhase(LaunchPhase.LAUNCH_REQUESTED);
+        PacketTelemetry.markTravel("flight-request attempt=1 airTick=" + firstLaunchAirborneTicks
+                + " rise=" + formatArcValue(rise)
+                + " vy=" + formatArcValue(velocityY));
         return true;
     }
 
@@ -1661,6 +1714,10 @@ public final class BounceController {
                 formatArcValue(firstLaunchVelocityY),
                 String.format("%.3f", y), String.format("%.3f", rise),
                 String.format("%.3f", velocityY));
+        PacketTelemetry.markTravel("flight-request attempt=" + launchAttemptsThisJump
+                + " airTick=" + airborneCycleTicks
+                + " rise=" + formatArcValue(rise)
+                + " vy=" + formatArcValue(velocityY));
         return true;
     }
 
@@ -1716,6 +1773,8 @@ public final class BounceController {
     private void recordLaunchAccepted() {
         consecutiveLaunchFailures = 0;
         launchArmed = false;
+        PacketTelemetry.markTravel("flight-ack attempt=" + launchAttemptsThisJump
+                + " airTick=" + airborneCycleTicks);
         if (completedBounces < 3) {
             LOGGER.info("[Bounce] launch acknowledged #{} after {}t", launchRequests, launchPhaseTicks);
         }
@@ -1724,6 +1783,9 @@ public final class BounceController {
     private void recordLaunchRejected(String reason, double y, double velocityY, double rise) {
         consecutiveLaunchFailures++;
         launchArmed = false;
+        PacketTelemetry.markTravel("flight-rejected reason=" + reason
+                + " attempts=" + launchAttemptsThisJump
+                + " airTick=" + airborneCycleTicks);
         if (consecutiveLaunchFailures <= 3) {
             LOGGER.warn("[Bounce] launch not acknowledged reason={} phase={} failures={} y={} vy={} rise={} phaseTicks={}",
                     reason, launchPhase, consecutiveLaunchFailures,
@@ -1738,6 +1800,15 @@ public final class BounceController {
         progressSeeded = false;
         if (!setbackHolding) {
             setbackHolding = true;
+            launchTiming.reset();
+            boolean correctedAfterRebound = groundHandoff.reboundAttemptedRecently(ticksActive);
+            if (groundHandoff.onCorrection(correctedAfterRebound)) {
+                LOGGER.warn("[Bounce] rebound correction; waiting {} extra ground tick(s) after future touchdowns",
+                        groundHandoff.extraGroundTicks());
+            }
+            PacketTelemetry.markTravel("server-correction phase=" + launchPhase
+                    + " afterRebound=" + correctedAfterRebound
+                    + " nextGroundHandoffTicks=" + groundHandoff.extraGroundTicks());
             launchRearmTicks = Math.max(
                     launchRearmTicks, BounceTuning.CORRECTION_REARM_TICKS);
             correctionRecoveryBounces = BounceTuning.CORRECTION_RECOVERY_BOUNCES;

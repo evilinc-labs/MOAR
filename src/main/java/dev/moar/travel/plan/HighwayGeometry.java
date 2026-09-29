@@ -3,6 +3,7 @@ package dev.moar.travel.plan;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
+import java.util.Optional;
 
 // Coordinate helpers for nether highway planning.
 public final class HighwayGeometry {
@@ -184,6 +185,17 @@ public final class HighwayGeometry {
     }
 
     // ── Highway-axis projection ───────────────────────────────────────────
+    // Recognition uses a local tolerance, unlike destination ranking, whose
+    // proportional diagonal tolerance can extend thousands of blocks out.
+    public static Optional<int[]> declaredCenter(int x, int z, HighwayCandidate.Axis axis) {
+        return rankCandidates(x, z, true, false).stream()
+                .filter(candidate -> candidate.confidence > 0.05f)
+                .filter(candidate -> candidate.axis.isParallelTo(axis))
+                .map(candidate -> projectOnto(candidate, x, z))
+                .filter(center -> horizontalDistance(x, z, center[0], center[1]) <= 4.0)
+                .findFirst();
+    }
+
     // Project an X/Z point onto a highway line.
     public static int[] projectOnto(GeometryCandidate c, int x, int z) {
         return switch (c.axis) {

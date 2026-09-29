@@ -2,10 +2,12 @@
   "required": true,
   "minVersion": "0.8",
   "package": "dev.moar.mixin",
+  "plugin": "dev.moar.mixin.BaritoneNativeMixinPlugin",
   "compatibilityLevel": "JAVA_21",
   "client": [
     "KeyboardInputMixin",
     "PlacementMovementSuppressMixin",
+    "ResupplyMiningMixin",
     "PacketTelemetryMixin",
     "BaritoneNetherPathfinderContextMixin",
     "BaritoneBlockStateOctreeMixin"
