@@ -68,9 +68,14 @@ public final class MoarCommand {
     }
 
     private static int packetLogOn() {
+        if (PacketTelemetry.isEnabled()
+                && PacketTelemetry.mode() == PacketTelemetry.Mode.TRAVEL) {
+            ChatHelper.info("§eTravel packet telemetry is already active; §f/moar packetlog on§e did not clear it. Use §f/moar packetlog off§e first to switch modes.");
+            return 1;
+        }
         PacketTelemetry.clear();
         PacketTelemetry.setEnabled(true);
-        ChatHelper.info("§aPacket telemetry enabled.");
+        ChatHelper.info("§aGeneral packet telemetry enabled. Use §f/moar packetlog travel§a for elytra diagnostics.");
         return 1;
     }
 

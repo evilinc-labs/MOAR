@@ -11,6 +11,7 @@ import dev.moar.command.PrinterCommand;
 import dev.moar.command.SpawnProofCommand;
 import dev.moar.command.StashCommand;
 import dev.moar.gui.MoarScreen;
+import dev.moar.gui.MoarUpdateScreen;
 import dev.moar.lanes.LaneManager;
 import dev.moar.stash.StashDatabase;
 import dev.moar.stash.StashManager;
@@ -24,6 +25,7 @@ import dev.moar.travel.hud.HighwayOverlayRenderer;
 import dev.moar.travel.hud.TravelHud;
 import dev.moar.util.PathWalker;
 import dev.moar.util.PrinterDatabase;
+import dev.moar.update.MoarUpdateService;
 import dev.moar.util.MoarNetworkManager;
 import net.fabricmc.api.ClientModInitializer;
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
@@ -35,8 +37,10 @@ import net.fabricmc.fabric.api.client.keybinding.v1.KeyBindingHelper;
 /*?}*/
 /*? if >=26.1 {*//*
 import net.minecraft.client.KeyMapping;
+import net.minecraft.client.gui.screens.TitleScreen;
 *//*?} else {*/
 import net.minecraft.client.option.KeyBinding;
+import net.minecraft.client.gui.screen.TitleScreen;
 /*?}*/
 /*? if >=26.1 {*//*
 import com.mojang.blaze3d.platform.InputConstants;
@@ -70,6 +74,7 @@ public class MoarMod implements ClientModInitializer {
     private static final ChestManager CHEST_MANAGER = new ChestManager();
     private static final StashManager STASH_MANAGER = new StashManager();
     private static final LaneManager LANE_MANAGER = new LaneManager();
+    private static final MoarUpdateService UPDATE_SERVICE = new MoarUpdateService();
     private static MoarProperties PROPERTIES;
     private static ApiServer API_SERVER;
     private static volatile boolean guiOpenRequested;
@@ -217,6 +222,24 @@ public class MoarMod implements ClientModInitializer {
                 /*?}*/
             }
 
+            // Offer a matching release only on the title screen, after startup UI settles.
+            /*? if >=26.2 {*//*
+            if (client.gui.screen() instanceof TitleScreen titleScreen) {
+            *//*?} else if >=26.1 {*//*
+            if (client.screen instanceof TitleScreen titleScreen) {
+            *//*?} else {*/
+            if (client.currentScreen instanceof TitleScreen titleScreen) {
+            /*?}*/
+                var offer = UPDATE_SERVICE.takeOffer();
+                if (offer != null) {
+                    /*? if >=26.2 {*//*
+                    client.gui.setScreen(new MoarUpdateScreen(titleScreen, UPDATE_SERVICE, offer));
+                    *//*?} else {*/
+                    client.setScreen(new MoarUpdateScreen(titleScreen, UPDATE_SERVICE, offer));
+                    /*?}*/
+                }
+            }
+
             // Tick the printer
             PRINTER.tick();
 
@@ -271,6 +294,7 @@ public class MoarMod implements ClientModInitializer {
         }));
 
         LOGGER.info("MOAR initialized.");
+        UPDATE_SERVICE.checkAfterStartup();
     }
 
     // Get the singleton printer instance.

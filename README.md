@@ -64,6 +64,8 @@
 5. *(Optional)* Get the corresponding [Baritone](https://github.com/cabaletta/baritone/releases) build for pathfinding
 6. Put the files in your `.minecraft/mods` folder
 
+MOAR also checks published GitHub releases after the client starts. When a newer build exists for your Minecraft version, the title screen offers **Update**, **Later**, or **Skip version**. Update downloads and verifies the matching release, installs it beside a disabled backup of the current JAR, and takes effect after restarting Minecraft. Skip version hides that release on later launches; a newer release can still be offered. If the launcher keeps the loaded JAR locked, the verified download remains in `config/moar/updates` for a manual swap.
+
 ### Supported Versions
 
 | Minecraft | Fabric API | Java |
@@ -139,7 +141,7 @@ How do I...
 | `/moar packetlog mark` | Insert a manual marker into the trace |
 | `/moar packetlog dump` | Write the telemetry trace to a file for diagnostics |
 
-For a slow highway bounce, run `/moar packetlog travel`, let it bounce for 30–60 seconds, then run `/moar packetlog off` and `/moar packetlog dump`. The travel trace keeps up to 20,000 events and includes position coordinates; review the file before sharing it.
+For a slow highway bounce, run `/moar packetlog travel`, let it bounce for 30–60 seconds, then run `/moar packetlog off` and `/moar packetlog dump`. If travel logging is active, `/moar packetlog on` leaves it running; stop it first to switch to general mode. The travel trace keeps up to 20,000 events and includes position coordinates; review the file before sharing it.
 
 </details>
 

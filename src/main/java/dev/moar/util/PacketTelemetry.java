@@ -42,7 +42,7 @@ import java.util.Set;
 public final class PacketTelemetry {
 
     private static final Logger LOGGER = LoggerFactory.getLogger("MOAR/Packets");
-    private static final String TRACE_BUILD = "bounce-ground-handoff-trace";
+    private static final String TRACE_BUILD = "bounce-single-request-travel-trace";
     // Movement packets arrive every tick; retain several minutes of travel.
     private static final int MAX_EVENTS = 20_000;
     private static final int MAX_FIELDS = 14;
