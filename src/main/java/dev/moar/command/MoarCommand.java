@@ -38,6 +38,7 @@ public final class MoarCommand {
                     /*? if >=26.1 {*//*
                     .then(ClientCommands.literal("packetlog")
                             .then(ClientCommands.literal("on").executes(ctx -> packetLogOn()))
+                            .then(ClientCommands.literal("travel").executes(ctx -> packetLogTravel()))
                             .then(ClientCommands.literal("off").executes(ctx -> packetLogOff()))
                             .then(ClientCommands.literal("status").executes(ctx -> packetLogStatus()))
                             .then(ClientCommands.literal("clear").executes(ctx -> packetLogClear()))
@@ -47,6 +48,7 @@ public final class MoarCommand {
                     *//*?} else {*/
                     .then(ClientCommandManager.literal("packetlog")
                             .then(ClientCommandManager.literal("on").executes(ctx -> packetLogOn()))
+                            .then(ClientCommandManager.literal("travel").executes(ctx -> packetLogTravel()))
                             .then(ClientCommandManager.literal("off").executes(ctx -> packetLogOff()))
                             .then(ClientCommandManager.literal("status").executes(ctx -> packetLogStatus()))
                             .then(ClientCommandManager.literal("clear").executes(ctx -> packetLogClear()))
@@ -66,9 +68,20 @@ public final class MoarCommand {
     }
 
     private static int packetLogOn() {
+        if (PacketTelemetry.isEnabled()
+                && PacketTelemetry.mode() == PacketTelemetry.Mode.TRAVEL) {
+            ChatHelper.info("§eTravel packet telemetry is already active; §f/moar packetlog on§e did not clear it. Use §f/moar packetlog off§e first to switch modes.");
+            return 1;
+        }
         PacketTelemetry.clear();
         PacketTelemetry.setEnabled(true);
-        ChatHelper.info("§aPacket telemetry enabled.");
+        ChatHelper.info("§aGeneral packet telemetry enabled. Use §f/moar packetlog travel§a for elytra diagnostics.");
+        return 1;
+    }
+
+    private static int packetLogTravel() {
+        PacketTelemetry.startTravel();
+        ChatHelper.info("§aTravel packet telemetry enabled. Use §f/moar packetlog dump§a after a few bounce cycles.");
         return 1;
     }
 
@@ -80,7 +93,8 @@ public final class MoarCommand {
 
     private static int packetLogStatus() {
         ChatHelper.info((PacketTelemetry.isEnabled() ? "§aenabled" : "§edisabled")
-                + " §7events=" + PacketTelemetry.size());
+                + " §7mode=" + PacketTelemetry.mode()
+                + " events=" + PacketTelemetry.size());
         return 1;
     }
 

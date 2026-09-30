@@ -48,6 +48,13 @@ dependencies {
 
     // Compile the optional Baritone native-call compatibility mixin.
     "compileOnly"("dev.babbaj:nether-pathfinder:1.4.1")
+
+    "testImplementation"("org.junit.jupiter:junit-jupiter:5.11.4")
+    "testRuntimeOnly"("org.junit.platform:junit-platform-launcher:1.11.4")
+}
+
+tasks.withType<Test>().configureEach {
+    useJUnitPlatform()
 }
 
 extensions.configure<net.fabricmc.loom.api.LoomGradleExtensionAPI> {

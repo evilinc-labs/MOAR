@@ -17,7 +17,9 @@ import java.lang.ref.SoftReference;
 @Mixin(targets = "baritone.process.elytra.NetherPathfinderContext", remap = false)
 public abstract class BaritoneNetherPathfinderContextMixin {
 
-    @WrapMethod(method = "lambda$queueCacheCulling$0", require = 0)
+    // The legacy lambda captures the block interface. Select by descriptor so
+    // this wrapper cannot match a newer Baritone lambda with only three ints.
+    @WrapMethod(method = "lambda$queueCacheCulling$0(Lbaritone/process/elytra/BlockStateOctreeInterface;III)V", require = 0)
     private void moar$serializeCacheCulling(@Coerce Object blockInterface, int chunkX, int chunkZ,
                                             int maxDistance, Operation<Void> original) {
         synchronized (BaritoneNativeContextGate.lock()) {

@@ -11,6 +11,7 @@ import net.minecraft.util.math.BlockPos;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
+import java.util.function.BiFunction;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -19,6 +20,16 @@ import org.slf4j.LoggerFactory;
 public final class HighwayPlanner {
 
     private static final Logger LOGGER = LoggerFactory.getLogger("MOAR/HighwayPlanner");
+
+    private final BiFunction<BlockPos, HighwayCandidate.Axis, Optional<HighwayDetectorBridge.ScanResult>> scanner;
+
+    public HighwayPlanner() {
+        this(HighwayDetectorBridge.get()::scanAt);
+    }
+
+    HighwayPlanner(BiFunction<BlockPos, HighwayCandidate.Axis, Optional<HighwayDetectorBridge.ScanResult>> scanner) {
+        this.scanner = scanner;
+    }
 
     // Default highway floor Y before runtime refinement.
     private static final int DEFAULT_NETHER_FLOOR_Y = 120;
@@ -139,7 +150,7 @@ public final class HighwayPlanner {
                 bestDirect = new CandidateRoute(candidate, route, onRampXZ, exitXZ);
             }
             if (originHighway != null
-                    && candidate.axis == originHighway.axis()
+                    && candidate.axis.isParallelTo(originHighway.axis())
                     && startsOutwardOnHighway(origin, route)
                     && score < currentHighwayScore) {
                 currentHighwayScore = score;
@@ -197,8 +208,45 @@ public final class HighwayPlanner {
             }
         }
 
+        // After leaving a highway near its off-ramp, restarting should continue
+        // toward the destination instead of flying back for a token bounce leg.
+        if (opts.allowFlight && shouldSkipHighwayReentry(origin, destination, plan)) {
+            LOGGER.info("[Travel] continuing direct flight; highway re-entry adds no useful travel");
+            return Optional.of(new HighwayRoute(null,
+                    List.of(new HighwayRoute.FlightLeg(destination)),
+                    HighwayGeometry.horizontalDistance(origin.getX(), origin.getZ(),
+                            destination.getX(), destination.getZ()), 0, 0));
+        }
+
         return Optional.of(new HighwayRoute(
                 plan.primary, plan.legs, plan.totalCost, plan.travelDx, plan.travelDz));
+    }
+
+    private static boolean shouldSkipHighwayReentry(BlockPos origin, BlockPos destination, RoutePlan plan) {
+        if (plan.legs.isEmpty() || isWithinSafeRing(origin) || isWithinSafeRing(destination)) return false;
+        HighwayRoute.Leg first = plan.legs.get(0);
+        BlockPos entry;
+        if (first instanceof HighwayRoute.FlightLeg flight) entry = flight.destination();
+        else if (first instanceof HighwayRoute.ApproachLeg approach) entry = approach.onRamp();
+        else return false;
+        if (!(plan.legs.get(plan.legs.size() - 1) instanceof HighwayRoute.FlightLeg)) return false;
+
+        double ingress = HighwayGeometry.horizontalDistance(origin.getX(), origin.getZ(),
+                entry.getX(), entry.getZ());
+        double bounceDistance = 0;
+        for (HighwayRoute.Leg leg : plan.legs) {
+            if (leg instanceof HighwayRoute.BounceLeg bounce) {
+                bounceDistance += HighwayGeometry.horizontalDistance(
+                        bounce.highway().entry.getX(), bounce.highway().entry.getZ(),
+                        bounce.exitColumn().getX(), bounce.exitColumn().getZ());
+            }
+        }
+        if (bounceDistance > ingress + INGRESS_FLIGHT_MIN_DISTANCE) return false;
+        for (HazardZone zone : HAZARD_ZONES) {
+            if (segmentDistanceToPoint(origin.getX(), origin.getZ(),
+                    destination.getX(), destination.getZ(), zone.cx(), zone.cz()) < zone.radius()) return false;
+        }
+        return true;
     }
 
     // Suggest an interim highway waypoint when scanning cannot confirm one.
@@ -258,7 +306,7 @@ public final class HighwayPlanner {
         HighwayRoute.Leg firstLeg = route.legs.isEmpty() ? null : route.legs.get(0);
         boolean startsOffNetwork = firstLeg instanceof HighwayRoute.ApproachLeg
                 || firstLeg instanceof HighwayRoute.FlightLeg;
-        boolean sameAxis = candidate.axis == originHighway.axis;
+        boolean sameAxis = candidate.axis.isParallelTo(originHighway.axis);
 
         if (startsOffNetwork) {
             score += sameAxis ? SAME_AXIS_INGRESS_PENALTY : OFF_NETWORK_INGRESS_PENALTY;
@@ -288,7 +336,8 @@ public final class HighwayPlanner {
         }
 
         HighwayCandidate primary = new HighwayCandidate(
-                best.axis, best.category, refinedFloorY, onRamp, exitColumn, best.confidence,
+                best.axis, best.category, refinedFloorY, onRamp, exitColumn,
+                Math.max(best.confidence, scan.map(HighwayDetectorBridge.ScanResult::blockConfidence).orElse(0f)),
                 best.ringOrDiamondDist, best.ringSide, best.diamondSegment,
                 scan.map(HighwayDetectorBridge.ScanResult::width).orElse(0),
                 scan.map(HighwayDetectorBridge.ScanResult::hasLeftRail).orElse(false),
@@ -314,7 +363,9 @@ public final class HighwayPlanner {
 
         List<HighwayRoute.Leg> legs = new ArrayList<>();
         double totalCost = 0.0;
-        totalCost += addIngressLeg(legs, origin, originToOnRamp, primary.entry, approachThreshold, opts.allowFlight);
+        if (!alreadyOnHighway) {
+            totalCost += addIngressLeg(legs, origin, originToOnRamp, primary.entry, approachThreshold, opts.allowFlight);
+        }
 
         appendBounceLeg(legs, primary, travelDir[0], travelDir[1]);
         double bounceLength = HighwayGeometry.horizontalDistance(
@@ -738,12 +789,12 @@ public final class HighwayPlanner {
         return vert > 8 && horiz < Math.max(16, vert / 2);
     }
 
-    private static OriginHighway detectOriginHighway(BlockPos origin) {
+    private OriginHighway detectOriginHighway(BlockPos origin) {
         if (origin == null) return null;
         OriginHighway best = null;
         float bestScore = Float.NEGATIVE_INFINITY;
         for (HighwayCandidate.Axis axis : HighwayCandidate.Axis.values()) {
-            Optional<HighwayDetectorBridge.ScanResult> scan = HighwayDetectorBridge.get().scanAt(origin, axis);
+            Optional<HighwayDetectorBridge.ScanResult> scan = scanner.apply(origin, axis);
             if (scan.isEmpty()) continue;
             HighwayDetectorBridge.ScanResult result = scan.get();
             float score = result.blockConfidence();
@@ -952,27 +1003,26 @@ public final class HighwayPlanner {
     }
 
     // Refine a projected route from visible highway data when available.
-    private static Optional<HighwayDetectorBridge.ScanResult> confirmHighway(
+    private Optional<HighwayDetectorBridge.ScanResult> confirmHighway(
             BlockPos origin, HighwayCandidate.Axis axis, BlockPos onRamp, int floorYHint) {
-        HighwayDetectorBridge bridge = HighwayDetectorBridge.get();
         Optional<HighwayDetectorBridge.ScanResult> scan = compatibleScan(
-                bridge.scanAt(origin, axis), onRamp);
+                scanner.apply(origin, axis), onRamp);
         if (scan.isPresent()) return scan;
         if (onRamp != null) {
-            scan = compatibleScan(bridge.scanAt(onRamp, axis), onRamp);
+            scan = compatibleScan(scanner.apply(onRamp, axis), onRamp);
             if (scan.isPresent()) return scan;
             BlockPos midpoint = new BlockPos(
                     (origin.getX() + onRamp.getX()) / 2, origin.getY(), (origin.getZ() + onRamp.getZ()) / 2);
-            scan = compatibleScan(bridge.scanAt(midpoint, axis), onRamp);
+            scan = compatibleScan(scanner.apply(midpoint, axis), onRamp);
             if (scan.isPresent()) return scan;
         }
         if (Math.abs(origin.getY() - floorYHint) > 4) {
             scan = compatibleScan(
-                    bridge.scanAt(new BlockPos(origin.getX(), floorYHint, origin.getZ()), axis), onRamp);
+                    scanner.apply(new BlockPos(origin.getX(), floorYHint, origin.getZ()), axis), onRamp);
             if (scan.isPresent()) return scan;
             if (onRamp == null) return Optional.empty();
             return compatibleScan(
-                    bridge.scanAt(new BlockPos(onRamp.getX(), floorYHint, onRamp.getZ()), axis), onRamp);
+                    scanner.apply(new BlockPos(onRamp.getX(), floorYHint, onRamp.getZ()), axis), onRamp);
         }
         return Optional.empty();
     }

@@ -112,6 +112,7 @@ public final class TravelManager {
     private static final int RESUPPLY_LOCAL_SETTLE_TICKS = 40;
     private static final int RESUPPLY_BARITONE_QUIET_TICKS = 10;
     private static final int RESUPPLY_LANDING_SEARCH_TIMEOUT_TICKS = 60;
+    private static final int RESUPPLY_NATIVE_MISSING_TICKS = 40;
     private static final int BARITONE_FLIGHT_RETRY_TICKS = 40;
     private static final int MAX_FLIGHT_ESCAPE_ATTEMPTS = 3;
     private static final int MAX_LAUNCH_CANDIDATES = 24;
@@ -140,6 +141,8 @@ public final class TravelManager {
     private int resupplyLocalSettleTicks;
     private int resupplyBaritoneQuietTicks;
     private boolean resupplyUsedBaritone;
+    private boolean resupplyLandingCommandIssued;
+    private int resupplyNativeMissingTicks;
     private boolean connectionPaused;
     private boolean connectionResumePending;
     private BlockPos connectionResumeTarget;
@@ -148,7 +151,7 @@ public final class TravelManager {
     private BlockPos lastAutoResumeAbortPos;
     private String lastAutoResumeAbortReason;
     private int noProgressAutoResumeCount;
-    private float lastEffectiveHealth = Float.NaN;
+    private float lastBaseHealth = Float.NaN;
     private float recentHealthLoss;
     private int healthLossWindowTicks;
 
@@ -350,6 +353,10 @@ public final class TravelManager {
 
     public synchronized TravelPhase currentPhase() { return state.phase; }
 
+    public synchronized boolean isMiningResupplyContainer() {
+        return state.phase == TravelPhase.ELYTRA_RESUPPLY && elytra.isMiningPlacedContainer();
+    }
+
     // Apply bounce controls before movement physics.
     public synchronized void preTick(Object client) {
         if (state.phase == TravelPhase.BOUNCING) {
@@ -495,11 +502,34 @@ public final class TravelManager {
     }
 
     private void tickApproach() {
+        if (tryEnterUpcomingHighway()) return;
         if (bridge.isArrived()) { advanceLeg("approach arrived"); return; }
         if (bridge.isStuck()) {
             // Retry confined-highway knockback through replanning.
             abort("approach stuck — wither/knockback? auto-resume will retry");
         }
+    }
+
+    // Once an ingress reaches the road, hand control to bounce without waiting
+    // for Baritone's exact entry goal (or its much wider flight arrival radius).
+    private boolean tryEnterUpcomingHighway() {
+        if (state.route == null || state.ticksInPhase % 5 != 0) return false;
+        int index = currentLegIndex + 1;
+        if (index >= state.route.legs.size()
+                || !(state.route.legs.get(index) instanceof HighwayRoute.BounceLeg planned)) return false;
+        BlockPos pos = currentPlayerPos();
+        if (pos == null || horizontalDistance(pos, planned.highway().entry) > 16
+                || Math.abs(pos.getY() - planned.highway().floorY) > 4) return false;
+        if (!confirmBounceAtPosition(pos, planned, index, "highway ingress")) return false;
+        HighwayRoute.BounceLeg confirmed = (HighwayRoute.BounceLeg) state.route.legs.get(index);
+        if (!isReadyToBounce(confirmed)) return false;
+
+        releaseOwner(state.owner);
+        state.owner = MovementOwner.NONE;
+        bridge.clearElytraTarget();
+        clearFlightRecovery();
+        advanceLeg("entered verified highway");
+        return true;
     }
 
     private void tickBouncing() {
@@ -639,6 +669,9 @@ public final class TravelManager {
         resupplyLocalSettleTicks = 0;
         resupplyBaritoneQuietTicks = 0;
         resupplyUsedBaritone = bridge.isElytraOwning();
+        resupplyLandingCommandIssued = false;
+        resupplyNativeMissingTicks = 0;
+        if (resupplyUsedBaritone) prepareBaritoneResupplyLanding();
 
         if (isSafeGroundedForResupply()) {
             if (resupplyUsedBaritone) {
@@ -653,7 +686,11 @@ public final class TravelManager {
         resupplyLandingTarget = findSafeResupplyLanding();
         LOGGER.warn("[Travel] {} requested while airborne/unsafe; landing target={}",
                 request, resupplyLandingTarget);
-        if (resupplyLandingTarget != null) {
+        if (resupplyUsedBaritone && bridge.isElytraOwning()) {
+            state.owner = MovementOwner.BARITONE;
+            resupplyLandingCommandIssued = true;
+            LOGGER.info("[Travel] delegated resupply landing to active native elytra process");
+        } else if (resupplyLandingTarget != null) {
             if (state.owner != MovementOwner.BARITONE || !bridge.isElytraOwning()) {
                 releaseOwner(state.owner);
                 state.owner = MovementOwner.NONE;
@@ -677,11 +714,11 @@ public final class TravelManager {
     private void tickLandingForResupply() {
         if (isSafeGroundedForResupply()) {
             resupplyGroundedTicks++;
+            if (bridge.isElytraOwning()) {
+                resupplyBaritoneQuietTicks = 0;
+                return;
+            }
             if (resupplyGroundedTicks >= RESUPPLY_GROUNDED_TICKS) {
-                if (bridge.isElytraOwning()) {
-                    resupplyBaritoneQuietTicks = 0;
-                    return;
-                }
                 if (resupplyUsedBaritone
                         && ++resupplyBaritoneQuietTicks < RESUPPLY_BARITONE_QUIET_TICKS) {
                     return;
@@ -699,7 +736,8 @@ public final class TravelManager {
             resupplyLocalSettleTicks = 0;
         }
 
-        if (resupplyLandingTarget == null || !isSafeLandingPosition(resupplyLandingTarget)) {
+        if (!resupplyLandingCommandIssued
+                && (resupplyLandingTarget == null || !isSafeLandingPosition(resupplyLandingTarget))) {
             BlockPos replacement = findSafeResupplyLanding();
             if (replacement != null && !replacement.equals(resupplyLandingTarget)) {
                 resupplyLandingTarget = replacement;
@@ -709,11 +747,21 @@ public final class TravelManager {
         }
 
         if (resupplyLandingTarget == null
+                && !resupplyLandingCommandIssued
                 && state.ticksInPhase >= RESUPPLY_LANDING_SEARCH_TIMEOUT_TICKS) {
             String reason = "No verified safe landing for travel resupply";
             stopUnsafeFlight(reason);
             elytra.disconnectForTravelSafety(reason);
             return;
+        }
+
+        if (resupplyLandingCommandIssued && resupplyUsedBaritone) {
+            if (bridge.isElytraOwning()) {
+                resupplyNativeMissingTicks = 0;
+            } else if (++resupplyNativeMissingTicks >= RESUPPLY_NATIVE_MISSING_TICKS) {
+                stopUnsafeFlight("native resupply landing ended before safe touchdown");
+                return;
+            }
         }
 
         if (resupplyLandingTarget != null
@@ -724,11 +772,13 @@ public final class TravelManager {
     }
 
     private void startBaritoneResupplyLanding() {
-        if (resupplyLandingTarget == null) return;
+        if (resupplyLandingTarget == null || resupplyLandingCommandIssued) return;
         if (bridge.isElytraOwning()) {
             state.owner = MovementOwner.BARITONE;
             resupplyUsedBaritone = true;
-            bridge.startElytraFlight(resupplyLandingTarget);
+            prepareBaritoneResupplyLanding();
+            resupplyLandingCommandIssued = true;
+            LOGGER.info("[Travel] delegated resupply landing to active native elytra process");
             return;
         }
         if (state.owner != MovementOwner.BARITONE) {
@@ -737,7 +787,15 @@ public final class TravelManager {
             acquireOwner(MovementOwner.BARITONE);
         }
         resupplyUsedBaritone = true;
+        prepareBaritoneResupplyLanding();
         bridge.startElytraFlight(resupplyLandingTarget);
+        resupplyLandingCommandIssued = true;
+        LOGGER.info("[Travel] handed native elytra one resupply landing target={}",
+                resupplyLandingTarget.toShortString());
+    }
+
+    private void prepareBaritoneResupplyLanding() {
+        bridge.prepareElytraLanding(Integer.MAX_VALUE);
     }
 
     private boolean canSettleLocallyForResupply(BlockPos target) {
@@ -760,6 +818,8 @@ public final class TravelManager {
         resupplyLocalSettleTicks = 0;
         resupplyBaritoneQuietTicks = 0;
         resupplyUsedBaritone = false;
+        resupplyLandingCommandIssued = false;
+        resupplyNativeMissingTicks = 0;
         resetTravelSafetyMonitor();
         if (request == ResupplyRequest.FIREWORKS) {
             LOGGER.warn("[Travel] safe ground confirmed — entering firework resupply");
@@ -1113,6 +1173,7 @@ public final class TravelManager {
 
     // Wait for Baritone to claim flight.
     private void tickLaunch() {
+        if (tryEnterUpcomingHighway()) return;
         /*? if >=26.1 {*//*
         Minecraft mc = Minecraft.getInstance();
         *//*?} else {*/
@@ -1132,9 +1193,13 @@ public final class TravelManager {
         BlockPos dest = currentFlightDestination();
         if (dest == null && state.mission != null) dest = state.mission.destination;
 
-        // Retry without flooding Baritone.
+        // Start once after preflight, then retry at a bounded cadence.
         if (bridge.isAvailable() && dest != null
-                && state.ticksInPhase % BARITONE_FLIGHT_RETRY_TICKS == 0) {
+                && !bridge.isElytraOwning()
+                && (state.ticksInPhase == 1
+                || state.ticksInPhase % BARITONE_FLIGHT_RETRY_TICKS == 0)) {
+            acquireOwner(MovementOwner.BARITONE);
+            LOGGER.info("[Travel] handing raw flight to Baritone dest={}", dest.toShortString());
             startBaritoneElytraFlight(dest);
         }
 
@@ -1145,6 +1210,7 @@ public final class TravelManager {
 
     // Restore lost Baritone flight ownership.
     private void tickElytraCruise() {
+        if (tryEnterUpcomingHighway()) return;
         if (startElytraResupplyIfNeeded()) return;
         if (startFireworkRestockIfNeeded()) return;
         BlockPos dest = currentFlightDestination();
@@ -1246,8 +1312,10 @@ public final class TravelManager {
     }
 
     private boolean enforceTravelSafety() {
-        float health = currentEffectiveHealth();
-        updateTravelSafetyMonitor(health);
+        float baseHealth = currentBaseHealth();
+        float absorption = currentAbsorption();
+        float health = baseHealth + absorption;
+        updateTravelSafetyMonitor(baseHealth);
 
         String reason = null;
         boolean disconnect = false;
@@ -1263,11 +1331,11 @@ public final class TravelManager {
         } else if (health <= CRITICAL_TRAVEL_HEALTH) {
             reason = String.format("critical health %.1f/20", health);
             disconnect = true;
-        } else if (recentHealthLoss >= MAX_RECENT_HEALTH_LOSS) {
-            reason = String.format("recent health loss reached %.1f", recentHealthLoss);
-            disconnect = health <= MIN_SAFE_TRAVEL_HEALTH || isPlayerOnFire();
-        } else if (health <= MIN_SAFE_TRAVEL_HEALTH) {
-            reason = String.format("health fell to %.1f/20", health);
+        } else if (isPlayerOnFire()
+                && health <= MIN_SAFE_TRAVEL_HEALTH
+                && recentHealthLoss >= MAX_RECENT_HEALTH_LOSS) {
+            reason = String.format("burning after %.1f health loss", recentHealthLoss);
+            disconnect = true;
         }
         if (reason == null) return false;
 
@@ -1287,19 +1355,23 @@ public final class TravelManager {
                 && (isPlayerGliding() || !isPlayerGrounded());
     }
 
-    private void updateTravelSafetyMonitor(float health) {
-        if (!Float.isNaN(lastEffectiveHealth) && health < lastEffectiveHealth) {
-            recentHealthLoss += lastEffectiveHealth - health;
+    private void updateTravelSafetyMonitor(float baseHealth) {
+        float confirmedLoss = Float.isNaN(lastBaseHealth)
+                ? 0.0F
+                : Math.max(0.0F, lastBaseHealth - baseHealth);
+
+        if (confirmedLoss > 0.0F) {
+            recentHealthLoss += confirmedLoss;
             healthLossWindowTicks = HEALTH_LOSS_WINDOW_TICKS;
         } else if (healthLossWindowTicks > 0) {
             healthLossWindowTicks--;
             if (healthLossWindowTicks == 0) recentHealthLoss = 0.0F;
         }
-        lastEffectiveHealth = health;
+        lastBaseHealth = baseHealth;
     }
 
     private void resetTravelSafetyMonitor() {
-        lastEffectiveHealth = Float.NaN;
+        lastBaseHealth = Float.NaN;
         recentHealthLoss = 0.0F;
         healthLossWindowTicks = 0;
     }
@@ -1428,11 +1500,10 @@ public final class TravelManager {
                 return;
             }
             if (state.mission != null && state.mission.useElytra) {
-                acquireOwner(MovementOwner.BARITONE);
-                LOGGER.info("[Travel] handing raw flight to Baritone dest={}",
-                        flightLeg.destination().toShortString());
-                startBaritoneElytraFlight(flightLeg.destination());
-                transition(TravelPhase.LAUNCH, reason + " -> launching to " + flightLeg.destination().toShortString());
+                releaseOwner(state.owner);
+                state.owner = MovementOwner.NONE;
+                transition(TravelPhase.LAUNCH,
+                        reason + " -> preflight for " + flightLeg.destination().toShortString());
             } else {
                 LOGGER.info("[Travel] FlightLeg skipped (useElytra=false)");
                 transition(TravelPhase.ARRIVED, "flight leg skipped (useElytra disabled)");
@@ -1895,6 +1966,8 @@ public final class TravelManager {
         resupplyLocalSettleTicks = 0;
         resupplyBaritoneQuietTicks = 0;
         resupplyUsedBaritone = false;
+        resupplyLandingCommandIssued = false;
+        resupplyNativeMissingTicks = 0;
     }
 
     private void clearConnectionCheckpoint() {
@@ -1932,10 +2005,11 @@ public final class TravelManager {
         }
         if (resumePhase == TravelPhase.LANDING_FOR_RESUPPLY) {
             resupplyLandingTarget = findSafeResupplyLanding();
+            resupplyLandingCommandIssued = false;
+            resupplyNativeMissingTicks = 0;
             transition(TravelPhase.LANDING_FOR_RESUPPLY, reason + "; reacquiring safe landing");
             if (resupplyLandingTarget != null) {
-                acquireOwner(MovementOwner.BARITONE);
-                bridge.startElytraFlight(resupplyLandingTarget);
+                startBaritoneResupplyLanding();
             }
             return;
         }
@@ -2013,9 +2087,9 @@ public final class TravelManager {
         if (resupplyResumePhase == TravelPhase.LAUNCH && resupplyResumeTarget != null) {
             BlockPos target = resupplyResumeTarget;
             clearResupplyResumeContext();
-            acquireOwner(MovementOwner.BARITONE);
-            startBaritoneElytraFlight(target);
-            transition(TravelPhase.LAUNCH, reason + " -> resuming flight to " + target.toShortString());
+            state.owner = MovementOwner.NONE;
+            transition(TravelPhase.LAUNCH,
+                    reason + " -> preflight before resuming flight to " + target.toShortString());
             return true;
         }
         if (resupplyResumePhase == TravelPhase.BOUNCING && state.route != null
@@ -2232,7 +2306,7 @@ public final class TravelManager {
         }
 
         BlockPos best = null;
-        int bestScore = Integer.MIN_VALUE;
+        int bestRank = Integer.MIN_VALUE;
         int bestDistance = Integer.MAX_VALUE;
         int perpX = dirZ;
         int perpZ = -dirX;
@@ -2241,7 +2315,7 @@ public final class TravelManager {
             int baseX = requested.getX() - dirX * back;
             int baseZ = requested.getZ() - dirZ * back;
             for (int side = -8; side <= 8; side += 2) {
-                for (int dy = -TAKEOFF_SEARCH_DOWN; dy <= TAKEOFF_SEARCH_UP; dy++) {
+                for (int dy = -TAKEOFF_SEARCH_DOWN; dy <= 0; dy++) {
                     BlockPos candidate = new BlockPos(
                             baseX + perpX * side,
                             requested.getY() + dy,
@@ -2255,14 +2329,15 @@ public final class TravelManager {
                     if (score == Integer.MIN_VALUE) continue;
 
                     int distance = horizontalDistance(candidate, requested);
-                    if (score > bestScore || (score == bestScore && distance < bestDistance)) {
+                    int rank = score - Math.abs(dy) * 8 - distance * 2;
+                    if (rank > bestRank || (rank == bestRank && distance < bestDistance)) {
                         best = candidate;
-                        bestScore = score;
+                        bestRank = rank;
                         bestDistance = distance;
                     }
                 }
             }
-            if (best != null && bestScore >= 16) break;
+            if (best != null && bestRank >= 16) break;
         }
 
         if (best != null) {
@@ -2536,15 +2611,27 @@ public final class TravelManager {
         /*?}*/
     }
 
-    private static float currentEffectiveHealth() {
+    private static float currentBaseHealth() {
         /*? if >=26.1 {*//*
         Minecraft mc = Minecraft.getInstance();
         if (mc.player == null) return 0.0F;
-        return mc.player.getHealth() + mc.player.getAbsorptionAmount();
+        return mc.player.getHealth();
         *//*?} else {*/
         MinecraftClient mc = MinecraftClient.getInstance();
         if (mc.player == null) return 0.0F;
-        return mc.player.getHealth() + mc.player.getAbsorptionAmount();
+        return mc.player.getHealth();
+        /*?}*/
+    }
+
+    private static float currentAbsorption() {
+        /*? if >=26.1 {*//*
+        Minecraft mc = Minecraft.getInstance();
+        if (mc.player == null) return 0.0F;
+        return mc.player.getAbsorptionAmount();
+        *//*?} else {*/
+        MinecraftClient mc = MinecraftClient.getInstance();
+        if (mc.player == null) return 0.0F;
+        return mc.player.getAbsorptionAmount();
         /*?}*/
     }
 

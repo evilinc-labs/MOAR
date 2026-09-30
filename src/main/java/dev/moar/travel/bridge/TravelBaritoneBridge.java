@@ -91,6 +91,11 @@ public final class TravelBaritoneBridge {
         PathWalker.stopElytra();
     }
 
+    // Prevent a grounded relaunch while landing for resupply.
+    public void prepareElytraLanding(int minimumFireworks) {
+        PathWalker.prepareElytraLanding(minimumFireworks);
+    }
+
     // Forget a completed elytra target without cancelling Baritone again.
     public void clearElytraTarget() {
         PathWalker.clearElytraTarget();

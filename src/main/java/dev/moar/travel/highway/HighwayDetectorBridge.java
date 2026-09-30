@@ -1,6 +1,7 @@
 package dev.moar.travel.highway;
 
 import dev.moar.travel.plan.HighwayCandidate;
+import dev.moar.travel.plan.HighwayGeometry;
 
 /*? if >=26.1 {*//*
 import net.minecraft.client.Minecraft;
@@ -17,15 +18,29 @@ import net.minecraft.util.math.BlockPos;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
+import java.util.function.Predicate;
 
 // World scanner for highway detection and verification.
 public final class HighwayDetectorBridge {
 
     private static final HighwayDetectorBridge INSTANCE = new HighwayDetectorBridge();
     public static HighwayDetectorBridge get() { return INSTANCE; }
-    private HighwayDetectorBridge() {}
+    private final Predicate<BlockPos> pavement;
+    private final Predicate<BlockPos> air;
+    private final Predicate<BlockPos> floor;
 
-    public enum Surface { PAVED, TUNNEL }
+    private HighwayDetectorBridge() {
+        this(HighwayDetectorBridge::readPavement,
+                HighwayDetectorBridge::readAir, HighwayDetectorBridge::readFloor);
+    }
+
+    HighwayDetectorBridge(Predicate<BlockPos> pavement, Predicate<BlockPos> air, Predicate<BlockPos> floor) {
+        this.pavement = pavement;
+        this.air = air;
+        this.floor = floor;
+    }
+
+    public enum Surface { PAVED, TUNNEL, DECLARED }
 
     // ── ScanResult ───────────────────────────────────────────────
     public record ScanResult(int floorY, int width, int centerX, int centerZ,
@@ -101,17 +116,49 @@ public final class HighwayDetectorBridge {
 
     // Try to confirm a highway near the player's current Y.
     public Optional<ScanResult> scanAt(BlockPos playerPos, HighwayCandidate.Axis axis) {
-        for (int yOff = -4; yOff <= 4; yOff++) {
+        // Prefer the surface under the player's feet over buried paving.
+        int[] floorOffsets = {-1, 0, -2, 1, -3, 2, -4, 3, 4};
+        for (int yOff : floorOffsets) {
             ScanResult r = scanPavedAlongAxis(
                     playerPos.getX(), playerPos.getY() + yOff, playerPos.getZ(), axis);
             if (r != null) return Optional.of(r);
         }
-        for (int yOff = -4; yOff <= 4; yOff++) {
+        for (int yOff : floorOffsets) {
             ScanResult r = scanTunnelAlongAxis(
                     playerPos.getX(), playerPos.getY() + yOff, playerPos.getZ(), axis);
             if (r != null) return Optional.of(r);
         }
+        Optional<int[]> declared = HighwayGeometry.declaredCenter(
+                playerPos.getX(), playerPos.getZ(), axis);
+        if (declared.isPresent()) {
+            int[] center = declared.get();
+            for (int yOff : floorOffsets) {
+                ScanResult r = scanDeclaredAlongAxis(center[0], playerPos.getY() + yOff, center[1], axis);
+                if (r != null) return Optional.of(r);
+            }
+        }
         return Optional.empty();
+    }
+
+    // Declared roads need not be obsidian or enclosed. Require a loaded,
+    // three-lane corridor with solid footing and headroom along the road.
+    private ScanResult scanDeclaredAlongAxis(int x, int floorY, int z, HighwayCandidate.Axis axis) {
+        if (!isTunnelPassage(x, floorY, z)) return null;
+        int clearSections = 0;
+        for (int step = -20; step <= 20; step++) {
+            boolean clear = true;
+            for (int side = -1; side <= 1; side++) {
+                if (!isTunnelPassage(x + axis.stepDx * step + axis.perpDx() * side,
+                        floorY, z + axis.stepDz * step + axis.perpDz() * side)) {
+                    clear = false;
+                    break;
+                }
+            }
+            if (clear) clearSections++;
+        }
+        if (clearSections < 25) return null;
+        return new ScanResult(floorY, 3, x, z, -2, 2, false, false,
+                clearSections / 41f * 0.75f, Surface.DECLARED);
     }
 
     // How deep to scan below a candidate point for exposed lava.
@@ -209,14 +256,15 @@ public final class HighwayDetectorBridge {
 
     // Count only true air as cave void. Exposed lava is still suspicious.
     private static boolean isNaturalVoid(int x, int y, int z) {
+        BlockPos pos = new BlockPos(x, y, z);
         /*? if >=26.1 {*//*
         Minecraft mc = Minecraft.getInstance();
         if (mc.level == null) return false;
-        Block b = mc.level.getBlockState(new BlockPos(x, y, z)).getBlock();
+        Block b = mc.level.getBlockState(pos).getBlock();
         *//*?} else {*/
         MinecraftClient mc = MinecraftClient.getInstance();
         if (mc.world == null) return false;
-        Block b = mc.world.getBlockState(new BlockPos(x, y, z)).getBlock();
+        Block b = mc.world.getBlockState(pos).getBlock();
         /*?}*/
         return b == Blocks.AIR || b == Blocks.CAVE_AIR || b == Blocks.VOID_AIR;
     }
@@ -229,20 +277,20 @@ public final class HighwayDetectorBridge {
         int stepDx = axis.stepDx;
         int stepDz = axis.stepDz;
         final int SCAN_RANGE = 20;
-        final int MAX_PERP   = 8;
+        final int MAX_PERP   = 32;
 
         // Find center: player may be slightly off-center perpendicular
         int centerX = px, centerZ = pz;
-        if (!isHighwayBlock(px, floorY, pz)) {
+        if (!isPavedPassage(px, floorY, pz)) {
             boolean found = false;
             for (int shift = 1; shift <= 4; shift++) {
-                if (isHighwayBlock(px + perpDx * shift, floorY, pz + perpDz * shift)) {
+                if (isPavedPassage(px + perpDx * shift, floorY, pz + perpDz * shift)) {
                     centerX = px + perpDx * shift;
                     centerZ = pz + perpDz * shift;
                     found = true;
                     break;
                 }
-                if (isHighwayBlock(px - perpDx * shift, floorY, pz - perpDz * shift)) {
+                if (isPavedPassage(px - perpDx * shift, floorY, pz - perpDz * shift)) {
                     centerX = px - perpDx * shift;
                     centerZ = pz - perpDz * shift;
                     found = true;
@@ -259,16 +307,16 @@ public final class HighwayDetectorBridge {
         for (int step = -SCAN_RANGE; step <= SCAN_RANGE; step++) {
             int sx = centerX + stepDx * step;
             int sz = centerZ + stepDz * step;
-            if (!isHighwayBlock(sx, floorY, sz)) continue;
+            if (!isPavedPassage(sx, floorY, sz)) continue;
 
             int left = 0;
             for (int i = 1; i <= MAX_PERP; i++) {
-                if (isHighwayBlock(sx - perpDx * i, floorY, sz - perpDz * i)) left = i;
+                if (isPavedPassage(sx - perpDx * i, floorY, sz - perpDz * i)) left = i;
                 else break;
             }
             int right = 0;
             for (int i = 1; i <= MAX_PERP; i++) {
-                if (isHighwayBlock(sx + perpDx * i, floorY, sz + perpDz * i)) right = i;
+                if (isPavedPassage(sx + perpDx * i, floorY, sz + perpDz * i)) right = i;
                 else break;
             }
             leftEdges.add(left);
@@ -276,14 +324,14 @@ public final class HighwayDetectorBridge {
             validSamples++;
         }
 
-        if (validSamples < 5) return null;
+        if (validSamples < 21) return null;
 
         leftEdges.sort(null);
         rightEdges.sort(null);
         int medianLeft  = leftEdges.get(leftEdges.size() / 2);
         int medianRight = rightEdges.get(rightEdges.size() / 2);
         int width = medianLeft + 1 + medianRight;
-        if (width < 2 || width > 7) return null;
+        if (width < 2 || width > 31) return null;
 
         // Shift the anchor to the geometric midpoint of the highway floor.
         // The initial centerX/Z is wherever the player happened to snap — it is
@@ -449,18 +497,22 @@ public final class HighwayDetectorBridge {
         return values.get(values.size() / 2);
     }
 
-    private static boolean isTunnelPassage(int x, int floorY, int z) {
+    private boolean isPavedPassage(int x, int floorY, int z) {
+        return isHighwayBlock(x, floorY, z) && isTunnelPassage(x, floorY, z);
+    }
+
+    private boolean isTunnelPassage(int x, int floorY, int z) {
         return isWalkableFloor(x, floorY, z)
                 && isAirLike(new BlockPos(x, floorY + 1, z))
                 && isAirLike(new BlockPos(x, floorY + 2, z));
     }
 
-    private static boolean isTunnelBoundary(int x, int floorY, int z) {
+    private boolean isTunnelBoundary(int x, int floorY, int z) {
         return !isAirLike(new BlockPos(x, floorY + 1, z))
                 || !isAirLike(new BlockPos(x, floorY + 2, z));
     }
 
-    private static boolean hasTunnelRoof(int x, int floorY, int z) {
+    private boolean hasTunnelRoof(int x, int floorY, int z) {
         for (int y = floorY + 3; y <= floorY + 5; y++) {
             if (!isAirLike(new BlockPos(x, y, z))) return true;
         }
@@ -474,8 +526,11 @@ public final class HighwayDetectorBridge {
     }
 
     // ── Stonecutter-quarantined block helpers ─────────────────────
-    private static boolean isWalkableFloor(int x, int y, int z) {
-        BlockPos pos = new BlockPos(x, y, z);
+    private boolean isWalkableFloor(int x, int y, int z) {
+        return floor.test(new BlockPos(x, y, z));
+    }
+
+    private static boolean readFloor(BlockPos pos) {
         if (!isChunkLoaded(pos)) return false;
         /*? if >=26.1 {*//*
         Minecraft mc = Minecraft.getInstance();
@@ -492,24 +547,33 @@ public final class HighwayDetectorBridge {
         /*?}*/
     }
 
-    private static boolean isHighwayBlock(int x, int y, int z) {
+    private boolean isHighwayBlock(int x, int y, int z) {
+        return pavement.test(new BlockPos(x, y, z));
+    }
+
+    private static boolean readPavement(BlockPos pos) {
+        if (!isChunkLoaded(pos)) return false;
         /*? if >=26.1 {*//*
         Minecraft mc = Minecraft.getInstance();
         if (mc.level == null) return false;
-        Block b = mc.level.getBlockState(new BlockPos(x, y, z)).getBlock();
+        Block b = mc.level.getBlockState(pos).getBlock();
         *//*?} else {*/
         MinecraftClient mc = MinecraftClient.getInstance();
         if (mc.world == null) return false;
-        Block b = mc.world.getBlockState(new BlockPos(x, y, z)).getBlock();
+        Block b = mc.world.getBlockState(pos).getBlock();
         /*?}*/
         return b == Blocks.OBSIDIAN || b == Blocks.CRYING_OBSIDIAN;
     }
 
-    private static boolean isHighwayBlock(BlockPos pos) {
+    private boolean isHighwayBlock(BlockPos pos) {
         return isHighwayBlock(pos.getX(), pos.getY(), pos.getZ());
     }
 
-    private static boolean isAirLike(BlockPos pos) {
+    private boolean isAirLike(BlockPos pos) {
+        return air.test(pos);
+    }
+
+    private static boolean readAir(BlockPos pos) {
         /*? if >=26.1 {*//*
         Minecraft mc = Minecraft.getInstance();
         if (mc.level == null) return true;
@@ -523,7 +587,7 @@ public final class HighwayDetectorBridge {
                 || b == Blocks.FIRE || b == Blocks.SOUL_FIRE;
     }
 
-    private static boolean hasGuardrail(int x, int floorY, int z) {
+    private boolean hasGuardrail(int x, int floorY, int z) {
         return isHighwayBlock(x, floorY, z) && isHighwayBlock(x, floorY + 1, z);
     }
 

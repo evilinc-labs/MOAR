@@ -98,7 +98,7 @@ public final class ElytraManager {
     private static final int MEND_MAX_TICKS          = 1800;
     private static final int PHASE_TIMEOUT           = 100;
     // Allow ender chest recovery on low-TPS servers.
-    private static final int EC_BREAK_TIMEOUT        = 200;
+    private static final int EC_BREAK_TIMEOUT        = 600;
     private static final int LOOK_SETTLE             = 4;
     private static final int SWAP_SETTLE             = 6;
     private static final int PLACE_RECENT_WINDOW     = 24;
@@ -139,6 +139,7 @@ public final class ElytraManager {
     private int openRetries;
     private boolean ecFromInventory = false;
     private int ecInvSlot = -1;
+    private int ecCountBeforeRecovery;
     private int shulkerPhase;
     private int shulkerTicks;
     private BlockPos shulkerPos;
@@ -170,6 +171,11 @@ public final class ElytraManager {
     public boolean isFailed() { return state == State.FAILED; }
     public boolean isActive() { return state != State.IDLE && state != State.DONE && state != State.FAILED; }
 
+    public boolean isMiningPlacedContainer() {
+        return (state == State.RECOVERING_EC && shulkerPhase == 2)
+                || (state == State.BREAKING_SHULKER && shulkerPhase == 7);
+    }
+
     private boolean tryElytraInventory(int cooldownTicks) {
         return MoarNetworkManager.tryAcquire(
                 MoarNetworkManager.Lane.INVENTORY,
@@ -197,6 +203,23 @@ public final class ElytraManager {
     }
 
     public BlockPos getEnderChestPos() { return enderChestPos; }
+
+    /*? if >=26.1 {*//*
+    private boolean hasNearbyEnderChest(Minecraft mc) {
+        if (enderChestPos == null || mc.player == null || mc.level == null) return false;
+        BlockPos pos = mc.player.blockPosition();
+    *//*?} else {*/
+    private boolean hasNearbyEnderChest(MinecraftClient mc) {
+        if (enderChestPos == null || mc.player == null || mc.world == null) return false;
+        BlockPos pos = mc.player.getBlockPos();
+    /*?}*/
+        // A travel restock should use portable supplies instead of walking back
+        // to a chest registered earlier in a long mission.
+        if (Math.abs(pos.getX() - enderChestPos.getX()) > 32
+                || Math.abs(pos.getZ() - enderChestPos.getZ()) > 32
+                || Math.abs(pos.getY() - enderChestPos.getY()) > 8) return false;
+        return isPlacedEnderChestStillPresent(mc);
+    }
 
     public void start() {
         resetAll();
@@ -239,6 +262,7 @@ public final class ElytraManager {
     }
 
     public void stop() {
+        cancelResupplyMining();
         if (shulkerSneakRestore != null) {
             shulkerSneakRestore.run();
             shulkerSneakRestore = null;
@@ -247,8 +271,20 @@ public final class ElytraManager {
         state = State.IDLE;
     }
 
+    private void cancelResupplyMining() {
+        if (!isMiningPlacedContainer()) return;
+        /*? if >=26.1 {*//*
+        Minecraft mc = Minecraft.getInstance();
+        if (mc.gameMode != null) mc.gameMode.stopDestroyBlock();
+        *//*?} else {*/
+        MinecraftClient mc = MinecraftClient.getInstance();
+        if (mc.interactionManager != null) mc.interactionManager.cancelBlockBreaking();
+        /*?}*/
+    }
+
     public void pause() {
         if (!isActive()) return;
+        cancelResupplyMining();
         PathWalker.stop();
         if (shulkerSneakRestore != null) {
             shulkerSneakRestore.run();
@@ -357,7 +393,7 @@ public final class ElytraManager {
                 transition(State.PLACING_SHULKER);
                 return;
             }
-            if (enderChestPos != null) {
+            if (hasNearbyEnderChest(mc)) {
                 LOGGER.info("[Elytra] elytra has Mending, checking registered EC for XP shulker");
                 mendingMode = true;
                 transition(State.WALKING_TO_EC);
@@ -391,7 +427,7 @@ public final class ElytraManager {
             }
         }
 
-        if (enderChestPos != null) {
+        if (hasNearbyEnderChest(mc)) {
             LOGGER.info("[Elytra] walking to ender chest at {}", enderChestPos.toShortString());
             transition(State.WALKING_TO_EC);
             return;
@@ -447,7 +483,7 @@ public final class ElytraManager {
             return;
         }
 
-        if (enderChestPos != null) {
+        if (hasNearbyEnderChest(mc)) {
             LOGGER.info("[Elytra] checking registered EC for firework shulker");
             transition(State.WALKING_TO_EC);
             return;
@@ -648,7 +684,7 @@ public final class ElytraManager {
         if (mendTicks >= MEND_MAX_TICKS) {
             restoreHotbar(mc);
             LOGGER.warn("[Elytra] Mending timed out after {} ticks", mendTicks);
-            if (enderChestPos != null) {
+            if (hasNearbyEnderChest(mc)) {
                 transition(State.WALKING_TO_EC);
             } else {
                 int ecItemSlot = findItemInInventory(mc, "minecraft:ender_chest");
@@ -681,7 +717,7 @@ public final class ElytraManager {
                 transition(State.PLACING_SHULKER);
                 return;
             }
-            if (enderChestPos != null) {
+            if (hasNearbyEnderChest(mc)) {
                 transition(State.WALKING_TO_EC);
             } else {
                 int ecItemSlot = findItemInInventory(mc, "minecraft:ender_chest");
@@ -871,7 +907,7 @@ public final class ElytraManager {
                     shulkerSneakRestore = null;
                 }
                 BlockState st = world.getBlockState(shulkerPos);
-                if (!st.isAir()) {
+                if (st.getBlock() instanceof EnderChestBlock) {
                     /*? if >=26.1 {*//*
                     enderChestPos = shulkerPos.immutable();
                     *//*?} else {*/
@@ -894,9 +930,7 @@ public final class ElytraManager {
     }
 
     private void tickWalkingToEC() {
-        if (!PathWalker.isActive()) {
-            PathWalker.walkToAdjacent(enderChestPos);
-        }
+        // Consume completion before starting a new walk, which clears it.
         if (PathWalker.hasArrived()) {
             PathWalker.stop();
             openWaitTicks = 0;
@@ -912,6 +946,10 @@ public final class ElytraManager {
             *//*?} else {*/
             fail(MinecraftClient.getInstance(), "Can't reach ender chest");
             /*?}*/
+            return;
+        }
+        if (!PathWalker.isActive()) {
+            PathWalker.walkToAdjacent(enderChestPos);
         }
         PathWalker.tick();
     }
@@ -1702,7 +1740,6 @@ public final class ElytraManager {
                     transition(postShulkerState);
                     return;
                 }
-                if (!PathWalker.isActive()) PathWalker.walkToAdjacent(enderChestPos);
                 if (PathWalker.hasArrived()) {
                     PathWalker.stop();
                     openWaitTicks = 0;
@@ -1717,6 +1754,7 @@ public final class ElytraManager {
                     transition(postShulkerState);
                     return;
                 }
+                if (!PathWalker.isActive()) PathWalker.walkToAdjacent(enderChestPos);
                 PathWalker.tick();
             }
 
@@ -1838,6 +1876,17 @@ public final class ElytraManager {
         ClientPlayerEntity player = mc.player;
         World world = mc.world;
         /*?}*/
+        if (enderChestPos == null) {
+            transition(postShulkerState);
+            return;
+        }
+        /*? if >=26.2 {*//*
+        if (mc.gui.screen() != null) { player.clientSideCloseContainer(); return; }
+        *//*?} else if >=26.1 {*//*
+        if (mc.screen != null) { player.clientSideCloseContainer(); return; }
+        *//*?} else {*/
+        if (mc.currentScreen != null) { player.closeHandledScreen(); return; }
+        /*?}*/
         shulkerTicks++;
 
         switch (shulkerPhase) {
@@ -1852,38 +1901,9 @@ public final class ElytraManager {
                     return;
                 }
 
-                /*? if >=26.1 {*//*
-                Inventory inv = player.getInventory();
-                int hotbar = inv.getSelectedSlot();
-                *//*?} else if >=1.21.5 {*//*
-                PlayerInventory inv = player.getInventory();
-                int hotbar = inv.getSelectedSlot();
-                *//*?} else {*/
-                PlayerInventory inv = player.getInventory();
-                int hotbar = inv.selectedSlot;
-                /*?}*/
-
-                if (stSlot >= 9) {
-                    if (!tryElytraInventory(SWAP_SETTLE)) return;
-                    /*? if >=26.1 {*//*
-                    mc.gameMode.handleContainerInput(
-                            player.containerMenu.containerId, stSlot, hotbar,
-                            ContainerInput.SWAP, player);
-                    *//*?} else {*/
-                    mc.interactionManager.clickSlot(
-                            player.currentScreenHandler.syncId, stSlot, hotbar,
-                            SlotActionType.SWAP, player);
-                    /*?}*/
-                } else {
-                    if (!tryElytraInventory(SWAP_SETTLE)) return;
-                    /*? if >=1.21.5 {*/
-                    inv.setSelectedSlot(stSlot);
-                    /*?} else if >=26.1 {*//*
-                    inv.setSelectedSlot(stSlot);
-                    *//*?} else {*/
-                    /*inv.selectedSlot = stSlot;
-                    *//*?}*/
-                }
+                // Wait for the server-visible slot selection before mining.
+                if (!ensureInHotbar(mc, stSlot)) return;
+                ecCountBeforeRecovery = countItemInInventory(mc, "minecraft:ender_chest");
 
                 /*? if >=26.1 {*//*
                 savedYaw = player.getYRot();
@@ -1902,6 +1922,14 @@ public final class ElytraManager {
                 if (enderChestPos == null) { transition(State.DONE); return; }
                 BlockState st = world.getBlockState(enderChestPos);
                 if (st.isAir()) { shulkerPhase = 3; shulkerTicks = 0; return; }
+                if (!(st.getBlock() instanceof EnderChestBlock)) {
+                    fail(mc, "Placed ender chest was replaced before recovery");
+                    return;
+                }
+                if (shulkerTicks >= EC_BREAK_TIMEOUT) {
+                    fail(mc, "Could not begin recovering placed ender chest");
+                    return;
+                }
 
                 if (!tryElytraMining(1)) return;
                 /*? if >=26.1 {*//*
@@ -1938,12 +1966,7 @@ public final class ElytraManager {
                     *//*?} else {*/
                     mc.interactionManager.cancelBlockBreaking();
                     /*?}*/
-                    LOGGER.warn("[Elytra] timed out breaking placed EC at {}; abandoning position to prevent loop",
-                            enderChestPos);
-                    // Clear the stale position after timeout.
-                    enderChestPos = null;
-                    ecFromInventory = false;
-                    transition(postShulkerState);
+                    fail(mc, "Could not recover placed ender chest at " + enderChestPos.toShortString());
                     return;
                 }
                 if (!tryElytraMining(1)) return;
@@ -1958,19 +1981,25 @@ public final class ElytraManager {
                 /*?}*/
             }
 
-            // Wait for ender chest pickup.
+            // Confirm this chest was picked up, not another chest already carried.
             case 3 -> {
-                if (shulkerTicks >= PICKUP_WAIT_TICKS) {
-                    int recovered = findItemInInventory(mc, "minecraft:ender_chest");
-                    if (recovered >= 0) {
-                        LOGGER.info("[Elytra] recovered ender chest into slot {}", recovered);
-                    } else {
-                        LOGGER.warn("[Elytra] EC block broke but item not picked up (check Silk Touch)");
-                    }
+                if (countItemInInventory(mc, "minecraft:ender_chest") > ecCountBeforeRecovery) {
+                    PathWalker.stop();
+                    LOGGER.info("[Elytra] recovered placed ender chest");
                     enderChestPos = null;
                     ecFromInventory = false;
                     transition(postShulkerState);
+                    return;
                 }
+                if (shulkerTicks == PICKUP_WAIT_TICKS && enderChestPos != null) {
+                    PathWalker.walkToNearby(enderChestPos, 1);
+                }
+                if (shulkerTicks >= PICKUP_WAIT_TICKS + 100 || PathWalker.isStuck()) {
+                    PathWalker.stop();
+                    fail(mc, "Ender chest broke but its item was not recovered");
+                    return;
+                }
+                PathWalker.tick();
             }
         }
     }
@@ -2958,6 +2987,7 @@ public final class ElytraManager {
     *//*?} else {*/
     private void fail(MinecraftClient mc, String reason) {
     /*?}*/
+        cancelResupplyMining();
         LOGGER.error("[Elytra] FAILED: {}", reason);
         ChatHelper.labelled("Travel", disconnectOnFailure
                 ? "§c[Elytra] " + reason + " — disconnecting."
@@ -2980,6 +3010,7 @@ public final class ElytraManager {
     }
 
     private void resetAll() {
+        cancelResupplyMining();
         PathWalker.stop();
         if (shulkerSneakRestore != null) { shulkerSneakRestore.run(); shulkerSneakRestore = null; }
         stateTicks = 0;

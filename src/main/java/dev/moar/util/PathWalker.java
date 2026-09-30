@@ -731,6 +731,11 @@ public final class PathWalker {
         clearElytraTarget();
     }
 
+    // Prevent Baritone from relaunching after a requested landing.
+    public static void prepareElytraLanding(int minimumFireworks) {
+        BaritoneDelegate.prepareElytraLanding(minimumFireworks);
+    }
+
     // Forget the target after Baritone has stopped itself.
     public static void clearElytraTarget() {
         elytraTarget = null;
@@ -1245,6 +1250,8 @@ public final class PathWalker {
         private static Object allowBreakSetting;    // Settings.Setting<Boolean>
         private static Object allowInventorySetting; // Settings.Setting<Boolean>
         private static Object elytraAutoJumpSetting; // Settings.Setting<Boolean>
+        private static Object elytraEmergencyLandSetting; // Settings.Setting<Boolean>
+        private static Object elytraMinimumFireworksSetting; // Settings.Setting<Integer>
         private static Object maxFallHeightSetting;   // Settings.Setting<Integer>
         private static Object throwawayItemsSetting; // Settings.Setting<List<Item>>
         private static Method settingGetValue;      // Setting.value field getter
@@ -1259,6 +1266,9 @@ public final class PathWalker {
         private static Object savedThrowawayItems; // List<Item> — saved original list
         private static boolean savedElytraAutoJump;
         private static boolean elytraSupportEnabled;
+        private static boolean savedElytraEmergencyLand;
+        private static int savedElytraMinimumFireworks;
+        private static boolean elytraLandingPolicyEnabled;
 
         static {
             try {
@@ -1374,6 +1384,22 @@ public final class PathWalker {
                         elytraAutoJumpSetting = autoJumpField.get(settingsInstance);
                     } catch (NoSuchFieldException ignored) {
                         elytraAutoJumpSetting = null;
+                    }
+
+                    try {
+                        java.lang.reflect.Field minimumFireworksField =
+                                settingsInstance.getClass().getField("elytraMinFireworksBeforeLanding");
+                        elytraMinimumFireworksSetting = minimumFireworksField.get(settingsInstance);
+                    } catch (NoSuchFieldException ignored) {
+                        elytraMinimumFireworksSetting = null;
+                    }
+
+                    try {
+                        java.lang.reflect.Field emergencyLandField =
+                                settingsInstance.getClass().getField("elytraAllowEmergencyLand");
+                        elytraEmergencyLandSetting = emergencyLandField.get(settingsInstance);
+                    } catch (NoSuchFieldException ignored) {
+                        elytraEmergencyLandSetting = null;
                     }
 
                     // maxFallHeightNoWater — default is 3 which is too
@@ -1536,15 +1562,61 @@ public final class PathWalker {
             }
         }
 
+        static void prepareElytraLanding(int minimumFireworks) {
+            if (!settingsReady) return;
+            try {
+                if (elytraAutoJumpSetting != null && !elytraSupportEnabled) {
+                    savedElytraAutoJump = (Boolean) settingValueField.get(elytraAutoJumpSetting);
+                    elytraSupportEnabled = true;
+                }
+                if (elytraAutoJumpSetting != null) {
+                    settingValueField.set(elytraAutoJumpSetting, false);
+                }
+                if (!elytraLandingPolicyEnabled) {
+                    if (elytraEmergencyLandSetting != null) {
+                        savedElytraEmergencyLand =
+                                (Boolean) settingValueField.get(elytraEmergencyLandSetting);
+                    }
+                    if (elytraMinimumFireworksSetting != null) {
+                        savedElytraMinimumFireworks =
+                                (Integer) settingValueField.get(elytraMinimumFireworksSetting);
+                    }
+                    elytraLandingPolicyEnabled = true;
+                }
+                if (elytraEmergencyLandSetting != null) {
+                    settingValueField.set(elytraEmergencyLandSetting, true);
+                }
+                if (elytraMinimumFireworksSetting != null) {
+                    settingValueField.set(elytraMinimumFireworksSetting, minimumFireworks);
+                }
+                LOGGER.info("PathWalker: prepared Baritone resupply landing policy");
+            } catch (Exception e) {
+                LOGGER.warn("PathWalker: failed to prepare Baritone resupply landing", e);
+            }
+        }
+
         // Restore the user's launch setting.
         static void restoreElytraSupport() {
-            if (!settingsReady || elytraAutoJumpSetting == null || !elytraSupportEnabled) return;
+            if (!settingsReady) return;
             try {
-                settingValueField.set(elytraAutoJumpSetting, savedElytraAutoJump);
+                if (elytraAutoJumpSetting != null && elytraSupportEnabled) {
+                    settingValueField.set(elytraAutoJumpSetting, savedElytraAutoJump);
+                }
+                if (elytraLandingPolicyEnabled) {
+                    if (elytraEmergencyLandSetting != null) {
+                        settingValueField.set(
+                                elytraEmergencyLandSetting, savedElytraEmergencyLand);
+                    }
+                    if (elytraMinimumFireworksSetting != null) {
+                        settingValueField.set(
+                                elytraMinimumFireworksSetting, savedElytraMinimumFireworks);
+                    }
+                }
             } catch (Exception e) {
-                LOGGER.warn("PathWalker: failed to restore Baritone elytraAutoJump", e);
+                LOGGER.warn("PathWalker: failed to restore Baritone elytra settings", e);
             } finally {
                 elytraSupportEnabled = false;
+                elytraLandingPolicyEnabled = false;
             }
         }
 

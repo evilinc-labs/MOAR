@@ -65,16 +65,15 @@ public final class BounceTuning {
     // Confirm glide before advancing the launch phase.
     public static int LAUNCH_CONFIRM_TICKS = 3;
 
-    // Give the first launch edge time to settle before retrying.
-    public static int LAUNCH_RETRY_AFTER_TICKS = 3;
-    public static double LAUNCH_RETRY_MAX_ASCENT_VELOCITY = 0.04;
-    public static int LAUNCH_ATTEMPTS_PER_JUMP = 2;
-
     // Suspend launch during repeated correction episodes.
     public static int CORRECTIONS_DISABLE_ELYTRA = 4;
 
     // Forget isolated correction episodes after this window.
     public static int CORRECTION_STORM_WINDOW_TICKS = 400;
+
+    // Try launch again after a sustained quiet period, then use the existing
+    // rearm delay before actually sending another flight request.
+    public static int CORRECTION_STORM_RECOVERY_TICKS = 80;
 
     // Fall back to plain sprint after persistent episodes.
     public static int CORRECTIONS_DISABLE_JUMP = 6;
