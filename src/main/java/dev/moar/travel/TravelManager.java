@@ -125,6 +125,7 @@ public final class TravelManager {
     private static final float MAX_RECENT_HEALTH_LOSS = 6.0F;
 
     private int miningRetargetAttempts = 0;
+    private boolean recoveringHighwayIngress;
     private MiningTraversal miningTraversal = MiningTraversal.NONE;
     private BlockPos activeMineTarget;
     private BlockPos activeTurnBranchTarget;
@@ -191,6 +192,7 @@ public final class TravelManager {
         autoResumeTicks = 0;
         clearAutoResumeProgress();
         miningRetargetAttempts = 0;
+        recoveringHighwayIngress = false;
         miningTraversal = MiningTraversal.NONE;
         activeMineTarget = null;
         bounceFallAbortTicks = 0;
@@ -214,6 +216,7 @@ public final class TravelManager {
         autoResumeAttempts = MAX_AUTO_RESUME_ATTEMPTS;
         clearAutoResumeProgress();
         miningRetargetAttempts = 0;
+        recoveringHighwayIngress = false;
         miningTraversal = MiningTraversal.NONE;
         activeMineTarget = null;
         bounceFallAbortTicks = 0;
@@ -388,6 +391,14 @@ public final class TravelManager {
             }
             return;
         }
+        // A completed or aborted mission must finish cleanup even if a safety
+        // disconnect moves the player to another dimension before the next tick.
+        if (state.phase.isTerminal()) {
+            state.ticksInPhase++;
+            state.missionTicks++;
+            tickTerminal();
+            return;
+        }
         if (state.phase != TravelPhase.PAUSED && isPlayerDead()) {
             haltAfterPlayerDeath();
             return;
@@ -400,9 +411,7 @@ public final class TravelManager {
             resumeConnectionCheckpoint("automatic reconnect resume");
             return;
         }
-        if (state.phase != TravelPhase.PAUSED
-                && !state.phase.isTerminal()
-                && enforceTravelSafety()) return;
+        if (state.phase != TravelPhase.PAUSED && enforceTravelSafety()) return;
         state.ticksInPhase++;
         state.missionTicks++;
 
@@ -417,7 +426,6 @@ public final class TravelManager {
             case ELYTRA_RESUPPLY        -> tickElytraResupply();
             case LANDING_FOR_RESUPPLY   -> tickLandingForResupply();
             case OFFRAMP_HANDOFF        -> tickOffRampHandoff();
-            case ARRIVED, ABORTED       -> tickTerminal();
             case PAUSED                 -> { /* no-op */ }
             case VERIFYING_DETOUR       -> tickVerifyingDetour();
             case DETOURING              -> tickDetouring();
@@ -506,7 +514,9 @@ public final class TravelManager {
         if (bridge.isArrived()) { advanceLeg("approach arrived"); return; }
         if (bridge.isStuck()) {
             // Retry confined-highway knockback through replanning.
-            abort("approach stuck — wither/knockback? auto-resume will retry");
+            abort(recoveringHighwayIngress
+                    ? "ground approach to the planned highway became stuck"
+                    : "approach stuck — wither/knockback? auto-resume will retry");
         }
     }
 
@@ -969,6 +979,9 @@ public final class TravelManager {
                 advanceLeg("mining waypoint arrived");
                 return;
             }
+            if (pos != null && flightDest != null && tryGroundHighwayIngress(pos, flightDest)) {
+                return;
+            }
             if (pos != null && flightDest != null && !isStrongLaunchAnchor(pos, flightDest)) {
                 BlockPos nearbyAnchor = findNearbyLaunchAnchor(pos, flightDest, NEARBY_LAUNCH_RADIUS);
                 if (nearbyAnchor != null) {
@@ -982,7 +995,8 @@ public final class TravelManager {
                 if (retargetMiningTakeoff(pos, flightDest, "mining arrived but takeoff corridor is still enclosed")) {
                     return;
                 }
-                stopUnsafeFlight("no verified open-nether takeoff corridor was found");
+                stopUnsafeFlight("no verified open-nether takeoff corridor after "
+                        + miningRetargetAttempts + " mining searches");
                 return;
             }
             IntegrityReport rep = verifier.lastReport();
@@ -999,6 +1013,9 @@ public final class TravelManager {
                     || miningTraversal == MiningTraversal.FINAL_APPROACH)
                     && activeMineTarget != null
                     && tryManualMiningDescent("mining path stuck, forcing downward descent")) {
+                return;
+            }
+            if (pos != null && flightDest != null && tryGroundHighwayIngress(pos, flightDest)) {
                 return;
             }
             if (pos != null && flightDest != null
@@ -1021,7 +1038,6 @@ public final class TravelManager {
                 String reason = "planned highway branch not found at "
                         + pos.toShortString() + " axis=" + nextBounce.highway().axis;
                 LOGGER.error("[Travel] {}; refusing synthetic branch", reason);
-                ChatHelper.labelled("Travel", "§cNo highway was verified at this junction. Travel stopped safely.");
                 stopUnsafeFlight(reason);
                 return;
             }
@@ -1141,10 +1157,12 @@ public final class TravelManager {
             TravelMission lastMission = state.mission;
             state.reset();
             state.mission = lastMission;
+            if (from == TravelPhase.ABORTED) state.abortReason = savedAbortReason;
             currentLegIndex = -1;
             detourResumeExit = null;
             miningTraversal = MiningTraversal.NONE;
             activeMineTarget = null;
+            recoveringHighwayIngress = false;
             clearTurnHandoff();
             TravelLog.get().recordTransition(0, 0, from, TravelPhase.IDLE, "terminal cleanup");
 
@@ -1167,6 +1185,9 @@ public final class TravelManager {
                 LOGGER.warn("[Travel] auto-resume scheduled in {}t (attempt {}/{}) reason={}",
                         AUTO_RESUME_DELAY_TICKS, autoResumeAttempts,
                         MAX_AUTO_RESUME_ATTEMPTS, savedAbortReason);
+                ChatHelper.labelled("Travel", "§eRetrying in "
+                        + (AUTO_RESUME_DELAY_TICKS / 20) + " seconds (attempt "
+                        + autoResumeAttempts + "/" + MAX_AUTO_RESUME_ATTEMPTS + ").");
             }
         }
     }
@@ -1290,6 +1311,9 @@ public final class TravelManager {
         LOGGER.warn("[Travel] flight lost glide for {}t in enclosed terrain; mining escape to {} "
                         + "(attempt {}/{})",
                 stalledTicks, target.toShortString(), flightEscapeAttempts, MAX_FLIGHT_ESCAPE_ATTEMPTS);
+        if (flightEscapeAttempts == 1) {
+            ChatHelper.labelled("Travel", "§eFlight ended before arrival; searching for a safe takeoff or ground route.");
+        }
         startMiningTraversal(target, "enclosed takeoff -> mine to verified open nether");
         return true;
     }
@@ -1341,7 +1365,6 @@ public final class TravelManager {
 
         LOGGER.error("[Travel] safety interlock: {} phase={} owner={} pos={}",
                 reason, state.phase, state.owner, currentPlayerPos());
-        ChatHelper.labelled("Travel", "§cSafety stop: " + reason + ". Movement released.");
         stopUnsafeFlight("safety interlock: " + reason);
         if (disconnect) elytra.disconnectForTravelSafety(reason);
         return true;
@@ -1361,6 +1384,10 @@ public final class TravelManager {
                 : Math.max(0.0F, lastBaseHealth - baseHealth);
 
         if (confirmedLoss > 0.0F) {
+            LOGGER.warn("[Travel] health fell by {} to {} phase={} owner={} pos={} fire={} lava={} gliding={}",
+                    String.format("%.1f", confirmedLoss), String.format("%.1f", baseHealth),
+                    state.phase, state.owner, currentPlayerPos(), isPlayerOnFire(),
+                    isPlayerInLava(), isPlayerGliding());
             recentHealthLoss += confirmedLoss;
             healthLossWindowTicks = HEALTH_LOSS_WINDOW_TICKS;
         } else if (healthLossWindowTicks > 0) {
@@ -1447,7 +1474,6 @@ public final class TravelManager {
                     String stopReason = "planned highway not found near bounce entry axis="
                             + activeBounce.highway().axis;
                     LOGGER.error("[Travel] {}; refusing planner-only highway geometry", stopReason);
-                    ChatHelper.labelled("Travel", "§cNo highway was verified at the planned entry. Travel stopped safely.");
                     stopUnsafeFlight(stopReason);
                     return;
                 }
@@ -1626,6 +1652,31 @@ public final class TravelManager {
         acquireOwner(MovementOwner.BARITONE);
         bridge.walkToYLevelWithPlacement(targetY);
         transition(TravelPhase.MINING_TO_FREENETHER, reason + " -> descend to Y " + targetY);
+    }
+
+    // A flight that lands beneath its planned highway can continue by ground
+    // pathing. The bounce leg still requires a local road scan before use.
+    private boolean tryGroundHighwayIngress(BlockPos pos, BlockPos flightDest) {
+        if (!bridge.isAvailable() || !isPlayerGrounded()) return false;
+        int flightIndex = HighwayIngressRecovery.nearbyFlightLegIndex(
+                state.route, currentLegIndex, pos, flightDest);
+        if (flightIndex < 0) return false;
+
+        HighwayRoute.BounceLeg next =
+                (HighwayRoute.BounceLeg) state.route.legs.get(flightIndex + 1);
+        currentLegIndex = flightIndex;
+        miningRetargetAttempts = 0;
+        miningTraversal = MiningTraversal.NONE;
+        activeMineTarget = null;
+        recoveringHighwayIngress = true;
+        clearFlightRecovery();
+        acquireOwner(MovementOwner.BARITONE);
+        bridge.walkToYLevelWithPlacement(next.highway().floorY);
+        transition(TravelPhase.APPROACH_ONRAMP,
+                "enclosed flight ingress from " + pos.toShortString()
+                        + " -> climb toward highway " + next.highway().entry.toShortString());
+        ChatHelper.labelled("Travel", "§eNo safe elytra takeoff here; climbing toward the planned highway. The road will be verified before bouncing.");
+        return true;
     }
 
     private boolean tryStartHighwayIngressAscent(HighwayRoute.BounceLeg bounceLeg, String reason) {
@@ -1812,6 +1863,9 @@ public final class TravelManager {
     private void transition(TravelPhase next, String reason) {
         TravelPhase from = state.phase;
         if (from == next) return;
+        if (from == TravelPhase.APPROACH_ONRAMP && next != TravelPhase.APPROACH_ONRAMP) {
+            recoveringHighwayIngress = false;
+        }
         if (from == TravelPhase.DETOURING && next != TravelPhase.DETOURING) {
             detourMinSafeY = Integer.MIN_VALUE;
         }
@@ -1820,6 +1874,12 @@ public final class TravelManager {
         state.lastTransitionReason = reason;
         TravelLog.get().recordTransition(missionId(), state.missionTicks, from, next, reason);
         LOGGER.info("[Travel] {} -> {} ({})", from, next, reason);
+        if (next == TravelPhase.ABORTED && !"user stop".equals(reason)) {
+            boolean retryEligible = state.mission != null && state.mission.autoResume
+                    && autoResumeAttempts < MAX_AUTO_RESUME_ATTEMPTS;
+            ChatHelper.labelled("Travel", "§cTravel "
+                    + (retryEligible ? "interrupted: " : "stopped: ") + reason);
+        }
         publishTravelEvent(from, next, reason);
         if (next.isTerminal()) {
             releaseOwner(state.owner);
@@ -1830,7 +1890,8 @@ public final class TravelManager {
     private long missionId() { return state.mission != null ? state.mission.id : 0L; }
 
     private void pauseForDimensionChange() {
-        if (state.phase == TravelPhase.IDLE || state.phase == TravelPhase.PAUSED) return;
+        if (state.phase == TravelPhase.IDLE || state.phase == TravelPhase.PAUSED
+                || state.phase.isTerminal()) return;
         state.pausedFromPhase = state.phase;
         if (state.phase == TravelPhase.ELYTRA_RESUPPLY) elytra.pause();
         releaseOwner(state.owner);

@@ -68,12 +68,13 @@ public final class BounceTuning {
     // Suspend launch during repeated correction episodes.
     public static int CORRECTIONS_DISABLE_ELYTRA = 4;
 
-    // Forget isolated correction episodes after this window.
-    public static int CORRECTION_STORM_WINDOW_TICKS = 400;
+    // Count correction episodes over a full minute. On 2b2t, rejected
+    // rebounds can be 10-15 seconds apart and evade a shorter window.
+    public static int CORRECTION_STORM_WINDOW_TICKS = 1200;
 
     // Try launch again after a sustained quiet period, then use the existing
     // rearm delay before actually sending another flight request.
-    public static int CORRECTION_STORM_RECOVERY_TICKS = 80;
+    public static int CORRECTION_STORM_RECOVERY_TICKS = 1200;
 
     // Fall back to plain sprint after persistent episodes.
     public static int CORRECTIONS_DISABLE_JUMP = 6;
@@ -148,8 +149,9 @@ public final class BounceTuning {
     public static double TARGET_HORIZONTAL_SPEED = 4.0;
     public static double TARGET_HORIZONTAL_SPEED_HYSTERESIS = 0.15;
 
-    // Stabilize several bounces after a server correction.
-    public static int CORRECTION_RECOVERY_BOUNCES = 8;
+    // Rebuild speed with the acceleration pitch after a correction. Holding the
+    // shallower cruise pitch here keeps corrected flights near walking speed.
+    public static int CORRECTION_RECOVERY_BOUNCES = 0;
 
     // Re-arm flight only after corrected movement has settled.
     public static int CORRECTION_REARM_TICKS = 80;
