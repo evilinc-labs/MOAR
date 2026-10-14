@@ -12,7 +12,28 @@ permissions:
   artifact-metadata: write
 
 jobs:
+  validate:
+    name: Validate release tag
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Match tag to mod version
+        shell: bash
+        run: |
+          if [[ "$GITHUB_REF_TYPE" != tag || "$GITHUB_REF_NAME" != v* ]]; then
+            echo "::error::Run this workflow from a version tag (vX.Y.Z)."
+            exit 1
+          fi
+          VERSION=$(sed -n 's/^mod\.version=//p' gradle.properties)
+          if [[ -z "$VERSION" || "$VERSION" != "${GITHUB_REF_NAME#v}" ]]; then
+            echo "::error::Tag $GITHUB_REF_NAME does not match mod.version=$VERSION in gradle.properties."
+            exit 1
+          fi
+
   build:
+    needs: validate
     name: Build ${{ matrix.lane }}
     runs-on: ubuntu-latest
     strategy:
@@ -62,13 +83,7 @@ jobs:
 
       - name: Resolve version
         id: version
-        run: |
-          if [[ "$GITHUB_REF_NAME" == v* ]]; then
-            VER="${GITHUB_REF_NAME#v}"
-          else
-            VER=$(grep '^mod\.version=' gradle.properties | cut -d= -f2)
-          fi
-          echo "version=$VER" >> "$GITHUB_OUTPUT"
+        run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
 
       - name: Normalize and package artifacts
         id: package
@@ -139,6 +154,7 @@ jobs:
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: ${{ github.ref_name }}
           name: MOAR v${{ steps.version.outputs.version }}
           body: |
             ## MOAR v${{ steps.version.outputs.version }}
