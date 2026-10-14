@@ -216,7 +216,7 @@ For a slow highway bounce, run `/moar packetlog travel`, let it bounce for 30–
 | `/moar travel stop` | Stop the current travel mission |
 | `/moar travel pause` | Pause the mission |
 | `/moar travel resume` | Resume a paused mission or re-plan after stop |
-| `/moar travel status` | Show current phase, owner, ticks, and last transition reason |
+| `/moar travel status` | Show current phase, owner, ticks, and the last abort reason after travel stops |
 | `/moar travel log` | Print recent mission log entries |
 | `/moar travel enderchest <x> <y> <z>` | Register an ender chest for elytra resupply |
 | `/moar travel elytra resupply-count <n>` | Set how many elytras to pull per shulker trip (1–27) |

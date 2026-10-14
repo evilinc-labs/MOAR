@@ -53,6 +53,14 @@ class HighwayPlannerTest {
     }
 
     @Test
+    void nearProjectedHighwayButFarBelowItUsesGroundApproach() {
+        HighwayRoute route = unscanned.plan(new BlockPos(8, 52, -15310),
+                new BlockPos(59456, 64, -511430),
+                new HighwayPlanner.Options().horizontalDestination(true)).orElseThrow();
+        assertInstanceOf(HighwayRoute.ApproachLeg.class, route.legs.get(0));
+    }
+
+    @Test
     void unverifiedSpawnCrossingDoesNotFallBackToDirectFlight() {
         assertTrue(unscanned.plan(new BlockPos(-20000, 120, 0),
                 new BlockPos(20000, 120, 0), new HighwayPlanner.Options()).isEmpty());

@@ -1,6 +1,7 @@
 package dev.moar.travel.bounce;
 
 import dev.moar.travel.plan.HighwayCandidate;
+import dev.moar.util.ChatHelper;
 import dev.moar.util.MoarNetworkManager;
 import dev.moar.util.PacketTelemetry;
 import dev.moar.world.SetbackMonitor;
@@ -29,6 +30,7 @@ public final class BounceController {
     private static final BounceController INSTANCE = new BounceController();
     public static BounceController get() { return INSTANCE; }
     private final BounceGroundHandoff groundHandoff = new BounceGroundHandoff();
+    private final BounceCorrectionRetry correctionRetry = new BounceCorrectionRetry();
 
     // ── Mission state ─────────────────────────────────────────────
     private HighwayCandidate highway;
@@ -227,6 +229,7 @@ public final class BounceController {
         fallObservationTicks = 0;
         fallDepth = 0.0;
         correctionEpisodeBaseline = SetbackMonitor.get().totalCorrectionEpisodes();
+        correctionRetry.reset();
         groundHandoff.reset(SetbackMonitor.get().recentCorrectionEpisodeCount(
                 BounceTuning.CORRECTION_STORM_WINDOW_TICKS));
         lastPerpOffset = 0.0;
@@ -390,6 +393,11 @@ public final class BounceController {
             return;
         }
 
+        // A held sprint key cannot restart sprint while the previous glide flag
+        // survives touchdown. Keep the sprint state set across the whole bounce,
+        // including the ground tick that supplies the next jump impulse.
+        mc.player.setSprinting(true);
+
         // ── Yaw alignment ────────────────────────────────────────
         float targetYaw = yawForDirection(travelDx, travelDz);
         lastPerpOffset = 0.0;
@@ -466,16 +474,11 @@ public final class BounceController {
         double velocityZ = mc.player.getVelocity().z;
         /*?}*/
         double horizontalSpeed = Math.hypot(velocityX, velocityZ);
-        // A proxy may report the old glide flag for another tick after landing.
-        // Vanilla refuses to emit a new START_FALL_FLYING packet while that flag
-        // remains set, even though the next jump has already begun.
+        // The server clears the old glide flag after touchdown. Do not clear it
+        // locally: that lets us redeploy before the server has processed its own
+        // clear, which the trace shows leads to position syncs and lost sprint.
         if (onGround && gliding) {
-            PacketTelemetry.markTravel("grounded-glide-cleared");
-            /*? if >=26.1 {*//*
-            mc.player.stopFallFlying();
-            *//*?} else {*/
-            mc.player.stopGliding();
-            /*?}*/
+            PacketTelemetry.markTravel("grounded-glide-awaiting-server-clear");
         }
         if (onGround) {
             airborneLaunchTicks = 0;
@@ -1653,6 +1656,16 @@ public final class BounceController {
         if (!elytraLaunchEnabled || launchRearmTicks > 0 || !reachedLaunchPoint) {
             return false;
         }
+        /*? if >=26.1 {*//*
+        Minecraft mc = Minecraft.getInstance();
+        *//*?} else {*/
+        MinecraftClient mc = MinecraftClient.getInstance();
+        /*?}*/
+        // A stale flag is common on the first airborne tick after touchdown.
+        // Wait for the server's clear, then retry on a later airborne tick.
+        if (playerGliding(mc)) {
+            return false;
+        }
         if (!playerSprinting()) {
             recordLaunchSprintLoss(y, velocityY, rise);
             return false;
@@ -1692,7 +1705,7 @@ public final class BounceController {
         releaseKeys();
     }
 
-    // Let vanilla serialize one flight command per jump arc.
+    // Redeploy explicitly after the server has cleared the previous glide.
     private boolean requestStartFlying(double y, double velocityY, double rise) {
         if (!MoarNetworkManager.tryAcquire(
                 MoarNetworkManager.Lane.MOVEMENT,
@@ -1702,10 +1715,16 @@ public final class BounceController {
         /*? if >=26.1 {*//*
         Minecraft mc = Minecraft.getInstance();
         if (mc.player == null) return false;
+        mc.player.startFallFlying();
+        mc.getConnection().send(new ServerboundPlayerCommandPacket(
+                mc.player, ServerboundPlayerCommandPacket.Action.START_FALL_FLYING));
         mc.options.keyJump.setDown(true);
         *//*?} else {*/
         MinecraftClient mc = MinecraftClient.getInstance();
         if (mc.player == null) return false;
+        mc.player.startGliding();
+        mc.player.networkHandler.sendPacket(new ClientCommandC2SPacket(
+                mc.player, ClientCommandC2SPacket.Mode.START_FALL_FLYING));
         mc.options.jumpKey.setPressed(true);
         /*?}*/
         if (launchRequests < 3) {
@@ -1739,6 +1758,7 @@ public final class BounceController {
     private void recordLaunchAccepted() {
         consecutiveLaunchFailures = 0;
         launchArmed = false;
+        correctionRetry.flightAccepted(SetbackMonitor.get().totalCorrectionEpisodes());
         PacketTelemetry.markTravel("flight-ack attempt=" + launchAttemptsThisJump
                 + " airTick=" + airborneCycleTicks);
         if (completedBounces < 3) {
@@ -1784,35 +1804,46 @@ public final class BounceController {
 
     private void applyCorrectionFallbacks() {
         SetbackMonitor monitor = SetbackMonitor.get();
-        int sessionEpisodes = Math.max(0,
-                monitor.totalCorrectionEpisodes() - correctionEpisodeBaseline);
+        int totalEpisodes = monitor.totalCorrectionEpisodes();
+        if (correctionRetry.correctionObserved(totalEpisodes)) {
+            elytraLaunchEnabled = false;
+            LOGGER.warn("[Bounce] retried elytra received a server correction; keeping flight off for this highway leg");
+            ChatHelper.labelled("Travel", "§eServer corrected the retried elytra bounce; staying on highway sprint-jumps for this leg.");
+            PacketTelemetry.markTravel("flight-retry-corrected ground-only-for-leg");
+        }
+        int sessionEpisodes = Math.max(0, totalEpisodes - correctionEpisodeBaseline);
         int episodes = Math.min(sessionEpisodes,
                 monitor.recentCorrectionEpisodeCount(BounceTuning.CORRECTION_STORM_WINDOW_TICKS));
         if (monitor.isCalm()
-                && (!elytraLaunchEnabled || !jumpingEnabled)
+                && (!jumpingEnabled || (!elytraLaunchEnabled && !correctionRetry.isLocked()))
                 && monitor.recentCorrectionEpisodeCount(
                         BounceTuning.CORRECTION_STORM_RECOVERY_TICKS) == 0) {
             // The old episodes remain in the longer detection window. Start a
             // fresh baseline so they cannot immediately disable launch again.
-            correctionEpisodeBaseline = monitor.totalCorrectionEpisodes();
-            elytraLaunchEnabled = true;
+            correctionEpisodeBaseline = totalEpisodes;
+            elytraLaunchEnabled = !correctionRetry.isLocked();
             jumpingEnabled = true;
+            if (elytraLaunchEnabled) correctionRetry.arm(totalEpisodes);
             launchAttemptsThisJump = 0;
             consecutiveLaunchFailures = 0;
             launchRearmTicks = Math.max(
                     launchRearmTicks, BounceTuning.CORRECTION_REARM_TICKS);
             correctionRecoveryBounces = BounceTuning.CORRECTION_RECOVERY_BOUNCES;
-            LOGGER.info("[Bounce] corrections quiet for {}t; restoring launch after {}t rearm",
-                    BounceTuning.CORRECTION_STORM_RECOVERY_TICKS, launchRearmTicks);
+            LOGGER.info("[Bounce] corrections quiet for {}t; restoring {} after {}t rearm",
+                    BounceTuning.CORRECTION_STORM_RECOVERY_TICKS,
+                    elytraLaunchEnabled ? "launch" : "sprint-jump", launchRearmTicks);
             return;
         }
         if (elytraLaunchEnabled && episodes >= BounceTuning.CORRECTIONS_DISABLE_ELYTRA) {
             elytraLaunchEnabled = false;
+            correctionRetry.cancel();
             LOGGER.warn("[Bounce] {} correction episodes; falling back to sprint-jump", episodes);
+            ChatHelper.labelled("Travel", "§eRepeated server corrections stopped elytra bouncing; continuing with sprint-jumps on the highway.");
         }
         if (jumpingEnabled && episodes >= BounceTuning.CORRECTIONS_DISABLE_JUMP) {
             jumpingEnabled = false;
             LOGGER.warn("[Bounce] {} correction episodes; falling back to plain highway sprint", episodes);
+            ChatHelper.labelled("Travel", "§eServer corrections continue; using plain highway sprint until movement stays stable.");
         }
     }
 
