@@ -119,6 +119,7 @@ public final class TravelManager {
     private static final int LAUNCH_CORRIDOR_DISTANCE = 24;
     private static final int BARITONE_AUTO_JUMP_LEVEL = 31;
     private static final int BARITONE_AUTO_JUMP_MIN_DROP = 8;
+    private static final int BARITONE_AUTO_JUMP_HAZARD_SCAN_DEPTH = 48;
     private static final int HEALTH_LOSS_WINDOW_TICKS = 60;
     private static final float MIN_SAFE_TRAVEL_HEALTH = 14.0F;
     private static final float CRITICAL_TRAVEL_HEALTH = 8.0F;
@@ -1344,8 +1345,16 @@ public final class TravelManager {
         String reason = null;
         boolean disconnect = false;
         if (isDelegatedBaritoneAerialControl()) {
-            if (health > CRITICAL_TRAVEL_HEALTH) return false;
-            reason = String.format("critical health %.1f/20", health);
+            if (isPlayerInLava()) {
+                reason = "Baritone flight entered lava";
+            } else if (health <= CRITICAL_TRAVEL_HEALTH) {
+                reason = String.format("critical health %.1f/20", health);
+            } else if (health <= MIN_SAFE_TRAVEL_HEALTH
+                    && recentHealthLoss >= MAX_RECENT_HEALTH_LOSS) {
+                reason = String.format("rapid health loss during Baritone flight (%.1f/20)", health);
+            } else {
+                return false;
+            }
             disconnect = true;
         } else if (isPlayerInLava()) {
             reason = "player entered lava";
@@ -2149,6 +2158,25 @@ public final class TravelManager {
             BlockPos target = resupplyResumeTarget;
             clearResupplyResumeContext();
             state.owner = MovementOwner.NONE;
+            BlockPos from = currentPlayerPos();
+            if (from == null || !isSafeGroundedForResupply()) {
+                stopUnsafeFlight("resupply finished without safe ground for elytra takeoff");
+                return true;
+            }
+            if (!isStrongLaunchAnchor(from, target)) {
+                BlockPos anchor = findNearbyLaunchAnchor(from, target, NEARBY_LAUNCH_RADIUS);
+                if (anchor == null || currentFlightLeg() == null) {
+                    stopUnsafeFlight("no verified elytra takeoff corridor after resupply");
+                    return true;
+                }
+                currentLegIndex--;
+                miningRetargetAttempts = 0;
+                LOGGER.warn("[Travel] resupply landing is unsafe for launch; moving to verified anchor {}",
+                        anchor.toShortString());
+                ChatHelper.labelled("Travel", "§eResupply is complete; moving to a safer elytra takeoff.");
+                startMiningTraversal(anchor, "resupply complete -> relocate for safe takeoff");
+                return true;
+            }
             transition(TravelPhase.LAUNCH,
                     reason + " -> preflight before resuming flight to " + target.toShortString());
             return true;
@@ -2289,16 +2317,23 @@ public final class TravelManager {
                         pos.getX() + dirX * step + perpX * side,
                         pos.getY(),
                         pos.getZ() + dirZ * step + perpZ * side);
-                boolean clearDrop = true;
-                for (int depth = 1; depth <= BARITONE_AUTO_JUMP_MIN_DROP; depth++) {
+                boolean clearDrop = AutoJumpDropSafety.isClear(depth -> {
                     BlockPos feet = new BlockPos(edge.getX(), edge.getY() - depth, edge.getZ());
                     BlockPos head = new BlockPos(feet.getX(), feet.getY() + 1, feet.getZ());
-                    if (!isChunkLoaded(feet) || !isChunkLoaded(head)
-                            || hasCollision(feet) || hasCollision(head)) {
-                        clearDrop = false;
-                        break;
+                    if (!isChunkLoaded(feet) || !isChunkLoaded(head)) {
+                        return AutoJumpDropSafety.Slice.UNKNOWN;
                     }
-                }
+                    if (hasCollision(feet)) {
+                        return !isHazardousFooting(feet) && isAirLike(head)
+                                ? AutoJumpDropSafety.Slice.SAFE_FLOOR
+                                : AutoJumpDropSafety.Slice.HAZARD;
+                    }
+                    // Lava has no collision, so a collision-only drop check
+                    // mistakes a lava lake for safe launch clearance.
+                    return isAirLike(feet) && isAirLike(head)
+                            ? AutoJumpDropSafety.Slice.AIR
+                            : AutoJumpDropSafety.Slice.HAZARD;
+                }, BARITONE_AUTO_JUMP_MIN_DROP, BARITONE_AUTO_JUMP_HAZARD_SCAN_DEPTH);
                 if (clearDrop) return true;
             }
         }
