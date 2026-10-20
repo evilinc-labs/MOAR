@@ -86,11 +86,6 @@ import net.minecraft.state.property.Properties;
 import net.minecraft.network.packet.c2s.play.ClientCommandC2SPacket;
 /*?}*/
 /*? if >=26.1 {*//*
-import net.minecraft.network.protocol.game.ServerboundSetCarriedItemPacket;
-*//*?} else {*/
-import net.minecraft.network.packet.c2s.play.UpdateSelectedSlotC2SPacket;
-/*?}*/
-/*? if >=26.1 {*//*
 import net.minecraft.network.protocol.game.ServerboundMovePlayerPacket;
 *//*?} else {*/
 import net.minecraft.network.packet.c2s.play.PlayerMoveC2SPacket;
@@ -487,7 +482,6 @@ public final class PlacementEngine {
     private static final int MAX_RECENT_ACCEPTED_SUPPORTS = 128;
     private static final int POST_PLACE_SETTLE_TICKS = 0;
     private static final int PLACE_ROTATION_PRESERVE_TICKS = 0;
-    private static int lastSentSelectedSlot = -1;
     private static boolean suppressVanillaMoveOnce = false;
     private static int consecutiveFailures = 0;
     private static int totalTimeouts = 0;
@@ -1496,7 +1490,6 @@ public final class PlacementEngine {
         finishingTicks = 0;
         lookSyncTicks = 0;
         lookSyncedForPendingPlacement = false;
-        lastSentSelectedSlot = -1;
         suppressVanillaMoveOnce = false;
         lastPlacementItem = null;
         correctionTarget = null;
@@ -1633,9 +1626,10 @@ public final class PlacementEngine {
                         HOTBAR_SELECT_SETTLE_TICKS)) {
                     return false;
                 }
-                PacketTelemetry.mark("select inventory-swap sync selected="
+                // Vanilla's interaction manager owns carried-slot synchronization.
+                // Its tick or the next item use sends the slot before the click.
+                PacketTelemetry.mark("select inventory-swap await vanilla selected="
                         + getSelectedHotbarSlot(player));
-                syncSelectedSlotPacket(player);
                 pendingInventorySwapNeedsSlotSync = false;
                 pendingSelectionSettleTicks = HOTBAR_SELECT_PACKET_SETTLE_TICKS;
                 return false;
@@ -1762,7 +1756,6 @@ public final class PlacementEngine {
             pendingHotbarSlot = -1;
             PacketTelemetry.mark("select hotbar slot=" + slot);
             selectHotbarSlot(player, slot);
-            syncSelectedSlotPacket(player);
             recordSelectedItem(pendingItem, true);
             pendingSelectionSettleTicks = HOTBAR_SELECT_PACKET_SETTLE_TICKS;
             pendingSelectionStep = ItemSelectionStep.SETTLE;
@@ -3708,42 +3701,6 @@ public final class PlacementEngine {
     }
     /*?}*/
 
-    // Don't send a slot packet ourselves: vanilla already auto-sends
-    // UpdateSelectedSlot once when the slot changes. A second identical one is
-    // Grim's BadPacketsA (duplicate slot), which desyncs the held item. We only
-    // sync the local interaction-manager mirror.
-    /*? if >=26.1 {*//*
-    private static void syncSelectedSlotPacket(LocalPlayer player) {
-        int selectedSlot = player.getInventory().getSelectedSlot();
-        lastSentSelectedSlot = selectedSlot;
-        updateInteractionManagerSelectedSlot(selectedSlot);
-    }
-    *//*?} else {*/
-    private static void syncSelectedSlotPacket(ClientPlayerEntity player) {
-        /*? if >=1.21.5 {*//*
-        int selectedSlot = player.getInventory().getSelectedSlot();
-        *//*?} else {*/
-        int selectedSlot = player.getInventory().selectedSlot;
-        /*?}*/
-        lastSentSelectedSlot = selectedSlot;
-        updateInteractionManagerSelectedSlot(selectedSlot);
-    }
-    /*?}*/
-
-    private static void updateInteractionManagerSelectedSlot(int selectedSlot) {
-        /*? if >=26.1 {*//*
-        Minecraft mc = Minecraft.getInstance();
-        Object interactionManager = mc.gameMode;
-        *//*?} else {*/
-        MinecraftClient mc = MinecraftClient.getInstance();
-        Object interactionManager = mc.interactionManager;
-        /*?}*/
-        if (interactionManager == null) {
-            return;
-        }
-        setIntFieldIfPresent(interactionManager, selectedSlot, "carriedIndex", "selectedSlot", "lastSelectedSlot");
-    }
-
     private static Integer nextBlockUseSequence() {
         /*? if >=26.1 {*//*
         return null;
@@ -3864,27 +3821,6 @@ public final class PlacementEngine {
                 closeable.close();
             } catch (Exception ignored) {
                 // ignore
-            }
-        }
-    }
-
-    private static void setIntFieldIfPresent(Object target, int value, String... candidateNames) {
-        if (target == null) {
-            return;
-        }
-        for (Class<?> type = target.getClass(); type != null; type = type.getSuperclass()) {
-            for (String candidateName : candidateNames) {
-                try {
-                    Field field = type.getDeclaredField(candidateName);
-                    if (field.getType() != int.class) {
-                        continue;
-                    }
-                    field.setAccessible(true);
-                    field.setInt(target, value);
-                    return;
-                } catch (ReflectiveOperationException ignored) {
-                    // try next field
-                }
             }
         }
     }
@@ -4351,9 +4287,8 @@ public final class PlacementEngine {
         Inventory inv = player.getInventory();
         if (inv.getSelectedSlot() == slot) return;
         inv.setSelectedSlot(slot);
-        // Keep the slot change local here and let the actual item-use path
-        // perform the carried-slot sync in the same semantic lane as the click.
-        lastSentSelectedSlot = -1;
+        // Leave the interaction manager's carried-index mirror untouched so
+        // vanilla sends the slot change before the next item use.
     }
     *//*?} else {*/
     private static void selectHotbarSlot(ClientPlayerEntity player, int slot) {
@@ -4365,9 +4300,8 @@ public final class PlacementEngine {
         if (inv.selectedSlot == slot) return;
         inv.selectedSlot = slot;
         /*?}*/
-        // Keep the slot change local here and let the actual item-use path
-        // perform the carried-slot sync in the same semantic lane as the click.
-        lastSentSelectedSlot = -1;
+        // Leave the interaction manager's carried-index mirror untouched so
+        // vanilla sends the slot change before the next item use.
     }
     /*?}*/
 
