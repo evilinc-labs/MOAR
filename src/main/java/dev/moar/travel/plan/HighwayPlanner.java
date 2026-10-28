@@ -187,8 +187,9 @@ public final class HighwayPlanner {
                     (int) Math.round(openFlightDistance(origin, networkTransfer)));
         }
 
+        int recoveryRingRadius = selectSafeRingDistance(origin, originHighway);
         RoutePlan plan = shouldUseSafeRingRoute(origin, destination,
-                bestDirect.onRampXZ(), bestDirect.exitXZ(), preferredRoute)
+                bestDirect.onRampXZ(), bestDirect.exitXZ(), preferredRoute, recoveryRingRadius)
                 ? buildSafeRingRoute(origin, destination, opts, floorY, originHighway)
                 : preferredRoute;
         int outwardRing = nearestOutwardRing(originHighway);
@@ -490,7 +491,7 @@ public final class HighwayPlanner {
             destinationJunction = withY(destinationJunction, floorY);
             double originToRing = HighwayGeometry.horizontalDistance(
                     origin.getX(), origin.getZ(), originJunction.getX(), originJunction.getZ());
-            boolean allowIngressFlight = opts.allowFlight && !isWithinSafeRing(origin);
+            boolean allowIngressFlight = opts.allowFlight && !isWithinSafeRing(origin) && !originNearRing;
             List<RingSegment> previewSegments = planRingSegments(originJunction, destinationJunction, ringRadius);
             BlockPos ingressTarget = originJunction;
             if (!previewSegments.isEmpty() && needsIngressTravel(originToRing, 10.0, allowIngressFlight)) {
@@ -897,7 +898,8 @@ public final class HighwayPlanner {
                                                   BlockPos destination,
                                                   int[] onRampXZ,
                                                   int[] exitXZ,
-                                                  RoutePlan directRoute) {
+                                                  RoutePlan directRoute,
+                                                  int recoveryRingRadius) {
         if (startsOutwardOnHighway(origin, directRoute)
                 && inspectRouteSafety(origin, directRoute).safe()) {
             return false;
@@ -910,7 +912,7 @@ public final class HighwayPlanner {
             return false;
         }
         BlockPos boundary = nearestSafeRingPoint(
-                origin, origin.getY(), HighwayRoute.SAFE_RING_RADIUS);
+                origin, origin.getY(), recoveryRingRadius);
         if (HighwayGeometry.horizontalDistance(
                 origin.getX(), origin.getZ(), boundary.getX(), boundary.getZ())
                 <= SAFE_RING_RECOVERY_DISTANCE) {
@@ -1073,7 +1075,7 @@ public final class HighwayPlanner {
                 scan.centerX(), scan.centerZ(), projection.getX(), projection.getZ()) <= tolerance;
     }
 
-    // Keep a detected outer ring instead of returning to the default ring.
+    // Recover a nearby declared outer ring instead of returning to the default ring.
     private static int selectSafeRingDistance(BlockPos origin, OriginHighway originHighway) {
         if (origin == null) {
             return HighwayRoute.SAFE_RING_RADIUS;
@@ -1121,13 +1123,17 @@ public final class HighwayPlanner {
     private static int knownRingRadiusAt(BlockPos origin) {
         int boundaryCoordinate = Math.max(Math.abs(origin.getX()), Math.abs(origin.getZ()));
         if (boundaryCoordinate < HighwayRoute.SAFE_RING_RADIUS) return 0;
+        int nearestRing = 0;
+        double nearestDistance = SAFE_RING_RECOVERY_DISTANCE;
         for (double knownRing : HighwayGeometry.RING_DISTANCES) {
-            if (knownRing >= HighwayRoute.SAFE_RING_RADIUS
-                    && Math.abs(boundaryCoordinate - knownRing) < HighwayGeometry.RING_DIAMOND_TOLERANCE) {
-                return boundaryCoordinate;
+            if (knownRing < HighwayRoute.SAFE_RING_RADIUS) continue;
+            double distance = Math.abs(boundaryCoordinate - knownRing);
+            if (distance < nearestDistance) {
+                nearestRing = (int) Math.round(knownRing);
+                nearestDistance = distance;
             }
         }
-        return 0;
+        return nearestRing;
     }
 
     private static BlockPos ringJunctionOnAxis(BlockPos point, boolean xAxis, int floorY, int ringRadius) {

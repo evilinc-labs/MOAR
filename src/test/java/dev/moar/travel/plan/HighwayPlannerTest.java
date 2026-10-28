@@ -70,6 +70,24 @@ class HighwayPlannerTest {
     }
 
     @Test
+    void restartOnOrNearOuterRingDoesNotFlyBackToDiagonal() {
+        for (int z : new int[]{250000, 249983}) {
+            HighwayRoute route = unscanned.plan(new BlockPos(-245059, 121, z),
+                    new BlockPos(2274459, 64, 2629901),
+                    new HighwayPlanner.Options().horizontalDestination(true)).orElseThrow();
+
+            assertFalse(route.legs.get(0) instanceof HighwayRoute.FlightLeg);
+            if (z != 250000) {
+                assertInstanceOf(HighwayRoute.ApproachLeg.class, route.legs.get(0));
+            }
+            assertTrue(route.legs.stream().anyMatch(leg -> leg instanceof HighwayRoute.BounceLeg bounce
+                    && bounce.highway().category == HighwayCandidate.Category.RING
+                    && bounce.highway().ringOrDiamondDist == 250000
+                    && bounce.highway().width == 0));
+        }
+    }
+
+    @Test
     void destinationOnDiamondUsesItsOffsetRoad() {
         HighwayRoute route = unscanned.plan(new BlockPos(4000, 120, 6000),
                 new BlockPos(6000, 120, 4000), new HighwayPlanner.Options()).orElseThrow();
