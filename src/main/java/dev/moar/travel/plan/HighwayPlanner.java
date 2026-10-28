@@ -46,7 +46,6 @@ public final class HighwayPlanner {
     private static final int MAX_DIAGONAL_RING_COORDINATE_STEP = 100_000;
     private static final int MAX_DIAGONAL_EGRESS = 125_000;
     private static final int MIN_NETWORK_FLIGHT_SAVINGS = 100_000;
-    private static final int TOKEN_HIGHWAY_BOUNCE_MAX_DISTANCE = 1_024;
     private static final float DESTINATION_DIAGONAL_MIN_CONFIDENCE = 0.75f;
     // Only fly highway ingress when the hop is meaningfully long.
     private static final int INGRESS_FLIGHT_MIN_DISTANCE = 64;
@@ -192,18 +191,19 @@ public final class HighwayPlanner {
                 bestDirect.onRampXZ(), bestDirect.exitXZ(), preferredRoute)
                 ? buildSafeRingRoute(origin, destination, opts, floorY, originHighway)
                 : preferredRoute;
+        int outwardRing = nearestOutwardRing(originHighway);
         if (originHighway != null && originHighway.axis().diagonal
                 && canRideOriginHighwayToRing(origin, originHighway)
-                && nearestOutwardRing(originHighway) > 0
-                && hasTokenHighwayExit(plan)) {
+                && outwardRing > 0
+                && exitsBeforeRing(plan, originHighway.axis(), outwardRing)) {
             RoutePlan connectedTransfer = buildSafeRingRoute(
                     origin, destination, opts, floorY, originHighway);
             if (connectedTransfer != null
                     && inspectRouteSafety(origin, connectedTransfer).safe()
                     && openFlightDistance(origin, plan) - openFlightDistance(origin, connectedTransfer)
                             >= MIN_NETWORK_FLIGHT_SAVINGS) {
-                LOGGER.info("[Travel] replaced short highway exit with connected ring transfer at {}",
-                        nearestOutwardRing(originHighway));
+                LOGGER.info("[Travel] replaced premature highway exit with connected ring transfer at {}",
+                        outwardRing);
                 plan = connectedTransfer;
             }
         }
@@ -741,14 +741,15 @@ public final class HighwayPlanner {
         return distance;
     }
 
-    private static boolean hasTokenHighwayExit(RoutePlan route) {
+    private static boolean exitsBeforeRing(RoutePlan route,
+                                           HighwayCandidate.Axis originAxis,
+                                           int ringRadius) {
         if (route == null || route.legs().isEmpty()
                 || !(route.legs().get(0) instanceof HighwayRoute.BounceLeg bounce)) return false;
+        if (!bounce.highway().axis.isParallelTo(originAxis)) return false;
         if (route.legs().stream().noneMatch(HighwayRoute.FlightLeg.class::isInstance)) return false;
-        return HighwayGeometry.horizontalDistance(
-                bounce.highway().entry.getX(), bounce.highway().entry.getZ(),
-                bounce.exitColumn().getX(), bounce.exitColumn().getZ())
-                < TOKEN_HIGHWAY_BOUNCE_MAX_DISTANCE;
+        return Math.max(Math.abs(bounce.exitColumn().getX()),
+                Math.abs(bounce.exitColumn().getZ())) < ringRadius;
     }
 
     private static HighwayGeometry.GeometryCandidate nearestDestinationDiagonal(BlockPos destination) {

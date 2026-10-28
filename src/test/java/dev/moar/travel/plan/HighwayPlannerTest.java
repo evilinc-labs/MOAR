@@ -53,6 +53,23 @@ class HighwayPlannerTest {
     }
 
     @Test
+    void autoResumeDoesNotReverseBeforeConnectedRingTransfer() {
+        HighwayPlanner planner = new HighwayPlanner((pos, axis) ->
+                axis.isParallelTo(HighwayCandidate.Axis.DIAG_PX_MZ)
+                        ? Optional.of(new HighwayDetectorBridge.ScanResult(
+                                119, 5, -190428, 190427, -3, 3, true, true, 0.6f))
+                        : Optional.empty());
+        HighwayRoute route = planner.plan(new BlockPos(-190428, 120, 190427),
+                new BlockPos(2274459, 64, 2629901),
+                new HighwayPlanner.Options().horizontalDestination(true)).orElseThrow();
+
+        HighwayRoute.BounceLeg first = assertInstanceOf(HighwayRoute.BounceLeg.class, route.legs.get(0));
+        assertEquals(-1, first.travelDx());
+        assertEquals(1, first.travelDz());
+        assertEquals(new BlockPos(-250000, 119, 250000), first.exitColumn());
+    }
+
+    @Test
     void destinationOnDiamondUsesItsOffsetRoad() {
         HighwayRoute route = unscanned.plan(new BlockPos(4000, 120, 6000),
                 new BlockPos(6000, 120, 4000), new HighwayPlanner.Options()).orElseThrow();
