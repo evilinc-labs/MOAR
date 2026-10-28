@@ -13,14 +13,14 @@ public final class HighwayGeometry {
     // ── Distance tables ───────────────────────────────────────────────────
     // Known ring-road distances from spawn.
     public static final double[] RING_DISTANCES = {
-            500, 1000, 1500, 2000, 2500, 7500.5,
-            55000, 100000, 125000, 250000, 500000,
+            200, 500, 1000, 1500, 2000, 2500, 7500,
+            55000, 62500, 100000, 125000, 250000, 500000,
             750000, 1_000_000, 1_250_000, 1_875_000, 2_500_000, 3_750_000
     };
 
     // Known diamond-road Manhattan distances.
     public static final double[] DIAMOND_DISTANCES = {
-            2500, 5000, 25000, 50000, 125_000, 250_000, 500_000, 3_750_000
+            2500, 5000, 10000, 25000, 50000, 125_000, 250_000, 500_000, 3_750_000
     };
 
     // Coordinate tolerance for ring and diamond matches.
