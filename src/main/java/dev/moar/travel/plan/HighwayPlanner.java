@@ -79,7 +79,7 @@ public final class HighwayPlanner {
         // Enable ring-road detection.
         public boolean detectRings = true;
         // Enable diamond-road detection.
-        public boolean detectDiamonds = false;
+        public boolean detectDiamonds = true;
         // Minimum coordinate confidence.
         public float minConfidence = 0.15f;
 
@@ -902,6 +902,12 @@ public final class HighwayPlanner {
             return false;
         }
         if (isWithinSafeRing(origin) || isWithinSafeRing(destination)) return true;
+        if (!directRoute.legs().isEmpty()
+                && directRoute.legs().get(0) instanceof HighwayRoute.BounceLeg bounce
+                && bounce.highway().category == HighwayCandidate.Category.DIAMOND
+                && inspectRouteSafety(origin, directRoute).safe()) {
+            return false;
+        }
         BlockPos boundary = nearestSafeRingPoint(
                 origin, origin.getY(), HighwayRoute.SAFE_RING_RADIUS);
         if (HighwayGeometry.horizontalDistance(

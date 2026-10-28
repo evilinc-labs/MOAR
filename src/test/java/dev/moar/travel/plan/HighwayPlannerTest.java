@@ -53,6 +53,18 @@ class HighwayPlannerTest {
     }
 
     @Test
+    void destinationOnDiamondUsesItsOffsetRoad() {
+        HighwayRoute route = unscanned.plan(new BlockPos(4000, 120, 6000),
+                new BlockPos(6000, 120, 4000), new HighwayPlanner.Options()).orElseThrow();
+
+        HighwayRoute.BounceLeg bounce = assertInstanceOf(HighwayRoute.BounceLeg.class, route.legs.get(0));
+        assertEquals(HighwayCandidate.Category.DIAMOND, bounce.highway().category);
+        assertEquals(10000, bounce.highway().ringOrDiamondDist);
+        assertEquals(new BlockPos(6000, 120, 4000), bounce.exitColumn());
+        assertTrue(bounce.highway().entry.getX() + bounce.highway().entry.getZ() == 10000);
+    }
+
+    @Test
     void playerAlreadyOnScannedLaneDoesNotWalkBackToScanAnchor() {
         HighwayPlanner planner = new HighwayPlanner((pos, axis) -> axis == HighwayCandidate.Axis.MINUS_X
                 ? Optional.of(new HighwayDetectorBridge.ScanResult(119, 5, -800012, 0,

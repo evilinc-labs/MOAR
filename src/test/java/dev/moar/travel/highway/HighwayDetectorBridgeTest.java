@@ -46,6 +46,19 @@ class HighwayDetectorBridgeTest {
     }
 
     @Test
+    void detectsDeclaredUnpavedDiamondRoad() {
+        Predicate<BlockPos> floor = p -> p.getY() == 119
+                && Math.abs(p.getX() + p.getZ() - 10000) <= 2;
+        HighwayDetectorBridge detector = new HighwayDetectorBridge(
+                p -> false, p -> p.getY() >= 120, floor);
+        var scan = detector.scanAt(new BlockPos(4000, 120, 6000),
+                HighwayCandidate.Axis.DIAG_MX_PZ).orElseThrow();
+        assertEquals(HighwayDetectorBridge.Surface.DECLARED, scan.surface());
+        assertEquals(4000, scan.centerX());
+        assertEquals(6000, scan.centerZ());
+    }
+
+    @Test
     void declaredCoordinatesAloneDoNotConfirmRoad() {
         HighwayDetectorBridge detector = new HighwayDetectorBridge(p -> false, p -> true, p -> false);
         assertTrue(detector.scanAt(new BlockPos(0, 120, -800000), HighwayCandidate.Axis.MINUS_Z).isEmpty());

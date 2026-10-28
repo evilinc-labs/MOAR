@@ -43,4 +43,38 @@ class HighwayGeometryTest {
                 .anyMatch(candidate -> candidate.category == HighwayCandidate.Category.DIAMOND
                         && candidate.ringOrDiamondDist == 10000));
     }
+
+    @Test
+    void diamondProjectionStaysOnTheDeclaredSegment() {
+        int[][] points = {{4000, 6000}, {-4000, 6000}, {-4000, -6000}, {4000, -6000}};
+        for (int[] point : points) {
+            HighwayGeometry.GeometryCandidate diamond = HighwayGeometry.rankCandidates(
+                            point[0], point[1], true, true).stream()
+                    .filter(candidate -> candidate.category == HighwayCandidate.Category.DIAMOND
+                            && candidate.ringOrDiamondDist == 10000)
+                    .findFirst().orElseThrow();
+            assertArrayEquals(point, HighwayGeometry.projectOnto(diamond, point[0], point[1]));
+            assertArrayEquals(point,
+                    HighwayGeometry.declaredCenter(point[0], point[1], diamond.axis).orElseThrow());
+        }
+    }
+
+    @Test
+    void diamondProjectionClampsAtItsCorners() {
+        HighwayGeometry.GeometryCandidate diamond = HighwayGeometry.rankCandidates(
+                        4000, 6000, true, true).stream()
+                .filter(candidate -> candidate.category == HighwayCandidate.Category.DIAMOND
+                        && candidate.ringOrDiamondDist == 10000)
+                .findFirst().orElseThrow();
+        assertArrayEquals(new int[]{10000, 0}, HighwayGeometry.projectOnto(diamond, 20000, 0));
+        assertArrayEquals(new int[]{0, 10000}, HighwayGeometry.projectOnto(diamond, 0, 20000));
+    }
+
+    @Test
+    void diamondCornerRecognizesBothConnectingRoads() {
+        assertArrayEquals(new int[]{0, 10000},
+                HighwayGeometry.declaredCenter(0, 10000, HighwayCandidate.Axis.DIAG_MX_PZ).orElseThrow());
+        assertArrayEquals(new int[]{0, 10000},
+                HighwayGeometry.declaredCenter(0, 10000, HighwayCandidate.Axis.DIAG_MX_MZ).orElseThrow());
+    }
 }

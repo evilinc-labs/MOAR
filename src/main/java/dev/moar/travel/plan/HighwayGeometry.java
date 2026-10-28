@@ -148,23 +148,20 @@ public final class HighwayGeometry {
             for (double D : DIAMOND_DISTANCES) {
                 if (Math.abs(manhattan - D) < RING_DIAMOND_TOLERANCE) {
                     float conf = 1f - (float)(Math.abs(manhattan - D) / RING_DIAMOND_TOLERANCE);
-                    HighwayCandidate.Axis axis;
-                    HighwayCandidate.DiamondSegment seg;
-                    if (x >= 0 && z >= 0) {
-                        seg = HighwayCandidate.DiamondSegment.NE;
-                        axis = HighwayCandidate.Axis.DIAG_MX_PZ;
-                    } else if (x < 0 && z >= 0) {
-                        seg = HighwayCandidate.DiamondSegment.NW;
-                        axis = HighwayCandidate.Axis.DIAG_MX_MZ;
-                    } else if (x < 0) {
-                        seg = HighwayCandidate.DiamondSegment.SW;
-                        axis = HighwayCandidate.Axis.DIAG_PX_MZ;
-                    } else {
-                        seg = HighwayCandidate.DiamondSegment.SE;
-                        axis = HighwayCandidate.Axis.DIAG_PX_PZ;
+                    for (HighwayCandidate.DiamondSegment seg : HighwayCandidate.DiamondSegment.values()) {
+                        HighwayCandidate.Axis axis = switch (seg) {
+                            case NE -> HighwayCandidate.Axis.DIAG_MX_PZ;
+                            case NW -> HighwayCandidate.Axis.DIAG_MX_MZ;
+                            case SW -> HighwayCandidate.Axis.DIAG_PX_MZ;
+                            case SE -> HighwayCandidate.Axis.DIAG_PX_PZ;
+                        };
+                        GeometryCandidate candidate = new GeometryCandidate(axis, conf * 0.8f,
+                                HighwayCandidate.Category.DIAMOND, D, null, seg);
+                        int[] center = projectOntoDiamond(candidate, x, z);
+                        if (horizontalDistance(x, z, center[0], center[1]) < RING_DIAMOND_TOLERANCE) {
+                            result.add(candidate);
+                        }
                     }
-                    result.add(new GeometryCandidate(axis, conf * 0.8f,
-                            HighwayCandidate.Category.DIAMOND, D, null, seg));
                 }
             }
         }
@@ -188,7 +185,7 @@ public final class HighwayGeometry {
     // Recognition uses a local tolerance, unlike destination ranking, whose
     // proportional diagonal tolerance can extend thousands of blocks out.
     public static Optional<int[]> declaredCenter(int x, int z, HighwayCandidate.Axis axis) {
-        return rankCandidates(x, z, true, false).stream()
+        return rankCandidates(x, z, true, true).stream()
                 .filter(candidate -> candidate.confidence > 0.05f)
                 .filter(candidate -> candidate.axis.isParallelTo(axis))
                 .map(candidate -> projectOnto(candidate, x, z))
@@ -198,6 +195,9 @@ public final class HighwayGeometry {
 
     // Project an X/Z point onto a highway line.
     public static int[] projectOnto(GeometryCandidate c, int x, int z) {
+        if (c.category == HighwayCandidate.Category.DIAMOND) {
+            return projectOntoDiamond(c, x, z);
+        }
         return switch (c.axis) {
             case PLUS_X, MINUS_X -> {
                 int fixedZ = fixedPerpCoord(c, false, z);
@@ -218,6 +218,24 @@ public final class HighwayGeometry {
                 yield new int[]{ avg, -avg };
             }
         };
+    }
+
+    private static int[] projectOntoDiamond(GeometryCandidate c, int x, int z) {
+        int radius = (int) Math.round(c.ringOrDiamondDist);
+        int startX, startZ, endX, endZ;
+        switch (c.diamondSegment) {
+            case NE -> { startX = radius; startZ = 0; endX = 0; endZ = radius; }
+            case NW -> { startX = 0; startZ = radius; endX = -radius; endZ = 0; }
+            case SW -> { startX = -radius; startZ = 0; endX = 0; endZ = -radius; }
+            case SE -> { startX = 0; startZ = -radius; endX = radius; endZ = 0; }
+            default -> throw new IllegalStateException("Unknown diamond segment");
+        }
+        double dx = endX - startX;
+        double dz = endZ - startZ;
+        double t = ((x - (double) startX) * dx + (z - (double) startZ) * dz)
+                / (dx * dx + dz * dz);
+        t = Math.max(0.0, Math.min(1.0, t));
+        return new int[]{(int) Math.round(startX + t * dx), (int) Math.round(startZ + t * dz)};
     }
 
     private static int fixedPerpCoord(GeometryCandidate c, boolean isXAxis, int currentCoord) {
