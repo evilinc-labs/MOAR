@@ -36,6 +36,23 @@ class HighwayPlannerTest {
     }
 
     @Test
+    void crossQuadrantTripStaysOnDetectedDiagonalUntilRingTransfer() {
+        HighwayPlanner planner = new HighwayPlanner((pos, axis) ->
+                axis.isParallelTo(HighwayCandidate.Axis.DIAG_PX_MZ)
+                        ? Optional.of(new HighwayDetectorBridge.ScanResult(
+                                119, 5, -177669, 177668, -3, 3, true, true, 0.6f))
+                        : Optional.empty());
+        HighwayRoute route = planner.plan(new BlockPos(-177668, 120, 177668),
+                new BlockPos(2274459, 64, 2629901),
+                new HighwayPlanner.Options().horizontalDestination(true)).orElseThrow();
+
+        HighwayRoute.BounceLeg first = assertInstanceOf(HighwayRoute.BounceLeg.class, route.legs.get(0));
+        assertTrue(first.exitColumn().getX() <= -250000);
+        assertTrue(first.exitColumn().getZ() >= 250000);
+        assertTrue(route.legs.stream().filter(HighwayRoute.BounceLeg.class::isInstance).count() > 1);
+    }
+
+    @Test
     void playerAlreadyOnScannedLaneDoesNotWalkBackToScanAnchor() {
         HighwayPlanner planner = new HighwayPlanner((pos, axis) -> axis == HighwayCandidate.Axis.MINUS_X
                 ? Optional.of(new HighwayDetectorBridge.ScanResult(119, 5, -800012, 0,

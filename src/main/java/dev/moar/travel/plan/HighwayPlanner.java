@@ -43,8 +43,10 @@ public final class HighwayPlanner {
     private static final double SAME_AXIS_INGRESS_PENALTY = 256.0;
     private static final double OPEN_NETHER_FLIGHT_PENALTY = 0.5;
     private static final int MAX_RING_TRANSFER_INGRESS = 100_000;
+    private static final int MAX_DIAGONAL_RING_COORDINATE_STEP = 100_000;
     private static final int MAX_DIAGONAL_EGRESS = 125_000;
     private static final int MIN_NETWORK_FLIGHT_SAVINGS = 100_000;
+    private static final int TOKEN_HIGHWAY_BOUNCE_MAX_DISTANCE = 1_024;
     private static final float DESTINATION_DIAGONAL_MIN_CONFIDENCE = 0.75f;
     // Only fly highway ingress when the hop is meaningfully long.
     private static final int INGRESS_FLIGHT_MIN_DISTANCE = 64;
@@ -190,6 +192,21 @@ public final class HighwayPlanner {
                 bestDirect.onRampXZ(), bestDirect.exitXZ(), preferredRoute)
                 ? buildSafeRingRoute(origin, destination, opts, floorY, originHighway)
                 : preferredRoute;
+        if (originHighway != null && originHighway.axis().diagonal
+                && canRideOriginHighwayToRing(origin, originHighway)
+                && nearestOutwardRing(originHighway) > 0
+                && hasTokenHighwayExit(plan)) {
+            RoutePlan connectedTransfer = buildSafeRingRoute(
+                    origin, destination, opts, floorY, originHighway);
+            if (connectedTransfer != null
+                    && inspectRouteSafety(origin, connectedTransfer).safe()
+                    && openFlightDistance(origin, plan) - openFlightDistance(origin, connectedTransfer)
+                            >= MIN_NETWORK_FLIGHT_SAVINGS) {
+                LOGGER.info("[Travel] replaced short highway exit with connected ring transfer at {}",
+                        nearestOutwardRing(originHighway));
+                plan = connectedTransfer;
+            }
+        }
         if (plan == null || plan.primary == null || plan.legs.isEmpty()) return Optional.empty();
 
         // Enforce the spawn boundary against the route that will execute.
@@ -724,6 +741,16 @@ public final class HighwayPlanner {
         return distance;
     }
 
+    private static boolean hasTokenHighwayExit(RoutePlan route) {
+        if (route == null || route.legs().isEmpty()
+                || !(route.legs().get(0) instanceof HighwayRoute.BounceLeg bounce)) return false;
+        if (route.legs().stream().noneMatch(HighwayRoute.FlightLeg.class::isInstance)) return false;
+        return HighwayGeometry.horizontalDistance(
+                bounce.highway().entry.getX(), bounce.highway().entry.getZ(),
+                bounce.exitColumn().getX(), bounce.exitColumn().getZ())
+                < TOKEN_HIGHWAY_BOUNCE_MAX_DISTANCE;
+    }
+
     private static HighwayGeometry.GeometryCandidate nearestDestinationDiagonal(BlockPos destination) {
         boolean sameSign = (long) destination.getX() * destination.getZ() >= 0;
         HighwayCandidate.Axis axis;
@@ -1049,6 +1076,11 @@ public final class HighwayPlanner {
         if (originHighway == null || originHighway.scan() == null) {
             return HighwayRoute.SAFE_RING_RADIUS;
         }
+        int outwardRing = nearestOutwardRing(originHighway);
+        if (originHighway.axis().diagonal && outwardRing > 0
+                && canRideOriginHighwayToRing(origin, originHighway)) {
+            return outwardRing;
+        }
         int fixedCoordinate = switch (originHighway.axis()) {
             case PLUS_X, MINUS_X -> Math.abs(originHighway.scan().centerZ());
             case PLUS_Z, MINUS_Z -> Math.abs(originHighway.scan().centerX());
@@ -1064,6 +1096,19 @@ public final class HighwayPlanner {
             }
         }
         return HighwayRoute.SAFE_RING_RADIUS;
+    }
+
+    private static int nearestOutwardRing(OriginHighway highway) {
+        if (highway == null || highway.scan() == null) return 0;
+        int along = Math.max(Math.abs(highway.scan().centerX()),
+                Math.abs(highway.scan().centerZ()));
+        for (double known : HighwayGeometry.RING_DISTANCES) {
+            if (known < HighwayRoute.SAFE_RING_RADIUS) continue;
+            int radius = (int) Math.round(known);
+            if (radius > along + MIN_RING_BOUNCE_LENGTH
+                    && radius - along <= MAX_DIAGONAL_RING_COORDINATE_STEP) return radius;
+        }
+        return 0;
     }
 
     private static int knownRingRadiusAt(BlockPos origin) {
