@@ -2,6 +2,7 @@ package dev.moar.util;
 
 import dev.moar.MoarMod;
 import dev.moar.travel.TravelManager;
+import dev.moar.travel.telemetry.ChunkTravelTelemetry;
 import dev.moar.world.SetbackMonitor;
 import net.fabricmc.loader.api.FabricLoader;
 /*? if >=26.1 {*//*
@@ -10,6 +11,7 @@ import net.minecraft.network.protocol.game.ClientboundPlayerAbilitiesPacket;
 import net.minecraft.network.protocol.game.ClientboundPlayerPositionPacket;
 import net.minecraft.network.protocol.game.ClientboundSetEntityDataPacket;
 import net.minecraft.network.protocol.game.ClientboundSetEntityMotionPacket;
+import net.minecraft.network.protocol.game.ClientboundLevelChunkWithLightPacket;
 import net.minecraft.network.protocol.game.ServerboundMovePlayerPacket;
 import net.minecraft.network.protocol.game.ServerboundPlayerCommandPacket;
 import net.minecraft.network.protocol.game.ServerboundPlayerInputPacket;
@@ -22,6 +24,7 @@ import net.minecraft.network.packet.s2c.play.PlayerAbilitiesS2CPacket;
 import net.minecraft.network.packet.s2c.play.PlayerPositionLookS2CPacket;
 import net.minecraft.network.packet.s2c.play.EntityTrackerUpdateS2CPacket;
 import net.minecraft.network.packet.s2c.play.EntityVelocityUpdateS2CPacket;
+import net.minecraft.network.packet.s2c.play.ChunkDataS2CPacket;
 /*?}*/
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -42,7 +45,7 @@ import java.util.Set;
 public final class PacketTelemetry {
 
     private static final Logger LOGGER = LoggerFactory.getLogger("MOAR/Packets");
-    private static final String TRACE_BUILD = "bounce-single-request-travel-trace";
+    private static final String TRACE_BUILD = "travel-chunk-timing";
     // Movement packets arrive every tick; retain several minutes of travel.
     private static final int MAX_EVENTS = 20_000;
     private static final int MAX_FIELDS = 14;
@@ -63,6 +66,7 @@ public final class PacketTelemetry {
     private static long sequence;
     private static volatile long dropped;
     private static volatile long captureStartNanos = System.nanoTime();
+    private static volatile long captureStartEpochMs = System.currentTimeMillis();
     private static int head;
     private static int size;
     private static long lastTick = Long.MIN_VALUE;
@@ -102,6 +106,7 @@ public final class PacketTelemetry {
     }
 
     public static synchronized void clear() {
+        ChunkTravelTelemetry.reset();
         for (int i = 0; i < EVENTS.length; i++) {
             EVENTS[i] = null;
         }
@@ -110,6 +115,7 @@ public final class PacketTelemetry {
         sequence = 0;
         dropped = 0;
         captureStartNanos = System.nanoTime();
+        captureStartEpochMs = System.currentTimeMillis();
         lastTick = Long.MIN_VALUE;
         LOGGER.info("[PacketTrace] cleared");
     }
@@ -124,6 +130,12 @@ public final class PacketTelemetry {
     public static void markTravel(String label) {
         if (enabled && mode == Mode.TRAVEL) {
             append("BOUNCE " + safe(label), true);
+        }
+    }
+
+    public static void markTravelChunk(String label) {
+        if (enabled && mode == Mode.TRAVEL) {
+            append("CHUNK " + safe(label), true);
         }
     }
 
@@ -164,6 +176,19 @@ public final class PacketTelemetry {
             return;
         }
         Mode captureMode = mode;
+        if (captureMode == Mode.TRAVEL) {
+            /*? if >=26.1 {*//*
+            if (packet instanceof ClientboundLevelChunkWithLightPacket chunk) {
+                ChunkTravelTelemetry.onDecodedChunk(chunk.getX(), chunk.getZ());
+                return;
+            }
+            *//*?} else {*/
+            if (packet instanceof ChunkDataS2CPacket chunk) {
+                ChunkTravelTelemetry.onDecodedChunk(chunk.getChunkX(), chunk.getChunkZ());
+                return;
+            }
+            /*?}*/
+        }
         if (!(captureMode == Mode.TRAVEL
                 ? isTravelIncomingPacket(packet)
                 : isRelevantIncomingPacket(packet))) {
@@ -188,6 +213,7 @@ public final class PacketTelemetry {
         out.append("MOAR packet trace events=").append(events.size())
                 .append(" dropped=").append(dropped)
                 .append(" mode=").append(mode)
+                .append(" startedAtEpochMs=").append(captureStartEpochMs)
                 .append(" enabled=").append(enabled).append('\n');
         for (Event event : events) {
             out.append('#').append(event.sequence)

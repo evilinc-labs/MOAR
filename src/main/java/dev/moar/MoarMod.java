@@ -21,6 +21,7 @@ import dev.moar.schematic.PrinterResourceManager;
 import dev.moar.spawnproof.SpawnProofer;
 import dev.moar.travel.TravelManager;
 import dev.moar.travel.command.TravelCommand;
+import dev.moar.travel.telemetry.ChunkTravelTelemetry;
 import dev.moar.travel.hud.HighwayOverlayRenderer;
 import dev.moar.travel.hud.TravelHud;
 import dev.moar.util.PathWalker;
@@ -29,6 +30,7 @@ import dev.moar.update.MoarUpdateService;
 import dev.moar.util.MoarNetworkManager;
 import net.fabricmc.api.ClientModInitializer;
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
+import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientChunkEvents;
 import net.fabricmc.fabric.api.client.networking.v1.ClientPlayConnectionEvents;
 /*? if >=26.1 {*//*
 import net.fabricmc.fabric.api.client.keymapping.v1.KeyMappingHelper;
@@ -159,6 +161,14 @@ public class MoarMod implements ClientModInitializer {
         TravelHud.register();
         HighwayOverlayRenderer.register();
 
+        ClientChunkEvents.CHUNK_LOAD.register((world, chunk) -> {
+            /*? if >=26.1 {*//*
+            ChunkTravelTelemetry.onChunkLoaded(chunk.getPos().x(), chunk.getPos().z());
+            *//*?} else {*/
+            ChunkTravelTelemetry.onChunkLoaded(chunk.getPos().x, chunk.getPos().z);
+            /*?}*/
+        });
+
         // Load saved supply chest positions
         PrinterResourceManager.load();
 
@@ -260,6 +270,7 @@ public class MoarMod implements ClientModInitializer {
 
             // Tick the travel manager (highway/elytra state machine)
             TravelManager.get().tick(client);
+            ChunkTravelTelemetry.tick();
         });
 
         // Pre-physics tick: bounce physics actions fire before tickMovement().
@@ -288,6 +299,7 @@ public class MoarMod implements ClientModInitializer {
             PathWalker.stop();
             VelocityMonitor.get().reset();
             SetbackMonitor.get().reset();
+            ChunkTravelTelemetry.reset();
             PrinterDatabase.clearScaffold();
             DATABASE.close();
             if (API_SERVER != null) API_SERVER.close();
