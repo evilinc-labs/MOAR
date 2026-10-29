@@ -58,12 +58,17 @@ import net.minecraft.util.math.Vec3d;
 /*?}*/
 
 import org.joml.Matrix4f;
+import org.joml.Vector3f;
 
 // Draw wireframe blocks for the detected highway.
 public final class HighwayOverlayRenderer {
 
     private static final float ALPHA      = 1.0f;
     private static final float LINE_WIDTH = 2.0f;
+    // World render callbacks are render-thread confined. Reuse the transform targets
+    // instead of allocating two Vector3f objects for every wireframe vertex.
+    private static final Vector3f VERTEX_POSITION = new Vector3f();
+    private static final Vector3f LINE_NORMAL = new Vector3f();
 
     // ── Custom lines pipeline for 1.21.11 (RenderLayer.getLines() removed) ──
     /*? if >=26.1 {*//*
@@ -167,8 +172,13 @@ public final class HighwayOverlayRenderer {
         float len=(float)Math.sqrt(dx*dx+dy*dy+dz*dz);
         if (len<0.0001f) return;
         float nx=dx/len, ny=dy/len, nz=dz/len;
-        vc.addVertex(m,x1,y1,z1).setColor(r,g,b,ALPHA).setNormal(pose,nx,ny,nz).setLineWidth(LINE_WIDTH);
-        vc.addVertex(m,x2,y2,z2).setColor(r,g,b,ALPHA).setNormal(pose,nx,ny,nz).setLineWidth(LINE_WIDTH);
+        pose.transformNormal(nx, ny, nz, LINE_NORMAL);
+        m.transformPosition(x1, y1, z1, VERTEX_POSITION);
+        vc.addVertex(VERTEX_POSITION.x, VERTEX_POSITION.y, VERTEX_POSITION.z)
+                .setColor(r,g,b,ALPHA).setNormal(LINE_NORMAL.x, LINE_NORMAL.y, LINE_NORMAL.z).setLineWidth(LINE_WIDTH);
+        m.transformPosition(x2, y2, z2, VERTEX_POSITION);
+        vc.addVertex(VERTEX_POSITION.x, VERTEX_POSITION.y, VERTEX_POSITION.z)
+                .setColor(r,g,b,ALPHA).setNormal(LINE_NORMAL.x, LINE_NORMAL.y, LINE_NORMAL.z).setLineWidth(LINE_WIDTH);
     }
     *//*?} else if >=26.1 {*//*
     private static void onRender26(LevelRenderContext ctx) {
@@ -234,8 +244,13 @@ public final class HighwayOverlayRenderer {
         float len = (float) Math.sqrt(dx * dx + dy * dy + dz * dz);
         if (len < 0.0001f) return;
         float nx = dx / len, ny = dy / len, nz = dz / len;
-        vc.addVertex(m,x1,y1,z1).setColor(r,g,b,ALPHA).setNormal(pose,nx,ny,nz).setLineWidth(LINE_WIDTH);
-        vc.addVertex(m,x2,y2,z2).setColor(r,g,b,ALPHA).setNormal(pose,nx,ny,nz).setLineWidth(LINE_WIDTH);
+        pose.transformNormal(nx, ny, nz, LINE_NORMAL);
+        m.transformPosition(x1, y1, z1, VERTEX_POSITION);
+        vc.addVertex(VERTEX_POSITION.x, VERTEX_POSITION.y, VERTEX_POSITION.z)
+                .setColor(r,g,b,ALPHA).setNormal(LINE_NORMAL.x, LINE_NORMAL.y, LINE_NORMAL.z).setLineWidth(LINE_WIDTH);
+        m.transformPosition(x2, y2, z2, VERTEX_POSITION);
+        vc.addVertex(VERTEX_POSITION.x, VERTEX_POSITION.y, VERTEX_POSITION.z)
+                .setColor(r,g,b,ALPHA).setNormal(LINE_NORMAL.x, LINE_NORMAL.y, LINE_NORMAL.z).setLineWidth(LINE_WIDTH);
     }
     *//*?} else if >=1.21.11 {*//*
     private static void onRender(WorldRenderContext ctx) {
@@ -307,8 +322,13 @@ public final class HighwayOverlayRenderer {
         float len=(float)Math.sqrt(dx*dx+dy*dy+dz*dz);
         if (len<0.0001f) return;
         float nx=dx/len, ny=dy/len, nz=dz/len;
-        vc.vertex(m,x1,y1,z1).color(r,g,b,ALPHA).normal(e,nx,ny,nz).lineWidth(LINE_WIDTH);
-        vc.vertex(m,x2,y2,z2).color(r,g,b,ALPHA).normal(e,nx,ny,nz).lineWidth(LINE_WIDTH);
+        e.transformNormal(nx, ny, nz, LINE_NORMAL);
+        m.transformPosition(x1, y1, z1, VERTEX_POSITION);
+        vc.vertex(VERTEX_POSITION.x, VERTEX_POSITION.y, VERTEX_POSITION.z)
+                .color(r,g,b,ALPHA).normal(LINE_NORMAL.x, LINE_NORMAL.y, LINE_NORMAL.z).lineWidth(LINE_WIDTH);
+        m.transformPosition(x2, y2, z2, VERTEX_POSITION);
+        vc.vertex(VERTEX_POSITION.x, VERTEX_POSITION.y, VERTEX_POSITION.z)
+                .color(r,g,b,ALPHA).normal(LINE_NORMAL.x, LINE_NORMAL.y, LINE_NORMAL.z).lineWidth(LINE_WIDTH);
     }
     *//*?} else if >=1.21.10 {*//*
     private static void onRender(WorldRenderContext ctx) {
@@ -379,8 +399,13 @@ public final class HighwayOverlayRenderer {
         float len=(float)Math.sqrt(dx*dx+dy*dy+dz*dz);
         if (len<0.0001f) return;
         float nx=dx/len, ny=dy/len, nz=dz/len;
-        vc.vertex(m,x1,y1,z1).color(r,g,b,ALPHA).normal(e,nx,ny,nz);
-        vc.vertex(m,x2,y2,z2).color(r,g,b,ALPHA).normal(e,nx,ny,nz);
+        e.transformNormal(nx, ny, nz, LINE_NORMAL);
+        m.transformPosition(x1, y1, z1, VERTEX_POSITION);
+        vc.vertex(VERTEX_POSITION.x, VERTEX_POSITION.y, VERTEX_POSITION.z)
+                .color(r,g,b,ALPHA).normal(LINE_NORMAL.x, LINE_NORMAL.y, LINE_NORMAL.z);
+        m.transformPosition(x2, y2, z2, VERTEX_POSITION);
+        vc.vertex(VERTEX_POSITION.x, VERTEX_POSITION.y, VERTEX_POSITION.z)
+                .color(r,g,b,ALPHA).normal(LINE_NORMAL.x, LINE_NORMAL.y, LINE_NORMAL.z);
     }
     *//*?} else {*/
     private static void onRender(WorldRenderContext ctx) {
@@ -453,8 +478,13 @@ public final class HighwayOverlayRenderer {
         float len=(float)Math.sqrt(dx*dx+dy*dy+dz*dz);
         if (len<0.0001f) return;
         float nx=dx/len, ny=dy/len, nz=dz/len;
-        vc.vertex(m,x1,y1,z1).color(r,g,b,ALPHA).normal(e,nx,ny,nz);
-        vc.vertex(m,x2,y2,z2).color(r,g,b,ALPHA).normal(e,nx,ny,nz);
+        e.transformNormal(nx, ny, nz, LINE_NORMAL);
+        m.transformPosition(x1, y1, z1, VERTEX_POSITION);
+        vc.vertex(VERTEX_POSITION.x, VERTEX_POSITION.y, VERTEX_POSITION.z)
+                .color(r,g,b,ALPHA).normal(LINE_NORMAL.x, LINE_NORMAL.y, LINE_NORMAL.z);
+        m.transformPosition(x2, y2, z2, VERTEX_POSITION);
+        vc.vertex(VERTEX_POSITION.x, VERTEX_POSITION.y, VERTEX_POSITION.z)
+                .color(r,g,b,ALPHA).normal(LINE_NORMAL.x, LINE_NORMAL.y, LINE_NORMAL.z);
     }
     /*?}*/
 }
