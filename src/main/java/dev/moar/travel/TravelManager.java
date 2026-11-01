@@ -475,6 +475,9 @@ public final class TravelManager {
         }
 
         if (HighwayPlanner.hasExcessiveFlightLeg(origin, planned.get().legs)) {
+            LOGGER.warn("[Travel] rejecting oversized route from {} to {}: {}",
+                    origin.toShortString(), state.mission.destination.toShortString(),
+                    planned.get().legs);
             stopUnsafeFlight("planned open-nether flight exceeds "
                     + HighwayPlanner.MAX_OPEN_NETHER_FLIGHT
                     + " blocks; no safe highway transfer available");

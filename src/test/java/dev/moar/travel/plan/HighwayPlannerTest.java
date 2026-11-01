@@ -72,6 +72,22 @@ class HighwayPlannerTest {
     }
 
     @Test
+    void respawnNearSmallerRingCanReachDistantDestinationWithoutOversizedFlight() {
+        BlockPos origin = new BlockPos(-68_567, 70, -14_504);
+        BlockPos destination = new BlockPos(2_274_459, 64, 2_629_901);
+        HighwayRoute route = unscanned.plan(origin, destination,
+                new HighwayPlanner.Options().horizontalDestination(true)).orElseThrow();
+
+        assertFalse(HighwayPlanner.hasExcessiveFlightLeg(origin, route.legs));
+        assertTrue(route.legs.stream().anyMatch(leg -> leg instanceof HighwayRoute.BounceLeg bounce
+                && bounce.highway().category == HighwayCandidate.Category.RING
+                && bounce.highway().ringOrDiamondDist == 62_500));
+        assertTrue(route.legs.stream().anyMatch(leg -> leg instanceof HighwayRoute.BounceLeg bounce
+                && bounce.highway().category == HighwayCandidate.Category.RING
+                && bounce.highway().ringOrDiamondDist == 2_500_000));
+    }
+
+    @Test
     void longUsefulHighwayRunStillBounces() {
         HighwayRoute route = unscanned.plan(new BlockPos(-799202, 120, -799202),
                 new BlockPos(-872787, 64, -794058), new HighwayPlanner.Options()).orElseThrow();
