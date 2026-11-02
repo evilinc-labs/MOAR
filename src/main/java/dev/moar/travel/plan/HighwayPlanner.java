@@ -207,6 +207,22 @@ public final class HighwayPlanner {
                 plan = outerRing;
             }
         }
+        int destinationRingRadius = nearbyOuterRing(destination);
+        if (opts.allowFlight && destinationRingRadius > 0
+                && destinationRingRadius > Math.max(Math.abs(origin.getX()), Math.abs(origin.getZ()))
+                && isNearCardinalSpoke(origin)) {
+            RoutePlan destinationRing = buildSafeRingRoute(origin, destination, opts,
+                    floorY, originHighway, destinationRingRadius, true);
+            if (destinationRing != null && inspectRouteSafety(origin, destinationRing).safe()
+                    && !hasExcessiveFlightLeg(origin, destinationRing.legs())
+                    && (hasExcessiveFlightLeg(origin, plan.legs())
+                        || shouldPreferNetworkTransfer(origin, plan, destinationRing))) {
+                LOGGER.info("[Travel] selected destination ring {} via cardinal highway; open flight {} -> {} blocks",
+                        destinationRingRadius, (int) Math.round(openFlightDistance(origin, plan)),
+                        (int) Math.round(openFlightDistance(origin, destinationRing)));
+                plan = destinationRing;
+            }
+        }
         if (opts.allowFlight && hasExcessiveFlightLeg(origin, plan.legs())) {
             RoutePlan twoRing = buildTwoRingTransferRoute(
                     origin, destination, opts, floorY, originHighway);

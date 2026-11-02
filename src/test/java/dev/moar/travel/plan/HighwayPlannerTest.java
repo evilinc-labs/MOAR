@@ -88,6 +88,31 @@ class HighwayPlannerTest {
     }
 
     @Test
+    void bounceFallResumeOnCardinalDoesNotWalkBackToNearbyRing() {
+        BlockPos origin = new BlockPos(0, 120, 127_565);
+        BlockPos destination = new BlockPos(2_274_459, 64, 2_629_901);
+        HighwayPlanner planner = new HighwayPlanner((pos, axis) ->
+                axis == HighwayCandidate.Axis.PLUS_Z
+                        ? Optional.of(new HighwayDetectorBridge.ScanResult(
+                                119, 5, 0, 127_565, -3, 3, true, true, 0.6f))
+                        : Optional.empty());
+
+        HighwayRoute route = planner.plan(origin, destination,
+                new HighwayPlanner.Options().horizontalDestination(true)).orElseThrow();
+        HighwayRoute.BounceLeg first = assertInstanceOf(HighwayRoute.BounceLeg.class,
+                route.legs.get(0));
+        assertEquals(1, first.travelDz());
+        assertEquals(2_500_000, first.exitColumn().getZ());
+        assertFalse(HighwayPlanner.hasExcessiveFlightLeg(origin, route.legs));
+
+        HighwayRoute unconfirmed = unscanned.plan(origin, destination,
+                new HighwayPlanner.Options().horizontalDestination(true)).orElseThrow();
+        HighwayRoute.BounceLeg unconfirmedFirst = assertInstanceOf(HighwayRoute.BounceLeg.class,
+                unconfirmed.legs.get(0));
+        assertEquals(2_500_000, unconfirmedFirst.exitColumn().getZ());
+    }
+
+    @Test
     void longUsefulHighwayRunStillBounces() {
         HighwayRoute route = unscanned.plan(new BlockPos(-799202, 120, -799202),
                 new BlockPos(-872787, 64, -794058), new HighwayPlanner.Options()).orElseThrow();
