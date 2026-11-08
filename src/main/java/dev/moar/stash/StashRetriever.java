@@ -1,5 +1,7 @@
 package dev.moar.stash;
 
+import dev.moar.util.PlayerSwing;
+
 import dev.moar.MoarMod;
 import dev.moar.world.SetbackMonitor;
 import dev.moar.chest.ChestManager;
@@ -1433,7 +1435,7 @@ public final class StashRetriever {
                 mc.interactionManager.updateBlockBreakingProgress(shulkerPos, Direction.UP);
                 /*?}*/
                 /*? if >=26.1 {*//*
-                player.swing(InteractionHand.MAIN_HAND);
+                PlayerSwing.swingMainHand(player);
                 *//*?} else {*/
                 player.swingHand(Hand.MAIN_HAND);
                 /*?}*/
@@ -1487,7 +1489,7 @@ public final class StashRetriever {
                 mc.interactionManager.updateBlockBreakingProgress(shulkerPos, Direction.UP);
                 /*?}*/
                 /*? if >=26.1 {*//*
-                player.swing(InteractionHand.MAIN_HAND);
+                PlayerSwing.swingMainHand(player);
                 *//*?} else {*/
                 player.swingHand(Hand.MAIN_HAND);
                 /*?}*/

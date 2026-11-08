@@ -47,7 +47,7 @@ jobs:
           - lane: modern
             java: '25'
             args: '-Pmoar.includeJava25Targets=true'
-            tasks: ':26.1.1:buildAndCollect :26.2:buildAndCollect'
+            tasks: ':26.1.1:buildAndCollect :26.2:buildAndCollect :26.3:buildAndCollect'
     steps:
       - uses: actions/checkout@v4
         with:
@@ -94,7 +94,7 @@ jobs:
           mkdir -p "$JAR_DIR" "$STAGING"
           find build/collected -name '*.jar' -exec cp {} "$JAR_DIR/" \;
           HASH_BODY=''
-          for mc in 1.21.4 1.21.5 1.21.8 1.21.10 1.21.11 26.1.1 26.2; do
+          for mc in 1.21.4 1.21.5 1.21.8 1.21.10 1.21.11 26.1.1 26.2 26.3; do
             JAR="$JAR_DIR/moar-${VER}+${mc}.jar"
             if [ ! -f "$JAR" ]; then
               echo "::error::Missing JAR: $JAR"

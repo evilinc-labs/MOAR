@@ -1,5 +1,7 @@
 package dev.moar.printer;
 
+import dev.moar.util.PlayerSwing;
+
 import dev.moar.chest.ChestManager;
 import dev.moar.schematic.LitematicaDetector;
 import dev.moar.schematic.LitematicaSchematic;
@@ -5333,7 +5335,7 @@ public class SchematicPrinter {
         }
         /*? if >=26.1 {*//*
         mc.gameMode.startDestroyBlock(clearBreakTarget, Direction.UP);
-        mc.player.swing(InteractionHand.MAIN_HAND);
+        PlayerSwing.swingMainHand(mc.player);
         *//*?} else {*/
         mc.interactionManager.attackBlock(clearBreakTarget, Direction.UP);
         mc.player.swingHand(Hand.MAIN_HAND);
@@ -5566,7 +5568,7 @@ public class SchematicPrinter {
         float breakPitch = (float) -(Mth.atan2(toBlock.y, horizDist) * (180.0 / Math.PI));
         PlacementEngine.setLookRotation(mc.player, breakYaw, Mth.clamp(breakPitch, -90.0f, 90.0f));
         mc.gameMode.startDestroyBlock(clearBreakTarget, Direction.UP);
-        mc.player.swing(InteractionHand.MAIN_HAND);
+        PlayerSwing.swingMainHand(mc.player);
         *//*?} else {*/
         float breakYaw = (float) (MathHelper.atan2(toBlock.z, toBlock.x) * (180.0 / Math.PI)) - 90.0f;
         float breakPitch = (float) -(MathHelper.atan2(toBlock.y, horizDist) * (180.0 / Math.PI));
@@ -5758,7 +5760,7 @@ public class SchematicPrinter {
             mc.interactionManager.updateBlockBreakingProgress(clearBreakTarget, Direction.UP);
             /*?}*/
             /*? if >=26.1 {*//*
-            mc.player.swing(InteractionHand.MAIN_HAND);
+            PlayerSwing.swingMainHand(mc.player);
             *//*?} else {*/
             mc.player.swingHand(Hand.MAIN_HAND);
             /*?}*/
@@ -5995,7 +5997,7 @@ public class SchematicPrinter {
             mc.interactionManager.updateBlockBreakingProgress(scaffoldBreakTarget, Direction.UP);
             /*?}*/
             /*? if >=26.1 {*//*
-            mc.player.swing(InteractionHand.MAIN_HAND);
+            PlayerSwing.swingMainHand(mc.player);
             *//*?} else {*/
             mc.player.swingHand(Hand.MAIN_HAND);
             /*?}*/
@@ -6133,7 +6135,7 @@ public class SchematicPrinter {
         mc.interactionManager.attackBlock(scaffoldBreakTarget, Direction.UP);
         /*?}*/
         /*? if >=26.1 {*//*
-        mc.player.swing(InteractionHand.MAIN_HAND);
+        PlayerSwing.swingMainHand(mc.player);
         *//*?} else {*/
         mc.player.swingHand(Hand.MAIN_HAND);
         /*?}*/
@@ -6921,7 +6923,7 @@ public class SchematicPrinter {
                 }
                 /*? if >=26.1 {*//*
                 mc.gameMode.continueDestroyBlock(dumpShulkerPos, Direction.UP);
-                player.swing(InteractionHand.MAIN_HAND);
+                PlayerSwing.swingMainHand(player);
                 *//*?} else {*/
                 mc.interactionManager.updateBlockBreakingProgress(dumpShulkerPos, Direction.UP);
                 player.swingHand(Hand.MAIN_HAND);
@@ -6947,7 +6949,7 @@ public class SchematicPrinter {
                 }
                 /*? if >=26.1 {*//*
                 mc.gameMode.continueDestroyBlock(dumpShulkerPos, Direction.UP);
-                player.swing(InteractionHand.MAIN_HAND);
+                PlayerSwing.swingMainHand(player);
                 *//*?} else {*/
                 mc.interactionManager.updateBlockBreakingProgress(dumpShulkerPos, Direction.UP);
                 player.swingHand(Hand.MAIN_HAND);
@@ -8013,7 +8015,7 @@ public class SchematicPrinter {
                 mc.interactionManager.updateBlockBreakingProgress(shulkerPlacePos, Direction.UP);
                 /*?}*/
                 /*? if >=26.1 {*//*
-                player.swing(InteractionHand.MAIN_HAND);
+                PlayerSwing.swingMainHand(player);
                 *//*?} else {*/
                 player.swingHand(Hand.MAIN_HAND);
                 /*?}*/
@@ -8118,7 +8120,7 @@ public class SchematicPrinter {
                 mc.interactionManager.updateBlockBreakingProgress(shulkerPlacePos, Direction.UP);
                 /*?}*/
                 /*? if >=26.1 {*//*
-                player.swing(InteractionHand.MAIN_HAND);
+                PlayerSwing.swingMainHand(player);
                 *//*?} else {*/
                 player.swingHand(Hand.MAIN_HAND);
                 /*?}*/
@@ -12201,7 +12203,9 @@ public class SchematicPrinter {
         }
 
         // Redstone wire — connections and power are neighbor-computed
-        /*? if >=26.1 {*//*
+        /*? if >=26.3 {*//*
+        if (block instanceof RedstoneWireBlock) {
+        *//*?} else if >=26.1 {*//*
         if (block instanceof RedStoneWireBlock) {
         *//*?} else {*/
         if (block instanceof RedstoneWireBlock) {
@@ -12710,7 +12714,7 @@ public class SchematicPrinter {
     private static boolean isPassable(BlockState state) {
         if (!state.getFluidState().isEmpty()) return false;
         /*? if >=26.1 {*//*
-        return state.isAir() || state.canBeReplaced() || !state.blocksMotion();
+        return state.isAir() || state.canBeReplaced() || !blocksMotionCompat(state);
         *//*?} else {*/
         return state.isAir() || state.isReplaceable() || !state.blocksMovement();
         /*?}*/
@@ -12728,11 +12732,21 @@ public class SchematicPrinter {
         /*?}*/
         if (!state.getFluidState().isEmpty()) return false; // can swim
         /*? if >=26.1 {*//*
-        return state.blocksMotion();
+        return blocksMotionCompat(state);
         *//*?} else {*/
         return state.blocksMovement();
         /*?}*/
     }
+
+    /*? if >=26.3 {*//*
+    private static boolean blocksMotionCompat(BlockState state) {
+        return state.isSolid() && !state.is(Blocks.COBWEB) && !state.is(Blocks.BAMBOO_SAPLING);
+    }
+    *//*?} else if >=26.1 {*//*
+    private static boolean blocksMotionCompat(BlockState state) {
+        return state.blocksMotion();
+    }
+    *//*?}*/
 
     // Returns true if placing a block at pos would seal
     // the player's last walkable horizontal exit.

@@ -27,7 +27,7 @@ jobs:
           - lane: modern
             java: '25'
             args: '-Pmoar.includeJava25Targets=true'
-            tasks: ':26.1.1:buildAndCollect :26.2:buildAndCollect'
+            tasks: ':26.1.1:buildAndCollect :26.2:buildAndCollect :26.3:buildAndCollect'
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -86,7 +86,7 @@ jobs:
           VER=$(grep '^mod\.version=' gradle.properties | cut -d= -f2)
           STAGING=build/release
           mkdir -p "$STAGING"
-          for mc in 1.21.4 1.21.5 1.21.8 1.21.10 1.21.11 26.1.1 26.2; do
+          for mc in 1.21.4 1.21.5 1.21.8 1.21.10 1.21.11 26.1.1 26.2 26.3; do
             JAR=$(find build/collected -name "moar-${VER}+${mc}.jar" -print -quit)
             if [ -z "$JAR" ]; then
               echo "::error::Missing JAR for Minecraft ${mc}"

@@ -32,6 +32,7 @@ val minecraftVersions = buildList {
     if (includeJava25Targets) {
         add("26.1.1")
         add("26.2")
+        add("26.3")
     }
 }
 

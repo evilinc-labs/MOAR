@@ -2372,7 +2372,7 @@ public final class PlacementEngine {
             InteractionResult result = mc.gameMode.useItem(player, InteractionHand.MAIN_HAND);
             if (result.consumesAction()) {
                 if (shouldClientSwing(result)) {
-                    player.swing(InteractionHand.MAIN_HAND);
+                    PlayerSwing.swingMainHand(player);
                 }
             }
             if (result.consumesAction()) {
@@ -2415,7 +2415,7 @@ public final class PlacementEngine {
             boolean vanillaAccepted = result.consumesAction();
             if (vanillaAccepted) {
                 if (shouldClientSwing(result)) {
-                    player.swing(InteractionHand.MAIN_HAND);
+                    PlayerSwing.swingMainHand(player);
                 }
                 enqueueVerification(pendingTarget, pendingDesired, targetState, hitBlockPos, PlacementLane.VANILLA);
                 placed = true;
@@ -2646,7 +2646,7 @@ public final class PlacementEngine {
                     correctionTarget, breakFace);
         }
         /*? if >=26.1 {*//*
-        mc.player.swing(InteractionHand.MAIN_HAND);
+        PlayerSwing.swingMainHand(mc.player);
         *//*?} else {*/
         mc.player.swingHand(Hand.MAIN_HAND);
         /*?}*/
@@ -3693,7 +3693,7 @@ public final class PlacementEngine {
 
     /*? if >=26.1 {*//*
     private static void sendPlacementSwing(LocalPlayer player) {
-        player.swing(InteractionHand.MAIN_HAND);
+        PlayerSwing.swingMainHand(player);
     }
     *//*?} else {*/
     private static void sendPlacementSwing(ClientPlayerEntity player) {
@@ -3825,7 +3825,12 @@ public final class PlacementEngine {
         }
     }
 
-    /*? if >=26.1 {*//*
+    /*? if >=26.3 {*//*
+    private static boolean shouldClientSwing(InteractionResult result) {
+        return result instanceof InteractionResult.Success success
+                && success.swingSource() == InteractionResult.SwingSource.PREDICTED;
+    }
+    *//*?} else if >=26.1 {*//*
     private static boolean shouldClientSwing(InteractionResult result) {
         return result instanceof InteractionResult.Success success
                 && success.swingSource() == InteractionResult.SwingSource.CLIENT;

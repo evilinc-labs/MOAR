@@ -25,9 +25,9 @@ jobs:
           - lane: modern
             java: '25'
             args: '-Pmoar.includeJava25Targets=true'
-            versions: '26.1.1 26.2'
-            tasks: ':26.1.1:buildAndCollect :26.2:buildAndCollect'
-            expected: 2
+            versions: '26.1.1 26.2 26.3'
+            tasks: ':26.1.1:buildAndCollect :26.2:buildAndCollect :26.3:buildAndCollect'
+            expected: 3
     steps:
       - name: Checkout
         uses: actions/checkout@v4

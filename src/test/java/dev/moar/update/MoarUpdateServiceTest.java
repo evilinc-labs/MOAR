@@ -45,6 +45,10 @@ class MoarUpdateServiceTest {
                 "3.3.7", "26.1");
         assertTrue(modern.isPresent());
         assertEquals("moar-3.3.8+26.1.1.jar", modern.get().jarName());
+        var latest = MoarUpdateService.parseRelease(releaseJson("3.3.11", "26.3"),
+                "3.3.10", "26.3");
+        assertTrue(latest.isPresent());
+        assertEquals("moar-3.3.11+26.3.jar", latest.get().jarName());
 
         String bareTag = release.replace("\"tag_name\":\"v3.3.8\"", "\"tag_name\":\"3.3.8\"")
                 .replace("/download/v3.3.8/", "/download/3.3.8/");
