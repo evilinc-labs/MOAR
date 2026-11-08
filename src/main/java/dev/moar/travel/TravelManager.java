@@ -474,6 +474,16 @@ public final class TravelManager {
             return;
         }
 
+        if (HighwayPlanner.hasExcessiveFlightLeg(origin, planned.get().legs)) {
+            LOGGER.warn("[Travel] rejecting oversized route from {} to {}: {}",
+                    origin.toShortString(), state.mission.destination.toShortString(),
+                    planned.get().legs);
+            stopUnsafeFlight("planned open-nether flight exceeds "
+                    + HighwayPlanner.MAX_OPEN_NETHER_FLIGHT
+                    + " blocks; no safe highway transfer available");
+            return;
+        }
+
         state.route = planned.get();
         currentLegIndex = -1;
         clearTurnHandoff();
@@ -499,6 +509,12 @@ public final class TravelManager {
             if (nearbyAnchor == null) return false;
             legs = List.of(new HighwayRoute.ApproachLeg(nearbyAnchor), new HighwayRoute.FlightLeg(flightTarget));
             dist = horizontalDistance(origin, nearbyAnchor) + horizontalDistance(nearbyAnchor, flightTarget);
+        }
+
+        if (HighwayPlanner.hasExcessiveFlightLeg(origin, legs)) {
+            LOGGER.warn("[Travel] rejected fallback flight toward {}: leg exceeds {} blocks",
+                    flightTarget.toShortString(), HighwayPlanner.MAX_OPEN_NETHER_FLIGHT);
+            return false;
         }
 
         state.route = new HighwayRoute(null, legs, dist, 0, 0);
@@ -1214,6 +1230,11 @@ public final class TravelManager {
 
         BlockPos dest = currentFlightDestination();
         if (dest == null && state.mission != null) dest = state.mission.destination;
+        if (dest != null && isFlightGoalTooFar(dest)) {
+            stopUnsafeFlight("open-nether flight goal exceeds "
+                    + HighwayPlanner.MAX_OPEN_NETHER_FLIGHT + " blocks; no safe highway route available");
+            return;
+        }
 
         // Start once after preflight, then retry at a bounded cadence.
         if (bridge.isAvailable() && dest != null
@@ -1265,6 +1286,12 @@ public final class TravelManager {
 
     private void startBaritoneElytraFlight(BlockPos destination) {
         bridge.startElytraFlight(destination, isHorizontalMissionDestination(destination));
+    }
+
+    private boolean isFlightGoalTooFar(BlockPos destination) {
+        BlockPos pos = currentPlayerPos();
+        return pos != null && horizontalDistance(pos, destination)
+                > HighwayPlanner.MAX_OPEN_NETHER_FLIGHT;
     }
 
     private boolean isHorizontalMissionDestination(BlockPos destination) {
@@ -1522,6 +1549,12 @@ public final class TravelManager {
             BlockPos mineTarget = resolveMiningTarget(mine.freeNetherTarget(), plannedFlightDestination());
             startMiningTraversal(mineTarget, reason);
         } else if (leg instanceof HighwayRoute.FlightLeg flightLeg) {
+            if (isFlightGoalTooFar(flightLeg.destination())) {
+                stopUnsafeFlight("open-nether flight goal exceeds "
+                        + HighwayPlanner.MAX_OPEN_NETHER_FLIGHT
+                        + " blocks; no safe highway route available");
+                return;
+            }
             if (flightEscapePrerequisite) {
                 flightEscapePrerequisite = false;
             } else {

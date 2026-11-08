@@ -54,7 +54,11 @@ public abstract class PlacementMovementSuppressMixin extends AbstractClientPlaye
     *//*?} else {*/
     @Shadow private int ticksSinceLastPositionPacketSent;
     /*?}*/
+    /*? if >=26.1 {*//*
+    @Shadow protected abstract boolean isControlledCamera();
+    *//*?} else {*/
     @Shadow protected abstract boolean isCamera();
+    /*?}*/
     /*? if >=26.1 {*//*
     protected PlacementMovementSuppressMixin(ClientLevel world, GameProfile profile) {
         super(world, profile);
@@ -79,6 +83,15 @@ public abstract class PlacementMovementSuppressMixin extends AbstractClientPlaye
         this.lastX = x;
         this.lastBaseY = y;
         this.lastZ = z;
+        /*?}*/
+    }
+
+    @Unique
+    private boolean moar$isControlledCamera() {
+        /*? if >=26.1 {*//*
+        return this.isControlledCamera();
+        *//*?} else {*/
+        return this.isCamera();
         /*?}*/
     }
 
@@ -109,7 +122,7 @@ public abstract class PlacementMovementSuppressMixin extends AbstractClientPlaye
     private void moar$suppressPlacementMovementPacket(CallbackInfo ci) {
         if (PlacementEngine.consumeSuppressVanillaMove()
                 || PlacementEngine.shouldSuppressVanillaMovementPackets()) {
-            if (!this.isCamera()) return;
+            if (!this.moar$isControlledCamera()) return;
             ci.cancel();
             this.moar$setLastXYZ(this.getX(), this.getY(), this.getZ());
             /*? if >=26.1 {*//*
@@ -130,7 +143,7 @@ public abstract class PlacementMovementSuppressMixin extends AbstractClientPlaye
             /*?}*/
             return;
         }
-        if (PlacementEngine.hasServerAimOverride() && this.isCamera()) {
+        if (PlacementEngine.hasServerAimOverride() && this.moar$isControlledCamera()) {
             /*? if >=26.1 {*//*
             this.moar$savedYaw = this.getYRot();
             this.moar$savedPitch = this.getXRot();

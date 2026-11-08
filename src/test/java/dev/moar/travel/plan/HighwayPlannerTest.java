@@ -27,12 +27,162 @@ class HighwayPlannerTest {
     }
 
     @Test
+    void outerRingTransferAvoidsMillionBlockFlightAfterOfframpRestart() {
+        BlockPos origin = new BlockPos(155, 95, 2_629_951);
+        BlockPos destination = new BlockPos(2_274_459, 64, 2_629_901);
+        HighwayRoute route = unscanned.plan(origin, destination,
+                new HighwayPlanner.Options().horizontalDestination(true)).orElseThrow();
+
+        assertFalse(HighwayPlanner.hasExcessiveFlightLeg(origin, route.legs));
+        assertTrue(route.legs.stream().anyMatch(leg -> leg instanceof HighwayRoute.BounceLeg bounce
+                && bounce.highway().category == HighwayCandidate.Category.RING
+                && bounce.highway().ringOrDiamondDist == 2_500_000
+                && bounce.travelDx() > 0));
+        HighwayRoute.FlightLeg last = assertInstanceOf(HighwayRoute.FlightLeg.class,
+                route.legs.get(route.legs.size() - 1));
+        assertEquals(destination.getX(), last.destination().getX());
+        assertEquals(destination.getZ(), last.destination().getZ());
+    }
+
+    @Test
+    void highwayApproachUsesOuterRingBeforeFlyingAcrossNether() {
+        BlockPos origin = new BlockPos(0, 120, 2_499_963);
+        BlockPos destination = new BlockPos(2_274_459, 64, 2_629_901);
+        HighwayRoute route = unscanned.plan(origin, destination,
+                new HighwayPlanner.Options().horizontalDestination(true)).orElseThrow();
+
+        assertFalse(HighwayPlanner.hasExcessiveFlightLeg(origin, route.legs));
+        assertTrue(route.legs.stream().anyMatch(leg -> leg instanceof HighwayRoute.BounceLeg bounce
+                && bounce.highway().category == HighwayCandidate.Category.RING
+                && bounce.highway().ringOrDiamondDist == 2_500_000
+                && bounce.travelDx() > 0));
+    }
+
+    @Test
+    void outerRingTransferStillAvailableAfterShortOffHighwayFlight() {
+        BlockPos origin = new BlockPos(1_269, 82, 2_630_583);
+        BlockPos destination = new BlockPos(2_274_459, 64, 2_629_901);
+        HighwayRoute route = unscanned.plan(origin, destination,
+                new HighwayPlanner.Options().horizontalDestination(true)).orElseThrow();
+
+        assertFalse(HighwayPlanner.hasExcessiveFlightLeg(origin, route.legs));
+        assertTrue(route.legs.stream().anyMatch(leg -> leg instanceof HighwayRoute.BounceLeg bounce
+                && bounce.highway().category == HighwayCandidate.Category.RING
+                && bounce.highway().ringOrDiamondDist == 2_500_000));
+    }
+
+    @Test
+    void respawnNearSmallerRingCanReachDistantDestinationWithoutOversizedFlight() {
+        BlockPos origin = new BlockPos(-68_567, 70, -14_504);
+        BlockPos destination = new BlockPos(2_274_459, 64, 2_629_901);
+        HighwayRoute route = unscanned.plan(origin, destination,
+                new HighwayPlanner.Options().horizontalDestination(true)).orElseThrow();
+
+        assertFalse(HighwayPlanner.hasExcessiveFlightLeg(origin, route.legs));
+        assertTrue(route.legs.stream().anyMatch(leg -> leg instanceof HighwayRoute.BounceLeg bounce
+                && bounce.highway().category == HighwayCandidate.Category.RING
+                && bounce.highway().ringOrDiamondDist == 62_500));
+        assertTrue(route.legs.stream().anyMatch(leg -> leg instanceof HighwayRoute.BounceLeg bounce
+                && bounce.highway().category == HighwayCandidate.Category.RING
+                && bounce.highway().ringOrDiamondDist == 2_500_000));
+    }
+
+    @Test
+    void bounceFallResumeOnCardinalDoesNotWalkBackToNearbyRing() {
+        BlockPos origin = new BlockPos(0, 120, 127_565);
+        BlockPos destination = new BlockPos(2_274_459, 64, 2_629_901);
+        HighwayPlanner planner = new HighwayPlanner((pos, axis) ->
+                axis == HighwayCandidate.Axis.PLUS_Z
+                        ? Optional.of(new HighwayDetectorBridge.ScanResult(
+                                119, 5, 0, 127_565, -3, 3, true, true, 0.6f))
+                        : Optional.empty());
+
+        HighwayRoute route = planner.plan(origin, destination,
+                new HighwayPlanner.Options().horizontalDestination(true)).orElseThrow();
+        HighwayRoute.BounceLeg first = assertInstanceOf(HighwayRoute.BounceLeg.class,
+                route.legs.get(0));
+        assertEquals(1, first.travelDz());
+        assertEquals(2_500_000, first.exitColumn().getZ());
+        assertFalse(HighwayPlanner.hasExcessiveFlightLeg(origin, route.legs));
+
+        HighwayRoute unconfirmed = unscanned.plan(origin, destination,
+                new HighwayPlanner.Options().horizontalDestination(true)).orElseThrow();
+        HighwayRoute.BounceLeg unconfirmedFirst = assertInstanceOf(HighwayRoute.BounceLeg.class,
+                unconfirmed.legs.get(0));
+        assertEquals(2_500_000, unconfirmedFirst.exitColumn().getZ());
+    }
+
+    @Test
     void longUsefulHighwayRunStillBounces() {
         HighwayRoute route = unscanned.plan(new BlockPos(-799202, 120, -799202),
                 new BlockPos(-872787, 64, -794058), new HighwayPlanner.Options()).orElseThrow();
         HighwayRoute.BounceLeg bounce = assertInstanceOf(HighwayRoute.BounceLeg.class, route.legs.get(0));
         assertEquals(-1, bounce.travelDx());
         assertEquals(-1, bounce.travelDz());
+    }
+
+    @Test
+    void crossQuadrantTripStaysOnDetectedDiagonalUntilRingTransfer() {
+        HighwayPlanner planner = new HighwayPlanner((pos, axis) ->
+                axis.isParallelTo(HighwayCandidate.Axis.DIAG_PX_MZ)
+                        ? Optional.of(new HighwayDetectorBridge.ScanResult(
+                                119, 5, -177669, 177668, -3, 3, true, true, 0.6f))
+                        : Optional.empty());
+        HighwayRoute route = planner.plan(new BlockPos(-177668, 120, 177668),
+                new BlockPos(2274459, 64, 2629901),
+                new HighwayPlanner.Options().horizontalDestination(true)).orElseThrow();
+
+        HighwayRoute.BounceLeg first = assertInstanceOf(HighwayRoute.BounceLeg.class, route.legs.get(0));
+        assertTrue(first.exitColumn().getX() <= -250000);
+        assertTrue(first.exitColumn().getZ() >= 250000);
+        assertTrue(route.legs.stream().filter(HighwayRoute.BounceLeg.class::isInstance).count() > 1);
+    }
+
+    @Test
+    void autoResumeDoesNotReverseBeforeConnectedRingTransfer() {
+        HighwayPlanner planner = new HighwayPlanner((pos, axis) ->
+                axis.isParallelTo(HighwayCandidate.Axis.DIAG_PX_MZ)
+                        ? Optional.of(new HighwayDetectorBridge.ScanResult(
+                                119, 5, -190428, 190427, -3, 3, true, true, 0.6f))
+                        : Optional.empty());
+        HighwayRoute route = planner.plan(new BlockPos(-190428, 120, 190427),
+                new BlockPos(2274459, 64, 2629901),
+                new HighwayPlanner.Options().horizontalDestination(true)).orElseThrow();
+
+        HighwayRoute.BounceLeg first = assertInstanceOf(HighwayRoute.BounceLeg.class, route.legs.get(0));
+        assertEquals(-1, first.travelDx());
+        assertEquals(1, first.travelDz());
+        assertEquals(new BlockPos(-250000, 119, 250000), first.exitColumn());
+    }
+
+    @Test
+    void restartOnOrNearOuterRingDoesNotFlyBackToDiagonal() {
+        for (int z : new int[]{250000, 249983}) {
+            HighwayRoute route = unscanned.plan(new BlockPos(-245059, 121, z),
+                    new BlockPos(2274459, 64, 2629901),
+                    new HighwayPlanner.Options().horizontalDestination(true)).orElseThrow();
+
+            assertFalse(route.legs.get(0) instanceof HighwayRoute.FlightLeg);
+            if (z != 250000) {
+                assertInstanceOf(HighwayRoute.ApproachLeg.class, route.legs.get(0));
+            }
+            assertTrue(route.legs.stream().anyMatch(leg -> leg instanceof HighwayRoute.BounceLeg bounce
+                    && bounce.highway().category == HighwayCandidate.Category.RING
+                    && bounce.highway().ringOrDiamondDist == 250000
+                    && bounce.highway().width == 0));
+        }
+    }
+
+    @Test
+    void destinationOnDiamondUsesItsOffsetRoad() {
+        HighwayRoute route = unscanned.plan(new BlockPos(4000, 120, 6000),
+                new BlockPos(6000, 120, 4000), new HighwayPlanner.Options()).orElseThrow();
+
+        HighwayRoute.BounceLeg bounce = assertInstanceOf(HighwayRoute.BounceLeg.class, route.legs.get(0));
+        assertEquals(HighwayCandidate.Category.DIAMOND, bounce.highway().category);
+        assertEquals(10000, bounce.highway().ringOrDiamondDist);
+        assertEquals(new BlockPos(6000, 120, 4000), bounce.exitColumn());
+        assertTrue(bounce.highway().entry.getX() + bounce.highway().entry.getZ() == 10000);
     }
 
     @Test

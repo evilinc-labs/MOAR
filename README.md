@@ -134,7 +134,7 @@ How do I...
 |---------|--------------|
 | `/moar gui` | Open the MOAR control screen (Kits, Index, Regions, Retrieve, Printer, Spawnproof, API tabs) |
 | `/moar packetlog on` | Start recording placement/interaction packet telemetry |
-| `/moar packetlog travel` | Start a focused bounce travel trace with movement, flight commands, server corrections, and local flight state |
+| `/moar packetlog travel` | Start a focused travel trace with movement, server corrections, chunk readiness, loaded runway, and local flight state |
 | `/moar packetlog off` | Stop recording telemetry |
 | `/moar packetlog status` | Show whether telemetry is enabled and how many events are buffered |
 | `/moar packetlog clear` | Clear the telemetry buffer |
@@ -142,6 +142,8 @@ How do I...
 | `/moar packetlog dump` | Write the telemetry trace to a file for diagnostics |
 
 For a slow highway bounce, run `/moar packetlog travel`, let it bounce for 30–60 seconds, then run `/moar packetlog off` and `/moar packetlog dump`. If travel logging is active, `/moar packetlog on` leaves it running; stop it first to switch to general mode. The travel trace keeps up to 20,000 events and includes position coordinates; review the file before sharing it.
+
+To diagnose chunk loading during fast travel on the Anarchy Prism instance, restart with the latest MOAR build, enter the world, and run `./scripts/capture-travel-jfr.sh 180` in a terminal. Start `/moar packetlog travel` in-game, travel for the recording period, then run `/moar packetlog off` and `/moar packetlog dump`. The script saves a Java Flight Recorder `.jfr` beside the packet trace in `config/moar/`. Share both files after reviewing them; JFR can include local paths, server addresses, and system details. The chunk timing in the trace begins after packet decoding, so it measures client-side processing rather than wire latency or compressed network bitrate.
 
 </details>
 
