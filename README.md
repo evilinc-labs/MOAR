@@ -64,7 +64,7 @@
 5. *(Optional)* Get the corresponding [Baritone](https://github.com/cabaletta/baritone/releases) build for pathfinding
 6. Put the files in your `.minecraft/mods` folder
 
-MOAR also checks published GitHub releases after the client starts. When a newer build exists for your Minecraft version, the title screen offers **Update**, **Later**, or **Skip version**. Update downloads and verifies the matching release, installs it beside a disabled backup of the current JAR, and takes effect after restarting Minecraft. Skip version hides that release on later launches; a newer release can still be offered. If the launcher keeps the loaded JAR locked, the verified download remains in `config/moar/updates` for a manual swap.
+MOAR checks published GitHub releases at startup and periodically while the client is open. When a newer build exists for your Minecraft version, the title screen offers **Update**, **Later**, or **Skip version**. If you enter a world first, MOAR posts a one-time chat notice and shows the update prompt when you return to the title screen. Update downloads and verifies the matching release, installs it beside a disabled backup of the current JAR, and takes effect after restarting Minecraft. Skip version hides that release on later launches; a newer release can still be offered. If the launcher keeps the loaded JAR locked, the verified download remains in `config/moar/updates` for a manual swap.
 
 ### Supported Versions
 

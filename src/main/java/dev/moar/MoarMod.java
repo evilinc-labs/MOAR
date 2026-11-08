@@ -250,6 +250,19 @@ public class MoarMod implements ClientModInitializer {
                 }
             }
 
+            if (client.player != null) {
+                var notice = UPDATE_SERVICE.takeInGameNotice();
+                if (notice != null) {
+                    String message = "§e[MOAR] Update " + notice.version() + " is available for Minecraft "
+                            + notice.minecraftVersion() + ". Return to the title screen to install or dismiss it.";
+                    /*? if >=26.1 {*//*
+                    client.player.sendSystemMessage(Component.literal(message));
+                    *//*?} else {*/
+                    client.player.sendMessage(Text.literal(message), false);
+                    /*?}*/
+                }
+            }
+
             // Tick the printer
             PRINTER.tick();
 
