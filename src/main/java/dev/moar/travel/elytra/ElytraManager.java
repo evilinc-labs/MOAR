@@ -1,5 +1,7 @@
 package dev.moar.travel.elytra;
 
+import dev.moar.util.PlayerSwing;
+
 import dev.moar.api.WebhookEvent;
 import dev.moar.api.WebhookService;
 /*? if >=26.1 {*//*
@@ -1638,7 +1640,7 @@ public final class ElytraManager {
                 /*? if >=26.1 {*//*
                 lookAt(player, Vec3.atCenterOf(shulkerPos));
                 mc.gameMode.startDestroyBlock(shulkerPos, Direction.UP);
-                player.swing(InteractionHand.MAIN_HAND);
+                PlayerSwing.swingMainHand(player);
                 *//*?} else {*/
                 lookAt(player, Vec3d.ofCenter(shulkerPos));
                 mc.interactionManager.attackBlock(shulkerPos, Direction.UP);
@@ -1678,7 +1680,7 @@ public final class ElytraManager {
                 /*? if >=26.1 {*//*
                 lookAt(player, Vec3.atCenterOf(shulkerPos));
                 mc.gameMode.continueDestroyBlock(shulkerPos, Direction.UP);
-                player.swing(InteractionHand.MAIN_HAND);
+                PlayerSwing.swingMainHand(player);
                 *//*?} else {*/
                 lookAt(player, Vec3d.ofCenter(shulkerPos));
                 mc.interactionManager.updateBlockBreakingProgress(shulkerPos, Direction.UP);
@@ -1935,7 +1937,7 @@ public final class ElytraManager {
                 /*? if >=26.1 {*//*
                 lookAt(player, Vec3.atCenterOf(enderChestPos));
                 mc.gameMode.startDestroyBlock(enderChestPos, Direction.UP);
-                player.swing(InteractionHand.MAIN_HAND);
+                PlayerSwing.swingMainHand(player);
                 *//*?} else {*/
                 lookAt(player, Vec3d.ofCenter(enderChestPos));
                 mc.interactionManager.attackBlock(enderChestPos, Direction.UP);
@@ -1973,7 +1975,7 @@ public final class ElytraManager {
                 /*? if >=26.1 {*//*
                 lookAt(player, Vec3.atCenterOf(enderChestPos));
                 mc.gameMode.continueDestroyBlock(enderChestPos, Direction.UP);
-                player.swing(InteractionHand.MAIN_HAND);
+                PlayerSwing.swingMainHand(player);
                 *//*?} else {*/
                 lookAt(player, Vec3d.ofCenter(enderChestPos));
                 mc.interactionManager.updateBlockBreakingProgress(enderChestPos, Direction.UP);

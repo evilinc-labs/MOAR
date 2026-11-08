@@ -1,5 +1,7 @@
 package dev.moar.stash;
 
+import dev.moar.util.PlayerSwing;
+
 import dev.moar.chest.ChestManager;
 import dev.moar.stash.StashManager.ContainerEntry;
 import dev.moar.stash.StashManager.ShulkerDetail;
@@ -1576,7 +1578,7 @@ public final class StashOrganizer {
         mc.interactionManager.updateBlockBreakingProgress(shulkerPlacePos, Direction.UP);
         /*?}*/
         /*? if >=26.1 {*//*
-        player.swing(InteractionHand.MAIN_HAND);
+        PlayerSwing.swingMainHand(player);
         *//*?} else {*/
         player.swingHand(Hand.MAIN_HAND);
         /*?}*/

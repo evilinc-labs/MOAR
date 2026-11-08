@@ -18,6 +18,7 @@ import java.util.zip.ZipOutputStream;
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -44,6 +45,15 @@ class MoarUpdateServiceTest {
                 "3.3.7", "26.1");
         assertTrue(modern.isPresent());
         assertEquals("moar-3.3.8+26.1.1.jar", modern.get().jarName());
+        var latest = MoarUpdateService.parseRelease(releaseJson("3.3.11", "26.3"),
+                "3.3.10", "26.3");
+        assertTrue(latest.isPresent());
+        assertEquals("moar-3.3.11+26.3.jar", latest.get().jarName());
+
+        String bareTag = release.replace("\"tag_name\":\"v3.3.8\"", "\"tag_name\":\"3.3.8\"")
+                .replace("/download/v3.3.8/", "/download/3.3.8/");
+        assertTrue(MoarUpdateService.parseRelease(bareTag, "3.3.7+1.21.11", "1.21.11")
+                .isPresent());
     }
 
     @Test
@@ -51,6 +61,22 @@ class MoarUpdateServiceTest {
         String release = releaseJson("3.3.8", "1.21.11")
                 .replace("github.com/evilinc-labs/MOAR", "github.com/other/MOAR");
         assertFalse(MoarUpdateService.parseRelease(release, "3.3.7+1.21.11", "1.21.11").isPresent());
+    }
+
+    @Test
+    void inGameNoticeStillLeavesTheTitleScreenOfferAvailable() {
+        var service = new MoarUpdateService();
+        var offer = new MoarUpdateService.ReleaseOffer("3.3.10", "1.21.11", "1.21.11",
+                URI.create("https://github.com/evilinc-labs/MOAR/releases/download/v3.3.10/moar-3.3.10%2B1.21.11.zip"),
+                null);
+
+        service.queueOffer(offer);
+        assertEquals(offer, service.takeInGameNotice());
+        assertNull(service.takeInGameNotice());
+        service.queueOffer(offer);
+        assertNull(service.takeInGameNotice());
+        assertEquals(offer, service.takeOffer());
+        assertNull(service.takeOffer());
     }
 
     @Test
@@ -117,6 +143,6 @@ class MoarUpdateServiceTest {
                 {"tag_name":"v%s","draft":false,"prerelease":false,"assets":[
                   {"name":"%s","browser_download_url":"https://github.com/evilinc-labs/MOAR/releases/download/v%s/%s"}
                 ]}
-                """.formatted(version, zip, version, zip);
+                """.formatted(version, zip, version, zip.replace("+", "%2B"));
     }
 }

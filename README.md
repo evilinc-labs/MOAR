@@ -3,10 +3,11 @@
 </p>
 
 <p align="center">
-    <img src="https://img.shields.io/badge/minecraft-1.21.4--26.2-green" alt="Minecraft">
+    <img src="https://img.shields.io/badge/minecraft-1.21.4--26.3-green" alt="Minecraft">
     <img src="https://img.shields.io/github/downloads/evilinc-labs/MOAR/total" alt="GitHub Downloads">
     <img src="https://img.shields.io/github/contributors/evilinc-labs/MOAR?color=blue" alt="GitHub Contributors">
     <img src="https://img.shields.io/github/stars/evilinc-labs/MOAR" alt="GitHub Repo Stars">
+    <a href="https://discord.gg/D6nrkMGybA"><img src="https://img.shields.io/badge/Discord-Join-5865F2?logo=discord&logoColor=white" alt="Join the MOAR Discord"></a>
     <img src="https://img.shields.io/github/license/evilinc-labs/MOAR" alt="GitHub License">
 </p>
 
@@ -58,13 +59,13 @@
 ## Installation
 <a href="https://fabricmc.net/wiki/install"><img src="https://cdn.jonasjones.dev/mod-badges/support-fabric.png" width="150px" alt="Fabric Supported"></a>
 1. Install the Minecraft version corresponding to the mod release [(download)](https://www.minecraft.net/)
-2. Install the Fabric Loader version listed for your Minecraft release (26.2 requires 0.19.3+)
+2. Install the Fabric Loader version listed for your Minecraft release (26.3 requires 0.20.1+)
 3. Get the latest [Fabric API](https://modrinth.com/mod/fabric-api/) release for your MC version
 4. Get the latest MOAR version here [(download)](https://github.com/evilinc-labs/MOAR/releases/latest)
 5. *(Optional)* Get the corresponding [Baritone](https://github.com/cabaletta/baritone/releases) build for pathfinding
 6. Put the files in your `.minecraft/mods` folder
 
-MOAR also checks published GitHub releases after the client starts. When a newer build exists for your Minecraft version, the title screen offers **Update**, **Later**, or **Skip version**. Update downloads and verifies the matching release, installs it beside a disabled backup of the current JAR, and takes effect after restarting Minecraft. Skip version hides that release on later launches; a newer release can still be offered. If the launcher keeps the loaded JAR locked, the verified download remains in `config/moar/updates` for a manual swap.
+MOAR checks published GitHub releases at startup and periodically while the client is open. When a newer build exists for your Minecraft version, the title screen offers **Update**, **Later**, or **Skip version**. If you enter a world first, MOAR posts a one-time chat notice and shows the update prompt when you return to the title screen. Update downloads and verifies the matching release, installs it beside a disabled backup of the current JAR, and takes effect after restarting Minecraft. Skip version hides that release on later launches; a newer release can still be offered. If the launcher keeps the loaded JAR locked, the verified download remains in `config/moar/updates` for a manual swap.
 
 ### Supported Versions
 
@@ -77,6 +78,7 @@ MOAR also checks published GitHub releases after the client starts. When a newer
 | 1.21.11 | 0.141.3+1.21.11 | 21 |
 | 26.1.1 (unobfuscated) | 0.145.4+26.1.1 | 25 |
 | 26.2 (unobfuscated) | 0.152.2+26.2 | 25 |
+| 26.3 (unobfuscated) | 0.165.2+26.3 | 25 |
 
 ## Getting Started
 
@@ -355,12 +357,12 @@ All endpoints accept `Authorization: Bearer <api.key>` when `api.key` is set. Se
 
 ### Building from Source
 
-Requires **JDK 21+** for 1.21.x builds. The 26.1.1 and 26.2 targets require **JDK 25+** and are included when explicitly requested.
+Requires **JDK 21+** for 1.21.x builds. The 26.1.1, 26.2, and 26.3 targets require **JDK 25+** and are included when explicitly requested.
 
 ```bash
 ./gradlew build                  # Build targets supported by the current JDK
 ./gradlew :1.21.8:build          # Build one version
-./gradlew -Pmoar.includeJava25Targets=true build  # Include 26.1.1 and 26.2 on JDK 25+
+./gradlew -Pmoar.includeJava25Targets=true build  # Include 26.1.1, 26.2, and 26.3 on JDK 25+
 ./gradlew buildAndCollect        # Collect all JARs -> build/libs/<mod.version>/
 ```
 

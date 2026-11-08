@@ -58,7 +58,9 @@ import net.minecraft.text.Text;
 *//*?} else {*/
 import net.minecraft.text.Text;
 /*?}*/
+/*? if <26.3 {*/
 import org.lwjgl.glfw.GLFW;
+/*?}*/
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -111,12 +113,18 @@ public class MoarMod implements ClientModInitializer {
         toggleKey = KeyBindingHelper.registerKeyBinding(new KeyBinding(
         /*?}*/
                 "key.moar.toggle",
-                /*? if >=26.1 {*//*
+                /*? if >=26.3 {*//*
+                InputConstants.Type.KEYBOARD,
+                *//*?} else if >=26.1 {*//*
                 InputConstants.Type.KEYSYM,
                 *//*?} else {*/
                 InputUtil.Type.KEYSYM,
                 /*?}*/
+                /*? if >=26.3 {*//*
+                InputConstants.KEY_NUMPAD0,
+                *//*?} else {*/
                 GLFW.GLFW_KEY_KP_0,
+                /*?}*/
                 keyCategory
         ));
 
@@ -126,12 +134,18 @@ public class MoarMod implements ClientModInitializer {
         guiKey = KeyBindingHelper.registerKeyBinding(new KeyBinding(
         /*?}*/
                 "key.moar.gui",
-                /*? if >=26.1 {*//*
+                /*? if >=26.3 {*//*
+                InputConstants.Type.KEYBOARD,
+                *//*?} else if >=26.1 {*//*
                 InputConstants.Type.KEYSYM,
                 *//*?} else {*/
                 InputUtil.Type.KEYSYM,
                 /*?}*/
+                /*? if >=26.3 {*//*
+                InputConstants.KEY_NUMPAD9,
+                *//*?} else {*/
                 GLFW.GLFW_KEY_KP_9,
+                /*?}*/
                 keyCategory
         ));
 
@@ -141,12 +155,18 @@ public class MoarMod implements ClientModInitializer {
         emergencyStopKey = KeyBindingHelper.registerKeyBinding(new KeyBinding(
         /*?}*/
                 "key.moar.emergency_stop",
-                /*? if >=26.1 {*//*
+                /*? if >=26.3 {*//*
+                InputConstants.Type.KEYBOARD,
+                *//*?} else if >=26.1 {*//*
                 InputConstants.Type.KEYSYM,
                 *//*?} else {*/
                 InputUtil.Type.KEYSYM,
                 /*?}*/
+                /*? if >=26.3 {*//*
+                InputConstants.KEY_END,
+                *//*?} else {*/
                 GLFW.GLFW_KEY_END,
+                /*?}*/
                 keyCategory
         ));
 
@@ -246,6 +266,19 @@ public class MoarMod implements ClientModInitializer {
                     client.gui.setScreen(new MoarUpdateScreen(titleScreen, UPDATE_SERVICE, offer));
                     *//*?} else {*/
                     client.setScreen(new MoarUpdateScreen(titleScreen, UPDATE_SERVICE, offer));
+                    /*?}*/
+                }
+            }
+
+            if (client.player != null) {
+                var notice = UPDATE_SERVICE.takeInGameNotice();
+                if (notice != null) {
+                    String message = "§e[MOAR] Update " + notice.version() + " is available for Minecraft "
+                            + notice.minecraftVersion() + ". Return to the title screen to install or dismiss it.";
+                    /*? if >=26.1 {*//*
+                    client.player.sendSystemMessage(Component.literal(message));
+                    *//*?} else {*/
+                    client.player.sendMessage(Text.literal(message), false);
                     /*?}*/
                 }
             }

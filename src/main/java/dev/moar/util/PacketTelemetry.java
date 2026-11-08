@@ -177,7 +177,12 @@ public final class PacketTelemetry {
         }
         Mode captureMode = mode;
         if (captureMode == Mode.TRAVEL) {
-            /*? if >=26.1 {*//*
+            /*? if >=26.3 {*//*
+            if (packet instanceof ClientboundLevelChunkWithLightPacket chunk) {
+                ChunkTravelTelemetry.onDecodedChunk(chunk.x(), chunk.z());
+                return;
+            }
+            *//*?} else if >=26.1 {*//*
             if (packet instanceof ClientboundLevelChunkWithLightPacket chunk) {
                 ChunkTravelTelemetry.onDecodedChunk(chunk.getX(), chunk.getZ());
                 return;

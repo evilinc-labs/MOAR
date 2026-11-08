@@ -287,7 +287,9 @@ public final class BlockDependency {
         *//*?} else {*/
         if (block instanceof AbstractRailBlock)          return Direction.DOWN;
         /*?}*/
-        /*? if >=26.1 {*//*
+        /*? if >=26.3 {*//*
+        if (block instanceof RedstoneWireBlock)          return Direction.DOWN;
+        *//*?} else if >=26.1 {*//*
         if (block instanceof RedStoneWireBlock)          return Direction.DOWN;
         *//*?} else {*/
         if (block instanceof RedstoneWireBlock)          return Direction.DOWN;
@@ -387,7 +389,9 @@ public final class BlockDependency {
         Block block = state.getBlock();
 
         // Wiring and low-profile logic components
-        /*? if >=26.1 {*//*
+        /*? if >=26.3 {*//*
+        if (block instanceof RedstoneWireBlock) return true;
+        *//*?} else if >=26.1 {*//*
         if (block instanceof RedStoneWireBlock) return true;
         *//*?} else {*/
         if (block instanceof RedstoneWireBlock) return true;

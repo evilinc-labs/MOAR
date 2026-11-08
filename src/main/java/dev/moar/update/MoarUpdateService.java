@@ -29,8 +29,9 @@ import java.util.HexFormat;
 import java.util.Locale;
 import java.util.Optional;
 import java.util.Properties;
-import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.TimeUnit;
 import java.util.function.Consumer;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -48,7 +49,7 @@ public final class MoarUpdateService {
     private static final long MAX_JAR_BYTES = 60L * 1024 * 1024;
     private static final String SKIPPED_VERSION = "skippedVersion";
 
-    private final ExecutorService worker = Executors.newSingleThreadExecutor(r -> {
+    private final ScheduledExecutorService worker = Executors.newSingleThreadScheduledExecutor(r -> {
         Thread thread = new Thread(r, "MOAR update check");
         thread.setDaemon(true);
         return thread;
@@ -60,39 +61,78 @@ public final class MoarUpdateService {
     private volatile ReleaseOffer pending;
     private boolean checkStarted;
     private boolean delivered;
+    private boolean inGameNoticeDelivered;
+    private String lastCheckResult;
 
     public synchronized void checkAfterStartup() {
         if (checkStarted) return;
         checkStarted = true;
-        worker.execute(() -> {
-            try {
-                ModContainer mod = FabricLoader.getInstance().getModContainer("moar").orElseThrow();
-                String currentVersion = mod.getMetadata().getVersion().getFriendlyString();
-                String minecraftVersion = FabricLoader.getInstance().getModContainer("minecraft")
-                        .orElseThrow().getMetadata().getVersion().getFriendlyString();
-                HttpRequest request = HttpRequest.newBuilder(LATEST_RELEASE)
-                        .header("Accept", "application/vnd.github+json")
-                        .header("User-Agent", "MOAR-Updater")
-                        .timeout(Duration.ofSeconds(20)).GET().build();
-                HttpResponse<String> response = http.send(request, HttpResponse.BodyHandlers.ofString());
-                if (response.statusCode() != 200) {
-                    LOGGER.debug("Update check returned HTTP {}", response.statusCode());
-                    return;
-                }
-                Optional<ReleaseOffer> offer = parseRelease(response.body(), currentVersion, minecraftVersion);
-                if (offer.isPresent() && !offer.get().version().equals(readSkippedVersion())) {
-                    pending = offer.get();
-                }
-            } catch (Exception ex) {
-                // Offline clients should still start normally.
-                LOGGER.debug("Could not check for a MOAR update", ex);
+        // A release can be published before its version ZIPs finish uploading.
+        // Recheck at a low cadence so an early launch does not miss the offer.
+        worker.scheduleWithFixedDelay(this::checkForUpdate, 0, 15, TimeUnit.MINUTES);
+    }
+
+    private void checkForUpdate() {
+        try {
+            ModContainer mod = FabricLoader.getInstance().getModContainer("moar").orElseThrow();
+            String currentVersion = mod.getMetadata().getVersion().getFriendlyString();
+            String minecraftVersion = FabricLoader.getInstance().getModContainer("minecraft")
+                    .orElseThrow().getMetadata().getVersion().getFriendlyString();
+            HttpRequest request = HttpRequest.newBuilder(LATEST_RELEASE)
+                    .header("Accept", "application/vnd.github+json")
+                    .header("User-Agent", "MOAR-Updater")
+                    .timeout(Duration.ofSeconds(20)).GET().build();
+            HttpResponse<String> response = http.send(request, HttpResponse.BodyHandlers.ofString());
+            if (response.statusCode() != 200) {
+                LOGGER.warn("MOAR update check returned HTTP {}", response.statusCode());
+                return;
             }
-        });
+            Optional<ReleaseOffer> offer = parseRelease(response.body(), currentVersion, minecraftVersion);
+            if (offer.isEmpty()) {
+                logCheckResult("No newer compatible MOAR release for Minecraft "
+                        + minecraftVersion + " (installed " + currentVersion + ")");
+                return;
+            }
+            ReleaseOffer available = offer.get();
+            if (available.version().equals(readSkippedVersion())) {
+                logCheckResult("MOAR " + available.version() + " was skipped by the user");
+                return;
+            }
+            queueOffer(available);
+            logCheckResult("MOAR " + available.version() + " is available for Minecraft "
+                    + minecraftVersion);
+        } catch (Exception ex) {
+            // Offline clients should still start normally.
+            LOGGER.warn("Could not check for a MOAR update: {}", ex.toString());
+            LOGGER.debug("MOAR update check failure", ex);
+        }
+    }
+
+    synchronized void queueOffer(ReleaseOffer available) {
+        boolean newerOffer = pending == null || !pending.version().equals(available.version());
+        pending = available;
+        if (newerOffer) {
+            delivered = false;
+            inGameNoticeDelivered = false;
+        }
+    }
+
+    private void logCheckResult(String result) {
+        if (!result.equals(lastCheckResult)) {
+            lastCheckResult = result;
+            LOGGER.info(result);
+        }
     }
 
     public synchronized ReleaseOffer takeOffer() {
         if (delivered || pending == null) return null;
         delivered = true;
+        return pending;
+    }
+
+    public synchronized ReleaseOffer takeInGameNotice() {
+        if (delivered || inGameNoticeDelivered || pending == null) return null;
+        inGameNoticeDelivered = true;
         return pending;
     }
 
@@ -293,9 +333,9 @@ public final class MoarUpdateService {
                 return Optional.empty();
             }
             String tag = release.get("tag_name").getAsString();
-            if (!tag.matches("v[0-9]+\\.[0-9]+\\.[0-9]+")
+            if (!tag.matches("v?[0-9]+\\.[0-9]+\\.[0-9]+")
                     || compareVersions(tag, currentVersion) <= 0) return Optional.empty();
-            String version = tag.substring(1);
+            String version = tag.startsWith("v") ? tag.substring(1) : tag;
             String artifactVersion = artifactVersionFor(minecraftVersion);
             String jarName = "moar-" + version + "+" + artifactVersion + ".jar";
             String zipName = jarName.substring(0, jarName.length() - 4) + ".zip";
