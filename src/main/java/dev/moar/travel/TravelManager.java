@@ -63,6 +63,11 @@ public final class TravelManager {
     private final GroundApproachCorrectionGuard approachCorrectionGuard =
             new GroundApproachCorrectionGuard();
     private final DetourHandoffGate detourHandoffGate = new DetourHandoffGate();
+    private boolean standaloneBounceActive;
+    private HighwayCandidate standaloneBounceHighway;
+    private int standaloneBounceTicks;
+
+    public record BounceToggleResult(boolean enabled, boolean accepted, String message) {}
 
     private enum DetourHandoffMode { GRIEF, FORWARD_BYPASS, KNOCKBACK }
     private DetourHandoffMode detourHandoffMode = DetourHandoffMode.GRIEF;
@@ -94,6 +99,7 @@ public final class TravelManager {
     private static final int TAKEOFF_SEARCH_UP = 12;
     private static final int TAKEOFF_SEARCH_DOWN = 40;
     private static final int BOUNCE_ENTRY_ALIGN_RADIUS = 3;
+    private static final int STANDALONE_DAMAGE_STOP_AHEAD = 32;
     private static final int MINING_DESCENT_THRESHOLD = 4;
     private static final int MINING_TARGET_RADIUS = 2;
     private static final int MINING_ARRIVAL_Y_TOLERANCE = 3;
@@ -183,8 +189,9 @@ public final class TravelManager {
     private TravelManager() {}
 
     public synchronized boolean start(TravelMission mission) {
-        if (state.phase != TravelPhase.IDLE) {
-            LOGGER.warn("start() rejected: phase={} (not IDLE)", state.phase);
+        if (state.phase != TravelPhase.IDLE || standaloneBounceActive) {
+            LOGGER.warn("start() rejected: phase={} standaloneBounce={}",
+                    state.phase, standaloneBounceActive);
             return false;
         }
         bridge.cancelAll();
@@ -221,6 +228,7 @@ public final class TravelManager {
     }
 
     public synchronized void stop() {
+        stopStandaloneBounce();
         settleTicks = 0;
         settleGroundedTicks = 0;
         detourResumeExit = null;
@@ -255,6 +263,10 @@ public final class TravelManager {
     }
 
     public synchronized void pause() {
+        if (standaloneBounceActive) {
+            stopStandaloneBounce();
+            return;
+        }
         if (state.phase == TravelPhase.IDLE || state.phase == TravelPhase.PAUSED) return;
         state.pausedFromPhase = state.phase;
         if (state.phase == TravelPhase.ELYTRA_RESUPPLY) elytra.pause();
@@ -302,6 +314,7 @@ public final class TravelManager {
 
     // Preserve the active leg across disconnects.
     public synchronized void onDisconnect() {
+        stopStandaloneBounce();
         if (state.phase == TravelPhase.IDLE || state.phase.isTerminal() || state.mission == null) {
             bridge.cancelAll();
             bounce.stop();
@@ -339,8 +352,9 @@ public final class TravelManager {
 
     // Repair elytra outside a travel mission.
     public synchronized boolean startStandaloneRepair() {
-        if (state.phase != TravelPhase.IDLE) {
-            LOGGER.warn("[Travel] startStandaloneRepair rejected: phase={}", state.phase);
+        if (state.phase != TravelPhase.IDLE || standaloneBounceActive) {
+            LOGGER.warn("[Travel] startStandaloneRepair rejected: phase={} standaloneBounce={}",
+                    state.phase, standaloneBounceActive);
             return false;
         }
         clearResupplyResumeContext();
@@ -349,7 +363,185 @@ public final class TravelManager {
         return true;
     }
 
+    // Bounce along the verified highway under the player until toggled off.
+    // No travel mission, route, or artificial destination is created.
+    public synchronized BounceToggleResult toggleStandaloneBounce() {
+        if (standaloneBounceActive) {
+            stopStandaloneBounce();
+            return new BounceToggleResult(false, true, "Elytra Bounce disabled.");
+        }
+        if (state.phase != TravelPhase.IDLE) {
+            return new BounceToggleResult(false, false,
+                    "Stop the active travel task before enabling Elytra Bounce.");
+        }
+        if (!isPlayerInNether()) {
+            return new BounceToggleResult(false, false,
+                    "Elytra Bounce needs a verified Nether highway.");
+        }
+        BlockPos pos = currentPlayerPos();
+        if (pos == null || isPlayerDead()) {
+            return new BounceToggleResult(false, false, "No living player is available.");
+        }
+        Optional<HighwayCandidate> selected = findStandaloneBounceHighway(pos);
+        if (selected.isEmpty()) {
+            return new BounceToggleResult(false, false,
+                    "No verified highway is underfoot. Stand on the road and face along it.");
+        }
+        HighwayCandidate highway = selected.get();
+        verifier.setHighway(highway, highway.axis.stepDx, highway.axis.stepDz);
+        IntegrityReport report = verifier.sampleNow(pos);
+        if (standaloneDamageAhead(report)) {
+            verifier.clear();
+            return new BounceToggleResult(false, false,
+                    "Highway damage is immediately ahead; move to a clear section first.");
+        }
+
+        bridge.cancelAll();
+        elytra.stop();
+        state.reset();
+        autoResumeTicks = 0;
+        clearAutoResumeProgress();
+        resetTravelSafetyMonitor();
+        standaloneBounceHighway = highway;
+        standaloneBounceTicks = 0;
+        standaloneBounceActive = true;
+        bounce.startOpenEnded(highway, highway.axis.stepDx, highway.axis.stepDz);
+        if (verifier.hasUnpavedSurface()) {
+            bounce.setVerifiedFloorTransition(
+                    verifier.verifiedFloorY(), verifier.floorTransitionProjection());
+        }
+        LOGGER.info("[Bounce] standalone enabled axis={} at {}", highway.axis, pos.toShortString());
+        return new BounceToggleResult(true, true,
+                "Elytra Bounce enabled toward " + highway.axis + ". Toggle again to stop.");
+    }
+
+    private Optional<HighwayCandidate> findStandaloneBounceHighway(BlockPos pos) {
+        float yaw = currentPlayerYaw();
+        HighwayCandidate best = null;
+        double bestScore = Double.POSITIVE_INFINITY;
+        for (HighwayCandidate.Axis axis : HighwayCandidate.Axis.values()) {
+            Optional<HighwayDetectorBridge.ScanResult> found = detector.scanAt(pos, axis);
+            if (found.isEmpty()) continue;
+            HighwayDetectorBridge.ScanResult scan = found.get();
+            BlockPos center = new BlockPos(scan.centerX(), scan.floorY() + 1, scan.centerZ());
+            HighwayCandidate candidate = new HighwayCandidate(axis,
+                    axis.diagonal ? HighwayCandidate.Category.DIAGONAL
+                            : HighwayCandidate.Category.CARDINAL,
+                    scan.floorY(), center, null, scan.blockConfidence(),
+                    0, null, null, scan.width(), scan.hasLeftRail(),
+                    scan.hasRightRail(), scan.surface() != HighwayDetectorBridge.Surface.PAVED);
+            if (!isReadyToBounce(new HighwayRoute.BounceLeg(candidate, null,
+                    axis.stepDx, axis.stepDz))) continue;
+            double score = yawDifference(yaw, axis.expectedYaw()) - scan.blockConfidence() * 2.0;
+            if (score < bestScore) {
+                bestScore = score;
+                best = candidate;
+            }
+        }
+        return Optional.ofNullable(best);
+    }
+
+    private static double yawDifference(float a, float b) {
+        double delta = (a - b) % 360.0;
+        return Math.abs(delta > 180.0 ? delta - 360.0
+                : delta < -180.0 ? delta + 360.0 : delta);
+    }
+
+    private static float currentPlayerYaw() {
+        /*? if >=26.1 {*//*
+        Minecraft mc = Minecraft.getInstance();
+        return mc.player == null ? 0f : mc.player.getYRot();
+        *//*?} else {*/
+        MinecraftClient mc = MinecraftClient.getInstance();
+        return mc.player == null ? 0f : mc.player.getYaw();
+        /*?}*/
+    }
+
+    private void tickStandaloneBounce() {
+        if (isPlayerDead() || !isPlayerInNether()) {
+            endStandaloneBounce("player left the Nether or died");
+            return;
+        }
+        float baseHealth = currentBaseHealth();
+        float health = baseHealth + currentAbsorption();
+        updateTravelSafetyMonitor(baseHealth);
+        if (isPlayerInLava()) {
+            endStandaloneBounce("player entered lava");
+            if (health <= CRITICAL_TRAVEL_HEALTH) {
+                elytra.disconnectForTravelSafety("player entered lava");
+            }
+            return;
+        }
+        if (health <= CRITICAL_TRAVEL_HEALTH
+                || (isPlayerOnFire() && health <= MIN_SAFE_TRAVEL_HEALTH
+                && recentHealthLoss >= MAX_RECENT_HEALTH_LOSS)) {
+            String reason = String.format("unsafe health %.1f/20", health);
+            endStandaloneBounce(reason);
+            elytra.disconnectForTravelSafety(reason);
+            return;
+        }
+        BlockPos pos = currentPlayerPos();
+        if (pos == null || standaloneBounceHighway == null) {
+            endStandaloneBounce("player or highway unavailable");
+            return;
+        }
+        standaloneBounceTicks++;
+        if (standaloneBounceTicks % 2 == 0) verifier.sampleNow(pos);
+        if (verifier.hasUnpavedSurface()) {
+            bounce.setVerifiedFloorTransition(
+                    verifier.verifiedFloorY(), verifier.floorTransitionProjection());
+        }
+        IntegrityReport report = verifier.lastReport();
+        if (standaloneDamageAhead(report)) {
+            endStandaloneBounce("damaged highway ahead");
+            return;
+        }
+        int perpDx = standaloneBounceHighway.axis.perpDx();
+        int perpDz = standaloneBounceHighway.axis.perpDz();
+        int perpSq = perpDx * perpDx + perpDz * perpDz;
+        int offset = (pos.getX() - standaloneBounceHighway.entry.getX()) * perpDx
+                + (pos.getZ() - standaloneBounceHighway.entry.getZ()) * perpDz;
+        if (Math.abs(offset) > KNOCKBACK_PERP_THRESHOLD * perpSq) {
+            endStandaloneBounce("left the verified highway lane");
+            return;
+        }
+        bounce.tick();
+        if (bounce.isStuckFromFall()) endStandaloneBounce("fell off the highway");
+        else if (bounce.isWallAhead()) endStandaloneBounce("wall ahead: " + bounce.wallReason());
+        else if (bounce.isStuck()) endStandaloneBounce("bounce stopped making progress");
+    }
+
+    private void endStandaloneBounce(String reason) {
+        stopStandaloneBounce();
+        LOGGER.warn("[Bounce] standalone stopped: {}", reason);
+        ChatHelper.labelled("Bounce", "§eElytra Bounce stopped: " + reason);
+    }
+
+    private static boolean standaloneDamageAhead(IntegrityReport report) {
+        return report.status() == IntegrityReport.Status.GRIEFED
+                && report.confidence() >= DetourPlanner.MIN_CONFIDENCE
+                && (report.griefStartOffset() < 0
+                    || report.griefStartOffset() <= STANDALONE_DAMAGE_STOP_AHEAD);
+    }
+
+    private void stopStandaloneBounce() {
+        if (!standaloneBounceActive) return;
+        bounce.stop();
+        verifier.clear();
+        standaloneBounceActive = false;
+        standaloneBounceHighway = null;
+        standaloneBounceTicks = 0;
+        resetTravelSafetyMonitor();
+    }
+
     public synchronized TravelTelemetry snapshot() {
+        if (standaloneBounceActive) {
+            return new TravelTelemetry(0, TravelPhase.BOUNCING, MovementOwner.BOUNCE,
+                    standaloneBounceTicks, standaloneBounceTicks,
+                    null, null, standaloneBounceHighway,
+                    "Standalone Elytra Bounce", "", false, false,
+                    verifier.lastReport(), 0.0, 0.0, 0, "n/a", false, "n/a");
+        }
         if (state.mission == null) return TravelTelemetry.idle();
         return new TravelTelemetry(
                 state.mission.id,
@@ -369,7 +561,19 @@ public final class TravelManager {
         );
     }
 
-    public synchronized TravelPhase currentPhase() { return state.phase; }
+    public synchronized TravelPhase currentPhase() {
+        return standaloneBounceActive ? TravelPhase.BOUNCING : state.phase;
+    }
+
+    public synchronized boolean isStandaloneBounceActive() { return standaloneBounceActive; }
+
+    public synchronized BounceToggleResult setStandaloneBounceEnabled(boolean enabled) {
+        if (enabled == standaloneBounceActive) {
+            return new BounceToggleResult(enabled, true,
+                    "Elytra Bounce is already " + (enabled ? "enabled." : "disabled."));
+        }
+        return toggleStandaloneBounce();
+    }
 
     public synchronized boolean isMiningResupplyContainer() {
         return state.phase == TravelPhase.ELYTRA_RESUPPLY && elytra.isMiningPlacedContainer();
@@ -377,7 +581,11 @@ public final class TravelManager {
 
     // Apply bounce controls before movement physics.
     public synchronized void preTick(Object client) {
-        if (state.phase == TravelPhase.BOUNCING) {
+        if (standaloneBounceActive && (isPlayerDead() || !isPlayerInNether())) {
+            endStandaloneBounce("player left the Nether or died");
+            return;
+        }
+        if (standaloneBounceActive || state.phase == TravelPhase.BOUNCING) {
             bounce.preTick();
         } else if (state.phase == TravelPhase.SETTLE) {
             // Hold travel yaw while bounce settles.
@@ -386,6 +594,10 @@ public final class TravelManager {
     }
 
     public synchronized void tick(Object client) {
+        if (standaloneBounceActive) {
+            tickStandaloneBounce();
+            return;
+        }
         if (state.phase == TravelPhase.IDLE) {
             // Replan after the retry delay.
             if (autoResumeTicks > 0) {

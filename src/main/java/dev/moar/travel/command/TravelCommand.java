@@ -62,7 +62,7 @@ public final class TravelCommand {
                                                             IntegerArgumentType.getInteger(ctx, "x"),
                                                             IntegerArgumentType.getInteger(ctx, "z"),
                                                             false))))))
-                    .then(ClientCommands.literal("bounce").executes(ctx -> doBounce()))
+                    .then(ClientCommands.literal("bounce").executes(ctx -> doBounceToggle()))
                     .then(ClientCommands.literal("stop").executes(ctx -> doStop()))
                     .then(ClientCommands.literal("pause").executes(ctx -> doPause()))
                     .then(ClientCommands.literal("resume").executes(ctx -> doResume()))
@@ -83,7 +83,12 @@ public final class TravelCommand {
                                                     IntegerArgumentType.getInteger(ctx, "count")))))
                             .then(ClientCommands.literal("repair")
                                     .executes(ctx -> doRepairElytras()))))
-                    .then(ClientCommands.literal("stop").executes(ctx -> doStop()));
+                    .then(ClientCommands.literal("stop").executes(ctx -> doStop()))
+                    .then(ClientCommands.literal("bounce")
+                            .executes(ctx -> doBounceToggle())
+                            .then(ClientCommands.literal("on").executes(ctx -> doBounceSet(true)))
+                            .then(ClientCommands.literal("off").executes(ctx -> doBounceSet(false)))
+                            .then(ClientCommands.literal("status").executes(ctx -> doBounceStatus())));
             *//*?} else {*/
             var root = ClientCommandManager.literal("moar").then(ClientCommandManager.literal("travel")
                     .then(ClientCommandManager.literal("goto")
@@ -102,7 +107,7 @@ public final class TravelCommand {
                                                             IntegerArgumentType.getInteger(ctx, "x"),
                                                             IntegerArgumentType.getInteger(ctx, "z"),
                                                             false))))))
-                    .then(ClientCommandManager.literal("bounce").executes(ctx -> doBounce()))
+                    .then(ClientCommandManager.literal("bounce").executes(ctx -> doBounceToggle()))
                     .then(ClientCommandManager.literal("stop").executes(ctx -> doStop()))
                     .then(ClientCommandManager.literal("pause").executes(ctx -> doPause()))
                     .then(ClientCommandManager.literal("resume").executes(ctx -> doResume()))
@@ -123,7 +128,12 @@ public final class TravelCommand {
                                                     IntegerArgumentType.getInteger(ctx, "count")))))
                             .then(ClientCommandManager.literal("repair")
                                     .executes(ctx -> doRepairElytras()))))
-                    .then(ClientCommandManager.literal("stop").executes(ctx -> doStop()));
+                    .then(ClientCommandManager.literal("stop").executes(ctx -> doStop()))
+                    .then(ClientCommandManager.literal("bounce")
+                            .executes(ctx -> doBounceToggle())
+                            .then(ClientCommandManager.literal("on").executes(ctx -> doBounceSet(true)))
+                            .then(ClientCommandManager.literal("off").executes(ctx -> doBounceSet(false)))
+                            .then(ClientCommandManager.literal("status").executes(ctx -> doBounceStatus())));
             /*?}*/
             dispatcher.register(root);
             LOGGER.info("TravelCommand: /moar travel registered");
@@ -142,7 +152,7 @@ public final class TravelCommand {
         if (started) {
             chat("\u00a7a[Travel] elytra repair started — locating XP bottles to Mend the worn elytra.");
         } else {
-            chat("\u00a7c[Travel] repair rejected — a travel mission is already in progress.");
+            chat("\u00a7c[Travel] repair rejected — travel or Elytra Bounce is active.");
         }
         return started ? 1 : 0;
     }
@@ -151,34 +161,40 @@ public final class TravelCommand {
         return doGoto(x, z, false);
     }
 
-    // Build a long bounce target from the current yaw.
-    private static int doBounce() {
-        BlockPos origin = playerPos();
-        if (origin == null) { chat("§c[Travel] no player"); return 0; }
-
-        float yaw = playerYaw();
-        // Snap to nearest 45° increment then derive integer step direction.
-        float snapped  = Math.round(yaw / 45f) * 45f;
-        double rad     = Math.toRadians(snapped);
-        int dx = (int) Math.round(-Math.sin(rad));
-        int dz = (int) Math.round( Math.cos(rad));
-        if (dx == 0 && dz == 0) dz = 1;  // degenerate guard — shouldn’t happen
-
-        BlockPos dest = new BlockPos(
-                origin.getX() + dx * 500_000,
-                origin.getY(),
-                origin.getZ() + dz * 500_000);
-        TravelMission m = TravelMission.to(dest)
-                .horizontalDestination(true)
-                .build();
-        boolean ok = TravelManager.get().start(m);
-        if (ok) {
-            chat("§a[Travel] bounce started → axis (" + dx + "," + dz
-                    + "), dest=" + dest.toShortString());
-        } else {
-            chat("§c[Travel] rejected — already running");
+    /** Starts the same Nether-coordinate mission from an optional map integration. */
+    public static boolean startNetherFromMap(int x, int z) {
+        /*? if >=26.1 {*//*
+        Minecraft mc = Minecraft.getInstance();
+        if (mc.level == null || mc.level.dimension() != net.minecraft.world.level.Level.NETHER) {
+        *//*?} else {*/
+        MinecraftClient mc = MinecraftClient.getInstance();
+        if (mc.world == null || !net.minecraft.world.World.NETHER.equals(mc.world.getRegistryKey())) {
+        /*?}*/
+            chat("§c[Travel] open the map while in the Nether to start a map route");
+            return false;
         }
-        return ok ? 1 : 0;
+        return doGoto(x, z) == 1;
+    }
+
+    private static int doBounceToggle() {
+        return reportBounceResult(TravelManager.get().toggleStandaloneBounce());
+    }
+
+    private static int doBounceSet(boolean enabled) {
+        return reportBounceResult(TravelManager.get().setStandaloneBounceEnabled(enabled));
+    }
+
+    private static int doBounceStatus() {
+        chat(TravelManager.get().isStandaloneBounceActive()
+                ? "§a[Bounce] enabled — open-ended highway bounce"
+                : "§e[Bounce] disabled");
+        return 1;
+    }
+
+    private static int reportBounceResult(TravelManager.BounceToggleResult result) {
+        chat((result.accepted() ? result.enabled() ? "§a" : "§e" : "§c")
+                + "[Bounce] " + result.message());
+        return result.accepted() ? 1 : 0;
     }
 
     private static int doGoto(int x, int z, boolean overworldCoords) {
@@ -278,15 +294,6 @@ public final class TravelCommand {
         MinecraftClient mc = MinecraftClient.getInstance();
         if (mc.player == null) return null;
         return mc.player.getBlockPos();
-        /*?}*/
-    }
-    private static float playerYaw() {
-        /*? if >=26.1 {*//*
-        Minecraft mc = Minecraft.getInstance();
-        return mc.player != null ? mc.player.getYRot() : 0f;
-        *//*?} else {*/
-        MinecraftClient mc = MinecraftClient.getInstance();
-        return mc.player != null ? mc.player.getYaw() : 0f;
         /*?}*/
     }
     private static void chat(String msg) {

@@ -20,6 +20,9 @@ base {
 
 repositories {
     maven("https://babbaj.github.io/maven/")
+    maven("https://api.modrinth.com/maven") {
+        content { includeGroup("maven.modrinth") }
+    }
 }
 
 val requiredJava = when {
@@ -48,6 +51,25 @@ dependencies {
 
     // Compile the optional Baritone native-call compatibility mixin.
     "compileOnly"("dev.babbaj:nether-pathfinder:1.4.1")
+
+    // Xaero's World Map is optional at runtime. Compile against the matching
+    // Fabric build so Loom can remap its Minecraft references for each target.
+    val xaeroWorldMapVersion = when (sc.current.version) {
+        "1.21.4" -> "dP0Nv0XF"
+        "1.21.5" -> "EiwSu1fH"
+        "1.21.8" -> "16jeKzeM"
+        "1.21.10" -> "dJSazz1g"
+        "1.21.11" -> "uuPYtgMh"
+        "26.1.1" -> "ZpUBkoFm" // Xaero's 26.1.2 build supports 26.1.x.
+        "26.2" -> "fabric-26.2-1.47.2"
+        "26.3" -> "VM8lNSSM"
+        else -> error("No Xaero's World Map compile dependency for ${sc.current.version}")
+    }
+    if (isUnobfuscated) {
+        "compileOnly"("maven.modrinth:NcUtCpym:$xaeroWorldMapVersion")
+    } else {
+        "modCompileOnly"("maven.modrinth:NcUtCpym:$xaeroWorldMapVersion")
+    }
 
     "testImplementation"("org.junit.jupiter:junit-jupiter:5.11.4")
     "testRuntimeOnly"("org.junit.platform:junit-platform-launcher:1.11.4")

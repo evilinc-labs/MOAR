@@ -138,6 +138,6 @@ public final class HighwayCandidate {
             base += ", diamond=" + (int) ringOrDiamondDist + " seg=" + diamondSegment;
         if (unpavedCorridor) base += ", surface=UNPAVED width=" + width;
         return base + ", entry=" + entry.toShortString()
-                + ", exit=" + exit.toShortString() + "}";
+                + ", exit=" + (exit == null ? "open-ended" : exit.toShortString()) + "}";
     }
 }

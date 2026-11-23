@@ -240,7 +240,12 @@ public final class BounceController {
         lastPerpCorrection = 0.0f;
         noProgressTicks = 0;
         progressSeeded  = false;
-        LOGGER.info("[Bounce] start axis={} dir={},{} exit={}", hw.axis, dx, dz, exit.toShortString());
+        LOGGER.info("[Bounce] start axis={} dir={},{} exit={}", hw.axis, dx, dz,
+                exit == null ? "open-ended" : exit.toShortString());
+    }
+
+    public void startOpenEnded(HighwayCandidate hw, int dx, int dz) {
+        start(hw, null, dx, dz);
     }
 
     public void stop() {
@@ -792,7 +797,7 @@ public final class BounceController {
 
     private boolean hasLoadedHighwayWindow(
             /*? if >=26.1 {*//* Minecraft mc *//*?} else {*/ MinecraftClient mc /*?}*/) {
-        if (mc.player == null || highway == null || exitColumn == null
+        if (mc.player == null || highway == null
                 || highway.floorY == Integer.MIN_VALUE) {
             return true;
         }
@@ -800,12 +805,15 @@ public final class BounceController {
         int directionScale = travelDx * travelDx + travelDz * travelDz;
         long playerProjection = (long) Math.floor(mc.player.getX()) * travelDx
                 + (long) Math.floor(mc.player.getZ()) * travelDz;
-        long exitProjection = (long) exitColumn.getX() * travelDx
-                + (long) exitColumn.getZ() * travelDz;
-        int remaining = directionScale == 0
-                ? 0
-                : (int) Math.max(0L, (exitProjection - playerProjection) / directionScale);
-        int scanAhead = Math.min(BounceTuning.TERRAIN_LOAD_SCAN_AHEAD, remaining);
+        int scanAhead = BounceTuning.TERRAIN_LOAD_SCAN_AHEAD;
+        if (exitColumn != null) {
+            long exitProjection = (long) exitColumn.getX() * travelDx
+                    + (long) exitColumn.getZ() * travelDz;
+            int remaining = directionScale == 0
+                    ? 0
+                    : (int) Math.max(0L, (exitProjection - playerProjection) / directionScale);
+            scanAhead = Math.min(scanAhead, remaining);
+        }
         for (int distance = 0; distance <= scanAhead; distance += 4) {
             int sampleX = (int) Math.floor(mc.player.getX()) + travelDx * distance;
             int sampleZ = (int) Math.floor(mc.player.getZ()) + travelDz * distance;
@@ -895,7 +903,7 @@ public final class BounceController {
     // Find a blocked launch corridor ahead.
     private boolean detectBlockedCorridor(
             /*? if >=26.1 {*//* Minecraft mc *//*?} else {*/ MinecraftClient mc /*?}*/) {
-        if (mc.player == null || highway == null || exitColumn == null
+        if (mc.player == null || highway == null
                 || highway.floorY == Integer.MIN_VALUE) return false;
 
         /*? if >=26.1 {*//*
@@ -911,11 +919,12 @@ public final class BounceController {
         double px = mc.player.getX();
         double pz = mc.player.getZ();
 
-        long playerProjection = (long) Math.floor(px) * travelDx + (long) Math.floor(pz) * travelDz;
-        long exitProjection = (long) exitColumn.getX() * travelDx + (long) exitColumn.getZ() * travelDz;
-        int maxAhead = (int) Math.min(
-                BounceTuning.OBSTACLE_SCAN_AHEAD,
-                exitProjection - playerProjection - 1L);
+        int maxAhead = BounceTuning.OBSTACLE_SCAN_AHEAD;
+        if (exitColumn != null) {
+            long playerProjection = (long) Math.floor(px) * travelDx + (long) Math.floor(pz) * travelDz;
+            long exitProjection = (long) exitColumn.getX() * travelDx + (long) exitColumn.getZ() * travelDz;
+            maxAhead = (int) Math.min(maxAhead, exitProjection - playerProjection - 1L);
+        }
         if (maxAhead < 1) return false;
 
         int perpX = highway.axis.perpDx();

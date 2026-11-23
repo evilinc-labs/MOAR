@@ -18,13 +18,14 @@ import java.nio.file.Path;
 import java.util.List;
 import java.util.Set;
 
-/** Applies MOAR's legacy native-context gate only to Baritone builds without their own locks. */
+/** Gates optional integrations and the legacy Baritone native-context compatibility mixins. */
 public final class BaritoneNativeMixinPlugin implements IMixinConfigPlugin {
 
     private static final Logger LOGGER = LoggerFactory.getLogger("MOAR/BaritoneCompat");
     private static final String CONTEXT_CLASS = "baritone/process/elytra/NetherPathfinderContext.class";
     private static final String CONTEXT_MIXIN = "dev.moar.mixin.BaritoneNetherPathfinderContextMixin";
     private static final String OCTREE_MIXIN = "dev.moar.mixin.BaritoneBlockStateOctreeMixin";
+    private static final String XAERO_MAP_MIXIN = "dev.moar.mixin.XaeroWorldMapMixin";
     private Boolean hasInternalLocks;
 
     @Override
@@ -38,6 +39,9 @@ public final class BaritoneNativeMixinPlugin implements IMixinConfigPlugin {
 
     @Override
     public boolean shouldApplyMixin(String targetClassName, String mixinClassName) {
+        if (XAERO_MAP_MIXIN.equals(mixinClassName)) {
+            return FabricLoader.getInstance().isModLoaded("xaeroworldmap");
+        }
         if (!CONTEXT_MIXIN.equals(mixinClassName) && !OCTREE_MIXIN.equals(mixinClassName)) {
             return true;
         }
