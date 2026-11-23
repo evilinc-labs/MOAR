@@ -46,6 +46,22 @@ class HighwayDetectorBridgeTest {
     }
 
     @Test
+    void findsVerifiedRoadAheadOfDamagedDeclaredRingEntry() {
+        Predicate<BlockPos> floor = p -> p.getY() == 118
+                && p.getX() >= 133_301 && p.getX() <= 133_500
+                && Math.abs(p.getZ() - 1_000_000) <= 1;
+        HighwayDetectorBridge detector = new HighwayDetectorBridge(
+                p -> false, p -> p.getY() >= 119, floor);
+        BlockPos origin = new BlockPos(133_258, 119, 1_000_000);
+
+        assertTrue(detector.scanAt(origin, HighwayCandidate.Axis.PLUS_X).isEmpty());
+        BlockPos entry = detector.findVerifiedEntryAhead(
+                origin, HighwayCandidate.Axis.PLUS_X, 1, 0).orElseThrow();
+        assertEquals(new BlockPos(133_306, 119, 1_000_000), entry);
+        assertTrue(detector.scanAt(entry, HighwayCandidate.Axis.PLUS_X).isPresent());
+    }
+
+    @Test
     void detectsDeclaredUnpavedDiamondRoad() {
         Predicate<BlockPos> floor = p -> p.getY() == 119
                 && Math.abs(p.getX() + p.getZ() - 10000) <= 2;

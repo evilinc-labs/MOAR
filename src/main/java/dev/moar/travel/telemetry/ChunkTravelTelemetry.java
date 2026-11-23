@@ -6,6 +6,7 @@ import dev.moar.util.PacketTelemetry;
 import net.minecraft.client.Minecraft;
 *//*?} else {*/
 import net.minecraft.client.MinecraftClient;
+import net.minecraft.util.math.BlockPos;
 /*?}*/
 
 import java.util.concurrent.ConcurrentHashMap;
@@ -16,6 +17,7 @@ import java.util.concurrent.atomic.AtomicLong;
 public final class ChunkTravelTelemetry {
     private static final int MAX_PENDING_CHUNKS = 8192;
     private static final int MAX_RUNWAY_BLOCKS = 512;
+    private static final int MAX_RENDER_RUNWAY_BLOCKS = 256;
     private static final long REPORT_INTERVAL_NANOS = 1_000_000_000L;
     private static final ConcurrentHashMap<Long, Long> PENDING = new ConcurrentHashMap<>();
     private static final AtomicInteger RECEIVED = new AtomicInteger();
@@ -27,6 +29,11 @@ public final class ChunkTravelTelemetry {
     private static long lastReportNanos;
     private static long lastTickNanos;
     private static long maxTickGapNanos;
+    private static long lastFrameNanos;
+    private static long totalFrameGapNanos;
+    private static long maxFrameGapNanos;
+    private static int frameGaps;
+    private static int frames;
 
     private ChunkTravelTelemetry() {}
 
@@ -41,6 +48,11 @@ public final class ChunkTravelTelemetry {
         lastReportNanos = 0;
         lastTickNanos = 0;
         maxTickGapNanos = 0;
+        lastFrameNanos = 0;
+        totalFrameGapNanos = 0;
+        maxFrameGapNanos = 0;
+        frameGaps = 0;
+        frames = 0;
     }
 
     // Called on the Netty thread after packet decoding, before world insertion.
@@ -68,9 +80,36 @@ public final class ChunkTravelTelemetry {
         MAX_READY_NANOS.accumulateAndGet(delay, Math::max);
     }
 
+    // The world-render callback runs once per world frame. This measures
+    // frame pacing without sampling the renderer or allocating per frame.
+    public static void onWorldFrame() {
+        if (!recording()) return;
+        long now = System.nanoTime();
+        if (lastFrameNanos != 0) {
+            long gap = now - lastFrameNanos;
+            totalFrameGapNanos += gap;
+            maxFrameGapNanos = Math.max(maxFrameGapNanos, gap);
+            frameGaps++;
+        }
+        lastFrameNanos = now;
+        frames++;
+    }
+
     // Called on the client tick thread; one concise row per second avoids filling the trace.
     public static void tick() {
         if (!recording()) return;
+        Motion motion = currentMotion();
+        if (motion == null) {
+            lastReportNanos = 0;
+            lastTickNanos = 0;
+            maxTickGapNanos = 0;
+            lastFrameNanos = 0;
+            totalFrameGapNanos = 0;
+            maxFrameGapNanos = 0;
+            frameGaps = 0;
+            frames = 0;
+            return;
+        }
         long now = System.nanoTime();
         if (lastTickNanos != 0) {
             maxTickGapNanos = Math.max(maxTickGapNanos, now - lastTickNanos);
@@ -90,11 +129,19 @@ public final class ChunkTravelTelemetry {
         long maxReady = MAX_READY_NANOS.getAndSet(0);
         long maxGap = maxTickGapNanos;
         maxTickGapNanos = 0;
+        int frameCount = frames;
+        int gapCount = frameGaps;
+        long totalFrameGap = totalFrameGapNanos;
+        long maxFrameGap = maxFrameGapNanos;
+        frames = 0;
+        frameGaps = 0;
+        totalFrameGapNanos = 0;
+        maxFrameGapNanos = 0;
         double seconds = (now - lastReportNanos) / 1_000_000_000.0;
         lastReportNanos = now;
 
-        Motion motion = currentMotion();
-        int runway = motion == null ? -1 : loadedRunway(motion);
+        int runway = loadedRunway(motion);
+        RendererSnapshot renderer = rendererSnapshot(motion);
         PacketTelemetry.markTravelChunk("window seconds=" + format(seconds)
                 + " decoded=" + received
                 + " worldReady=" + loaded
@@ -104,8 +151,15 @@ public final class ChunkTravelTelemetry {
                 + " decodedToReadyAvgMs=" + (loaded == 0 ? "n/a" : format(totalReady / (loaded * 1_000_000.0)))
                 + " decodedToReadyMaxMs=" + (loaded == 0 ? "n/a" : format(maxReady / 1_000_000.0))
                 + " maxClientTickGapMs=" + format(maxGap / 1_000_000.0)
-                + " speedBps=" + (motion == null ? "n/a" : format(motion.speed * 20.0))
-                + " loadedAheadBlocks=" + runway);
+                + " worldFps=" + format(frameCount / seconds)
+                + " avgFrameGapMs=" + (gapCount == 0 ? "n/a" : format(totalFrameGap / (gapCount * 1_000_000.0)))
+                + " maxFrameGapMs=" + (gapCount == 0 ? "n/a" : format(maxFrameGap / 1_000_000.0))
+                + " speedBps=" + format(motion.speed * 20.0)
+                + " loadedAheadBlocks=" + runway
+                + " renderReadyAheadBlocks=" + renderer.readyAheadBlocks()
+                + " renderProbeMaxBlocks=" + renderer.probeMaxBlocks()
+                + " renderBuildQueued=" + renderer.buildQueued()
+                + " renderUploadQueued=" + renderer.uploadQueued());
     }
 
     private static boolean recording() {
@@ -117,6 +171,44 @@ public final class ChunkTravelTelemetry {
     }
 
     private record Motion(double x, double z, double dx, double dz, double speed) {}
+
+    private record RendererSnapshot(int readyAheadBlocks, int probeMaxBlocks,
+                                    int buildQueued, int uploadQueued) {}
+
+    // Vanilla 1.21 exposes section compilation and upload queues. Sample only the
+    // forward corridor inside render distance; world-loaded chunks outside that
+    // distance are not expected to have a rendered section yet.
+    private static RendererSnapshot rendererSnapshot(Motion motion) {
+        /*? if >=26.1 {*//*
+        return new RendererSnapshot(-1, -1, -1, -1);
+        *//*?} else {*/
+        MinecraftClient mc = MinecraftClient.getInstance();
+        if (mc.world == null || mc.player == null || mc.worldRenderer == null) {
+            return new RendererSnapshot(-1, -1, -1, -1);
+        }
+        var builder = mc.worldRenderer.getChunkBuilder();
+        /*? if >=1.21.8 {*//*
+        int buildQueued = builder == null ? -1 : builder.getScheduledTaskCount();
+        *//*?} else {*/
+        int buildQueued = -1;
+        /*?}*/
+        int uploadQueued = builder == null ? -1 : builder.getChunksToUpload();
+        if (motion == null || motion.speed < 0.01) {
+            return new RendererSnapshot(0, 0, buildQueued, uploadQueued);
+        }
+        int viewDistance = mc.options.getViewDistance().getValue();
+        int limit = Math.min(MAX_RENDER_RUNWAY_BLOCKS, Math.max(16, (viewDistance - 2) * 16));
+        int y = mc.player.getBlockY();
+        for (int distance = 0; distance <= limit; distance += 16) {
+            int x = (int) Math.floor(motion.x + motion.dx * distance);
+            int z = (int) Math.floor(motion.z + motion.dz * distance);
+            if (!mc.worldRenderer.isRenderingReady(new BlockPos(x, y, z))) {
+                return new RendererSnapshot(distance, limit, buildQueued, uploadQueued);
+            }
+        }
+        return new RendererSnapshot(limit, limit, buildQueued, uploadQueued);
+        /*?}*/
+    }
 
     private static Motion currentMotion() {
         /*? if >=26.1 {*//*

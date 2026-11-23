@@ -1424,14 +1424,6 @@ public final class PathWalker {
                     LOGGER.info("PathWalker: Baritone settings reflection ready "
                             + "(allowPlace/allowParkour control available)");
 
-                    // Enable parkour - needed to cross 1-block gaps in builds.
-                    try {
-                        settingValueField.set(allowParkourSetting, true);
-                        LOGGER.debug("PathWalker: enabled Baritone allowParkour globally");
-                    } catch (Exception pe) {
-                        LOGGER.warn("PathWalker: failed to enable allowParkour", pe);
-                    }
-
                     // Forbid Baritone from breaking storage / interactive
                     // blocks while pathing. Without this it cheerfully
                     // mines through chests, shulkers, barrels, hoppers,

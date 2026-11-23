@@ -87,7 +87,7 @@ public final class HighwayCandidate {
     public final int width;
     public final boolean hasLeftRail;
     public final boolean hasRightRail;
-    public final boolean unpavedTunnel;
+    public final boolean unpavedCorridor;
 
     // ── Constructors ──────────────────────────────────────────────
     public HighwayCandidate(Axis axis, Category category, int floorY,
@@ -105,7 +105,7 @@ public final class HighwayCandidate {
                             double ringOrDiamondDist, RingSide ringSide,
                             DiamondSegment diamondSegment, int width,
                             boolean hasLeftRail, boolean hasRightRail,
-                            boolean unpavedTunnel) {
+                            boolean unpavedCorridor) {
         this.axis = axis;
         this.category = category;
         this.floorY = floorY;
@@ -118,7 +118,7 @@ public final class HighwayCandidate {
         this.width = width;
         this.hasLeftRail = hasLeftRail;
         this.hasRightRail = hasRightRail;
-        this.unpavedTunnel = unpavedTunnel;
+        this.unpavedCorridor = unpavedCorridor;
     }
 
     // Create a candidate without ring, diamond, or scan metadata.
@@ -136,7 +136,7 @@ public final class HighwayCandidate {
             base += ", ring=" + (int) ringOrDiamondDist + " side=" + ringSide;
         else if (category == Category.DIAMOND)
             base += ", diamond=" + (int) ringOrDiamondDist + " seg=" + diamondSegment;
-        if (unpavedTunnel) base += ", surface=TUNNEL width=" + width;
+        if (unpavedCorridor) base += ", surface=UNPAVED width=" + width;
         return base + ", entry=" + entry.toShortString()
                 + ", exit=" + exit.toShortString() + "}";
     }
