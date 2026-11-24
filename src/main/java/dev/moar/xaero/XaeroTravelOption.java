@@ -26,8 +26,10 @@ public final class XaeroTravelOption extends RightClickOption {
     @Override
     public void onAction(Screen screen) {
         if (TravelCommand.startNetherFromMap(x, z)) {
-            /*? if >=26.1 {*//*
+            /*? if >=26.2 {*//*
             Minecraft.getInstance().gui.setScreen(null);
+            *//*?} else if >=26.1 {*//*
+            Minecraft.getInstance().setScreen(null);
             *//*?} else {*/
             MinecraftClient.getInstance().setScreen(null);
             /*?}*/
