@@ -10,7 +10,8 @@
     "ResupplyMiningMixin",
     "PacketTelemetryMixin",
     "BaritoneNetherPathfinderContextMixin",
-    "BaritoneBlockStateOctreeMixin"
+    "BaritoneBlockStateOctreeMixin",
+    "XaeroWorldMapMixin"
   ],
   "injectors": {
     "defaultRequire": 1

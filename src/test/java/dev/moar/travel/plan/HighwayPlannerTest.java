@@ -88,6 +88,34 @@ class HighwayPlannerTest {
     }
 
     @Test
+    void unpavedRingContinuesTowardDestinationInsteadOfReturningToCardinal() {
+        BlockPos origin = new BlockPos(68_322, 120, 1_000_000);
+        BlockPos destination = new BlockPos(2_479_619, 64, 2_500_004);
+        HighwayPlanner planner = new HighwayPlanner((pos, axis) ->
+                axis == HighwayCandidate.Axis.PLUS_X
+                        && Math.abs(pos.getX() - origin.getX()) <= 16
+                        && Math.abs(pos.getZ() - origin.getZ()) <= 16
+                        ? Optional.of(new HighwayDetectorBridge.ScanResult(
+                                118, 3, origin.getX(), origin.getZ(),
+                                -2, 2, false, false, 0.75f,
+                                HighwayDetectorBridge.Surface.DECLARED))
+                        : Optional.empty());
+
+        HighwayRoute route = planner.plan(origin, destination,
+                new HighwayPlanner.Options().horizontalDestination(true)).orElseThrow();
+
+        HighwayRoute.BounceLeg first = assertInstanceOf(HighwayRoute.BounceLeg.class,
+                route.legs.get(0));
+        assertEquals(1, first.travelDx());
+        assertEquals(0, first.travelDz());
+        assertEquals(1_000_000, first.exitColumn().getX());
+        assertTrue(route.legs.stream().anyMatch(leg -> leg instanceof HighwayRoute.BounceLeg bounce
+                && bounce.highway().category == HighwayCandidate.Category.DIAGONAL
+                && bounce.travelDx() > 0 && bounce.travelDz() > 0));
+        assertFalse(HighwayPlanner.hasExcessiveFlightLeg(origin, route.legs));
+    }
+
+    @Test
     void bounceFallResumeOnCardinalDoesNotWalkBackToNearbyRing() {
         BlockPos origin = new BlockPos(0, 120, 127_565);
         BlockPos destination = new BlockPos(2_274_459, 64, 2_629_901);

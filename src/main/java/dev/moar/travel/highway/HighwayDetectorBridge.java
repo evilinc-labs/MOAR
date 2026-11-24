@@ -28,16 +28,36 @@ public final class HighwayDetectorBridge {
     private final Predicate<BlockPos> pavement;
     private final Predicate<BlockPos> air;
     private final Predicate<BlockPos> floor;
+    private final Predicate<BlockPos> loaded;
+    private final Predicate<BlockPos> cave;
+    private final Predicate<BlockPos> portal;
 
     private HighwayDetectorBridge() {
         this(HighwayDetectorBridge::readPavement,
-                HighwayDetectorBridge::readAir, HighwayDetectorBridge::readFloor);
+                HighwayDetectorBridge::readAir, HighwayDetectorBridge::readFloor,
+                HighwayDetectorBridge::isChunkLoaded,
+                p -> looksLikeCave(p.getX(), p.getY(), p.getZ()),
+                p -> looksLikePortal(p.getX(), p.getY(), p.getZ()));
     }
 
     HighwayDetectorBridge(Predicate<BlockPos> pavement, Predicate<BlockPos> air, Predicate<BlockPos> floor) {
+        this(pavement, air, floor, HighwayDetectorBridge::isChunkLoaded);
+    }
+
+    HighwayDetectorBridge(Predicate<BlockPos> pavement, Predicate<BlockPos> air,
+                          Predicate<BlockPos> floor, Predicate<BlockPos> loaded) {
+        this(pavement, air, floor, loaded, p -> false, p -> false);
+    }
+
+    private HighwayDetectorBridge(Predicate<BlockPos> pavement, Predicate<BlockPos> air,
+                                  Predicate<BlockPos> floor, Predicate<BlockPos> loaded,
+                                  Predicate<BlockPos> cave, Predicate<BlockPos> portal) {
         this.pavement = pavement;
         this.air = air;
         this.floor = floor;
+        this.loaded = loaded;
+        this.cave = cave;
+        this.portal = portal;
     }
 
     public enum Surface { PAVED, TUNNEL, DECLARED }
@@ -79,7 +99,7 @@ public final class HighwayDetectorBridge {
      */
     public CellStatus checkFloorOnly(int bx, int floorY, int bz) {
         BlockPos pos = new BlockPos(bx, floorY, bz);
-        if (!isChunkLoaded(pos)) return CellStatus.UNLOADED;
+        if (!loaded.test(pos)) return CellStatus.UNLOADED;
         if (isHighwayBlock(bx, floorY,     bz)) return CellStatus.OK;
         // Highway floor may step ±1 block in height at section joints; treat as intact.
         if (isHighwayBlock(bx, floorY + 1, bz)) return CellStatus.OK;
@@ -87,10 +107,10 @@ public final class HighwayDetectorBridge {
         if (isWalkableFloor(bx, floorY, bz)) return CellStatus.OK;
         // Cave suppressor: a deep void below indicates the highway spans a natural
         // Nether cave opening rather than a targeted block removal.
-        if (looksLikeCave(bx, floorY, bz)) return CellStatus.CAVE_PASS;
+        if (cave.test(pos)) return CellStatus.CAVE_PASS;
         // Portal suppressor: highway obsidian was legitimately mined out to build
         // a Nether portal next to the highway. Only applies to lit portals.
-        if (looksLikePortal(bx, floorY, bz)) return CellStatus.CAVE_PASS;
+        if (portal.test(pos)) return CellStatus.CAVE_PASS;
         return CellStatus.GRIEFED;
     }
 
@@ -105,7 +125,7 @@ public final class HighwayDetectorBridge {
             int laneX = bx + axis.perpDx() * offset;
             int laneZ = bz + axis.perpDz() * offset;
             BlockPos pos = new BlockPos(laneX, floorY, laneZ);
-            if (!isChunkLoaded(pos)) {
+            if (!loaded.test(pos)) {
                 unloaded = true;
                 continue;
             }
@@ -135,6 +155,30 @@ public final class HighwayDetectorBridge {
             for (int yOff : floorOffsets) {
                 ScanResult r = scanDeclaredAlongAxis(center[0], playerPos.getY() + yOff, center[1], axis);
                 if (r != null) return Optional.of(r);
+            }
+        }
+        return Optional.empty();
+    }
+
+    // A damaged section can fail local confirmation even though the declared
+    // road continues ahead. Find an intact patch for Baritone to approach;
+    // travel still confirms the road again at the player's actual position.
+    public Optional<BlockPos> findVerifiedEntryAhead(BlockPos playerPos,
+                                                      HighwayCandidate.Axis axis,
+                                                      int travelDx, int travelDz) {
+        if (playerPos == null || axis == null || (travelDx == 0 && travelDz == 0)) {
+            return Optional.empty();
+        }
+        for (int distance = 16; distance <= 160; distance += 16) {
+            BlockPos probe = new BlockPos(
+                    playerPos.getX() + travelDx * distance,
+                    playerPos.getY(),
+                    playerPos.getZ() + travelDz * distance);
+            Optional<ScanResult> scan = scanAt(probe, axis);
+            if (scan.isPresent()) {
+                ScanResult found = scan.get();
+                return Optional.of(new BlockPos(
+                        found.centerX(), found.floorY() + 1, found.centerZ()));
             }
         }
         return Optional.empty();

@@ -25,6 +25,7 @@ import dev.moar.travel.telemetry.ChunkTravelTelemetry;
 import dev.moar.travel.hud.HighwayOverlayRenderer;
 import dev.moar.travel.hud.TravelHud;
 import dev.moar.util.PathWalker;
+import dev.moar.util.ChatHelper;
 import dev.moar.util.PrinterDatabase;
 import dev.moar.update.MoarUpdateService;
 import dev.moar.util.MoarNetworkManager;
@@ -86,10 +87,12 @@ public class MoarMod implements ClientModInitializer {
     /*? if >=26.1 {*//*
     private static KeyMapping toggleKey;
     private static KeyMapping guiKey;
+    private static KeyMapping bounceKey;
     private static KeyMapping emergencyStopKey;
     *//*?} else {*/
     private static KeyBinding toggleKey;
     private static KeyBinding guiKey;
+    private static KeyBinding bounceKey;
     private static KeyBinding emergencyStopKey;
     /*?}*/
 
@@ -145,6 +148,27 @@ public class MoarMod implements ClientModInitializer {
                 InputConstants.KEY_NUMPAD9,
                 *//*?} else {*/
                 GLFW.GLFW_KEY_KP_9,
+                /*?}*/
+                keyCategory
+        ));
+
+        /*? if >=26.1 {*//*
+        bounceKey = KeyMappingHelper.registerKeyMapping(new KeyMapping(
+        *//*?} else {*/
+        bounceKey = KeyBindingHelper.registerKeyBinding(new KeyBinding(
+        /*?}*/
+                "key.moar.bounce",
+                /*? if >=26.3 {*//*
+                InputConstants.Type.KEYBOARD,
+                *//*?} else if >=26.1 {*//*
+                InputConstants.Type.KEYSYM,
+                *//*?} else {*/
+                InputUtil.Type.KEYSYM,
+                /*?}*/
+                /*? if >=26.3 {*//*
+                InputConstants.KEY_NUMPAD8,
+                *//*?} else {*/
+                GLFW.GLFW_KEY_KP_8,
                 /*?}*/
                 keyCategory
         ));
@@ -223,6 +247,16 @@ public class MoarMod implements ClientModInitializer {
             while (guiKey.wasPressed()) {
             /*?}*/
                 requestGuiOpen();
+            }
+
+            /*? if >=26.1 {*//*
+            while (bounceKey.consumeClick()) {
+            *//*?} else {*/
+            while (bounceKey.wasPressed()) {
+            /*?}*/
+                var result = TravelManager.get().toggleStandaloneBounce();
+                ChatHelper.labelled("Bounce", (result.accepted()
+                        ? result.enabled() ? "§a" : "§e" : "§c") + result.message());
             }
 
             /*? if >=26.1 {*//*

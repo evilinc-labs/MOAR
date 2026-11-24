@@ -144,6 +144,8 @@ public final class BounceController {
     private boolean elytraLaunchEnabled;
     private boolean jumpingEnabled;
     private int wallObservationTicks;
+    private int verifiedUnpavedFloorY = Integer.MIN_VALUE;
+    private long floorTransitionProjection = Long.MAX_VALUE;
     private int fallObservationTicks;
     private double fallDepth;
     private int correctionEpisodeBaseline;
@@ -226,6 +228,8 @@ public final class BounceController {
         elytraLaunchEnabled = true;
         jumpingEnabled = true;
         wallObservationTicks = 0;
+        verifiedUnpavedFloorY = Integer.MIN_VALUE;
+        floorTransitionProjection = Long.MAX_VALUE;
         fallObservationTicks = 0;
         fallDepth = 0.0;
         correctionEpisodeBaseline = SetbackMonitor.get().totalCorrectionEpisodes();
@@ -236,7 +240,12 @@ public final class BounceController {
         lastPerpCorrection = 0.0f;
         noProgressTicks = 0;
         progressSeeded  = false;
-        LOGGER.info("[Bounce] start axis={} dir={},{} exit={}", hw.axis, dx, dz, exit.toShortString());
+        LOGGER.info("[Bounce] start axis={} dir={},{} exit={}", hw.axis, dx, dz,
+                exit == null ? "open-ended" : exit.toShortString());
+    }
+
+    public void startOpenEnded(HighwayCandidate hw, int dx, int dz) {
+        start(hw, null, dx, dz);
     }
 
     public void stop() {
@@ -259,6 +268,27 @@ public final class BounceController {
     }
     public double fallDepth() { return fallDepth; }
     public int     ticksActive() { return ticksActive; }
+
+    // Keep the old floor until the verified unpaved section actually begins.
+    public void setVerifiedFloorTransition(int floorY, long startProjection) {
+        if (verifiedUnpavedFloorY == floorY
+                && floorTransitionProjection == startProjection) return;
+        verifiedUnpavedFloorY = floorY;
+        floorTransitionProjection = startProjection;
+        wallAhead = false;
+        wallObservationTicks = 0;
+        wallReason = "none";
+        LOGGER.info("[Bounce] verified floor transition to y={} at projection={}",
+                floorY, startProjection);
+    }
+
+    private int floorYAt(int x, int z) {
+        if (verifiedUnpavedFloorY != Integer.MIN_VALUE
+                && (long) x * travelDx + (long) z * travelDz >= floorTransitionProjection) {
+            return verifiedUnpavedFloorY;
+        }
+        return highway.floorY;
+    }
 
     // Drop a stale fall decision after a server correction.
     public void clearFallAlarmAfterCorrection() {
@@ -726,13 +756,15 @@ public final class BounceController {
             return false;
         }
 
-        double drop = highway.floorY - mc.player.getY();
+        int floorY = floorYAt((int) Math.floor(mc.player.getX()),
+                (int) Math.floor(mc.player.getZ()));
+        double drop = floorY - mc.player.getY();
         fallDepth = Math.max(0.0, drop);
         if (drop <= BounceTuning.FALL_TRIGGER_DEPTH) {
             if (fallObservationTicks > 0) {
                 LOGGER.info("[Bounce] fall recovery settled after {}t y={} floorY={}",
                         fallObservationTicks,
-                        String.format("%.3f", mc.player.getY()), highway.floorY);
+                        String.format("%.3f", mc.player.getY()), floorY);
             }
             fallObservationTicks = 0;
             fallDepth = 0.0;
@@ -755,7 +787,7 @@ public final class BounceController {
         boolean deep = drop >= BounceTuning.FALL_IMMEDIATE_DEPTH;
         if ((confirmed || deep) && !stuckFromFall) {
             LOGGER.warn("[Bounce] confirmed highway fall y={} floorY={} drop={} observations={} deep={}",
-                    String.format("%.3f", mc.player.getY()), highway.floorY,
+                    String.format("%.3f", mc.player.getY()), floorY,
                     String.format("%.3f", drop), fallObservationTicks, deep);
             stuckFromFall = true;
             stuck = true;
@@ -765,7 +797,7 @@ public final class BounceController {
 
     private boolean hasLoadedHighwayWindow(
             /*? if >=26.1 {*//* Minecraft mc *//*?} else {*/ MinecraftClient mc /*?}*/) {
-        if (mc.player == null || highway == null || exitColumn == null
+        if (mc.player == null || highway == null
                 || highway.floorY == Integer.MIN_VALUE) {
             return true;
         }
@@ -773,17 +805,19 @@ public final class BounceController {
         int directionScale = travelDx * travelDx + travelDz * travelDz;
         long playerProjection = (long) Math.floor(mc.player.getX()) * travelDx
                 + (long) Math.floor(mc.player.getZ()) * travelDz;
-        long exitProjection = (long) exitColumn.getX() * travelDx
-                + (long) exitColumn.getZ() * travelDz;
-        int remaining = directionScale == 0
-                ? 0
-                : (int) Math.max(0L, (exitProjection - playerProjection) / directionScale);
-        int scanAhead = Math.min(BounceTuning.TERRAIN_LOAD_SCAN_AHEAD, remaining);
+        int scanAhead = BounceTuning.TERRAIN_LOAD_SCAN_AHEAD;
+        if (exitColumn != null) {
+            long exitProjection = (long) exitColumn.getX() * travelDx
+                    + (long) exitColumn.getZ() * travelDz;
+            int remaining = directionScale == 0
+                    ? 0
+                    : (int) Math.max(0L, (exitProjection - playerProjection) / directionScale);
+            scanAhead = Math.min(scanAhead, remaining);
+        }
         for (int distance = 0; distance <= scanAhead; distance += 4) {
-            BlockPos sample = new BlockPos(
-                    (int) Math.floor(mc.player.getX()) + travelDx * distance,
-                    highway.floorY,
-                    (int) Math.floor(mc.player.getZ()) + travelDz * distance);
+            int sampleX = (int) Math.floor(mc.player.getX()) + travelDx * distance;
+            int sampleZ = (int) Math.floor(mc.player.getZ()) + travelDz * distance;
+            BlockPos sample = new BlockPos(sampleX, floorYAt(sampleX, sampleZ), sampleZ);
             if (!isChunkLoaded(mc, sample)) {
                 return false;
             }
@@ -798,7 +832,9 @@ public final class BounceController {
         progressSeeded = false;
         if (highway != null && highway.floorY > Integer.MIN_VALUE
                 && mc.player != null
-                && highway.floorY - mc.player.getY() > BounceTuning.FALL_TRIGGER_DEPTH) {
+                && floorYAt((int) Math.floor(mc.player.getX()),
+                        (int) Math.floor(mc.player.getZ())) - mc.player.getY()
+                        > BounceTuning.FALL_TRIGGER_DEPTH) {
             setPitch(0.0f);
             if (!playerGliding(mc)) {
                 sendEmergencyStartFlying();
@@ -867,7 +903,7 @@ public final class BounceController {
     // Find a blocked launch corridor ahead.
     private boolean detectBlockedCorridor(
             /*? if >=26.1 {*//* Minecraft mc *//*?} else {*/ MinecraftClient mc /*?}*/) {
-        if (mc.player == null || highway == null || exitColumn == null
+        if (mc.player == null || highway == null
                 || highway.floorY == Integer.MIN_VALUE) return false;
 
         /*? if >=26.1 {*//*
@@ -876,7 +912,6 @@ public final class BounceController {
         if (mc.world == null) return false;
         /*?}*/
 
-        int feetY = highway.floorY + 1;
         float yaw = yawForDirection(travelDx, travelDz);
         double yawRad = Math.toRadians(yaw);
         double dirX   = -Math.sin(yawRad);
@@ -884,11 +919,12 @@ public final class BounceController {
         double px = mc.player.getX();
         double pz = mc.player.getZ();
 
-        long playerProjection = (long) Math.floor(px) * travelDx + (long) Math.floor(pz) * travelDz;
-        long exitProjection = (long) exitColumn.getX() * travelDx + (long) exitColumn.getZ() * travelDz;
-        int maxAhead = (int) Math.min(
-                BounceTuning.OBSTACLE_SCAN_AHEAD,
-                exitProjection - playerProjection - 1L);
+        int maxAhead = BounceTuning.OBSTACLE_SCAN_AHEAD;
+        if (exitColumn != null) {
+            long playerProjection = (long) Math.floor(px) * travelDx + (long) Math.floor(pz) * travelDz;
+            long exitProjection = (long) exitColumn.getX() * travelDx + (long) exitColumn.getZ() * travelDz;
+            maxAhead = (int) Math.min(maxAhead, exitProjection - playerProjection - 1L);
+        }
         if (maxAhead < 1) return false;
 
         int perpX = highway.axis.perpDx();
@@ -896,6 +932,7 @@ public final class BounceController {
         for (int d = 1; d <= maxAhead; d++) {
             int centerX = (int) Math.floor(px + dirX * d);
             int centerZ = (int) Math.floor(pz + dirZ * d);
+            int feetY = floorYAt(centerX, centerZ) + 1;
             boolean centerBlocked = false;
             boolean centerBodyBlocked = false;
             boolean centerLaunchBlocked = false;

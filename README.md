@@ -216,7 +216,9 @@ To diagnose chunk loading during fast travel on the Anarchy Prism instance, rest
 | `/moar travel goto <x> <z>` | Travel to nether coordinates |
 | `/moar travel goto <x> <z> overworld` | Travel to overworld coordinates (auto-divides by 8) |
 | `/moar travel goto <x> <z> nether` | Explicit nether coordinates |
-| `/moar travel bounce` | Snap yaw to nearest 45° and bounce indefinitely in that direction |
+| `/moar bounce` | Toggle standalone Elytra Bounce on the verified Nether highway underfoot; no destination required |
+| `/moar bounce on\|off\|status` | Set or inspect standalone Elytra Bounce |
+| `/moar travel bounce` | Alias for `/moar bounce` |
 | `/moar travel stop` | Stop the current travel mission |
 | `/moar travel pause` | Pause the mission |
 | `/moar travel resume` | Resume a paused mission or re-plan after stop |
@@ -226,7 +228,14 @@ To diagnose chunk loading during fast travel on the Anarchy Prism instance, rest
 | `/moar travel elytra resupply-count <n>` | Set how many elytras to pull per shulker trip (1–27) |
 | `/moar travel elytra repair` | Run a standalone Mending cycle without a travel mission |
 
+With Xaero's World Map installed, right-click a destination on the Nether map
+and choose **MOAR Travel here**. The action appears only when you are in the
+Nether and the map is showing the Nether. It uses the clicked Nether X/Z
+coordinates and starts the same route as `/moar travel goto <x> <z>`.
+
 </details>
+
+Standalone Elytra Bounce is also available in the MOAR GUI under **Travel** and through the **Toggle Elytra Bounce** keybind (numpad 8 by default). Face the direction you want to travel. It stops when toggled off, on disconnect, or when MOAR detects highway damage, a wall, or a fall.
 
 <details>
 <summary><strong>SpawnProofer</strong></summary>
@@ -352,6 +361,7 @@ All endpoints accept `Authorization: Bearer <api.key>` when `api.key` is set. Se
 | Key | Action |
 |-----|--------|
 | `Numpad 0` | Toggle printer on/off |
+| `Numpad 8` | Toggle standalone Elytra Bounce |
 
 ## Developing
 

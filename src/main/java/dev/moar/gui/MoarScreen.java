@@ -9,6 +9,7 @@ import dev.moar.spawnproof.SpawnProofer;
 import dev.moar.stash.StashDatabase;
 import dev.moar.stash.StashManager;
 import dev.moar.stash.StashRetriever;
+import dev.moar.travel.TravelManager;
 import dev.moar.util.ChatHelper;
 import dev.moar.util.ItemIdentifier;
 /*? if >=26.1 {*//*
@@ -56,6 +57,7 @@ public final class MoarScreen extends Screen {
         REGIONS("Regions"),
         RETRIEVE("Retrieve"),
         PRINTER("Printer"),
+        TRAVEL("Travel"),
         SPAWNPROOF("Spawnproof"),
         API("API");
 
@@ -142,6 +144,7 @@ public final class MoarScreen extends Screen {
             case REGIONS -> buildRegions(x, y);
             case RETRIEVE -> buildRetrieve(x, y);
             case PRINTER -> buildPrinter(x, y);
+            case TRAVEL -> buildTravel(x, y);
             case SPAWNPROOF -> buildSpawnproof(x, y);
             case API -> buildApi(x, y);
         }
@@ -264,6 +267,15 @@ public final class MoarScreen extends Screen {
             printer.setStatusMessages(!printer.isStatusMessages());
             rebuild();
         });
+    }
+
+    private void buildTravel(int x, int y) {
+        TravelManager travel = TravelManager.get();
+        addButton(x, y, 180, 20,
+                "Elytra Bounce " + onOff(travel.isStandaloneBounceActive()), () -> {
+                    notice(travel.toggleStandaloneBounce().message());
+                    rebuild();
+                });
     }
 
     private void buildSpawnproof(int x, int y) {
@@ -408,6 +420,12 @@ public final class MoarScreen extends Screen {
             case REGIONS -> drawRegionInfo(context, x, y + 64);
             case RETRIEVE -> drawRetrieveInfo(context, x, y + 96);
             case PRINTER -> drawPrinterInfo(context, x, y + 92);
+            case TRAVEL -> {
+                drawText(context, "Stand on a verified Nether highway and face your route.",
+                        x, y + 30, 0xFFBBBBBB);
+                drawText(context, "Bounce runs until toggled off or a hazard stops it.",
+                        x, y + 45, 0xFFBBBBBB);
+            }
             case SPAWNPROOF -> drawSpawnproofInfo(context, x, y + 92);
             case API -> {
                 drawApiLabels(context, x, y);

@@ -2,6 +2,7 @@ package dev.moar.travel.hud;
 
 import dev.moar.travel.TravelManager;
 import dev.moar.travel.plan.HighwayCandidate;
+import dev.moar.travel.telemetry.ChunkTravelTelemetry;
 import dev.moar.travel.telemetry.TravelTelemetry;
 
 /*? if >=26.1 {*//*
@@ -112,6 +113,7 @@ public final class HighwayOverlayRenderer {
     private static void onRender26(LevelRenderContext ctx) {
         Minecraft mc = Minecraft.getInstance();
         if (mc.player == null || mc.level == null) return;
+        ChunkTravelTelemetry.onWorldFrame();
         TravelTelemetry t = TravelManager.get().snapshot();
         HighwayCandidate hw = t.selectedHighway();
         if (hw == null || hw.floorY == Integer.MIN_VALUE) return;
@@ -184,6 +186,7 @@ public final class HighwayOverlayRenderer {
     private static void onRender26(LevelRenderContext ctx) {
         Minecraft mc = Minecraft.getInstance();
         if (mc.player == null || mc.level == null) return;
+        ChunkTravelTelemetry.onWorldFrame();
         TravelTelemetry t = TravelManager.get().snapshot();
         HighwayCandidate hw = t.selectedHighway();
         if (hw == null || hw.floorY == Integer.MIN_VALUE) return;
@@ -256,6 +259,7 @@ public final class HighwayOverlayRenderer {
     private static void onRender(WorldRenderContext ctx) {
         MinecraftClient mc = MinecraftClient.getInstance();
         if (mc.player == null || mc.world == null) return;
+        ChunkTravelTelemetry.onWorldFrame();
         TravelTelemetry t = TravelManager.get().snapshot();
         HighwayCandidate hw = t.selectedHighway();
         if (hw == null || hw.floorY == Integer.MIN_VALUE) return;
@@ -334,6 +338,7 @@ public final class HighwayOverlayRenderer {
     private static void onRender(WorldRenderContext ctx) {
         MinecraftClient mc = MinecraftClient.getInstance();
         if (mc.player == null || mc.world == null) return;
+        ChunkTravelTelemetry.onWorldFrame();
         TravelTelemetry t = TravelManager.get().snapshot();
         HighwayCandidate hw = t.selectedHighway();
         if (hw == null || hw.floorY == Integer.MIN_VALUE) return;
@@ -411,6 +416,7 @@ public final class HighwayOverlayRenderer {
     private static void onRender(WorldRenderContext ctx) {
         MinecraftClient mc = MinecraftClient.getInstance();
         if (mc.player == null || mc.world == null) return;
+        ChunkTravelTelemetry.onWorldFrame();
         TravelTelemetry t = TravelManager.get().snapshot();
         HighwayCandidate hw = t.selectedHighway();
         if (hw == null || hw.floorY == Integer.MIN_VALUE) return;

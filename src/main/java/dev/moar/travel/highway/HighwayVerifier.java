@@ -23,9 +23,13 @@ public final class HighwayVerifier {
     private static final float GRIEF_THRESHOLD = 0.30f; // 30 % bad → GRIEFED (was 0.25; raised to reduce false positives at road crossings)
     private static final float UNLOADED_MAJORITY = 0.5f; // 50 % unloaded → UNLOADED
 
-    private static final HighwayVerifier INSTANCE = new HighwayVerifier();
+    private static final HighwayVerifier INSTANCE = new HighwayVerifier(HighwayDetectorBridge.get());
     public static HighwayVerifier get() { return INSTANCE; }
-    private HighwayVerifier() {}
+    private final HighwayDetectorBridge bridge;
+
+    HighwayVerifier(HighwayDetectorBridge bridge) {
+        this.bridge = bridge;
+    }
 
     private HighwayCandidate highway;
     private IntegrityReport lastReport = IntegrityReport.insufficient();
@@ -34,6 +38,7 @@ public final class HighwayVerifier {
     private int travelDz;
     private int verifiedFloorY = Integer.MIN_VALUE;
     private int verifiedWidth;
+    private long floorTransitionProjection = Long.MAX_VALUE;
     private HighwayDetectorBridge.Surface surface = HighwayDetectorBridge.Surface.PAVED;
 
     // ── Public API ───────────────────────────────────────────────
@@ -44,9 +49,11 @@ public final class HighwayVerifier {
         this.travelDz = dz;
         this.verifiedFloorY = hw == null ? Integer.MIN_VALUE : hw.floorY;
         this.verifiedWidth = hw == null ? 0 : hw.width;
-        this.surface = hw != null && hw.unpavedTunnel
+        this.surface = hw != null && hw.unpavedCorridor
                 ? HighwayDetectorBridge.Surface.TUNNEL
                 : HighwayDetectorBridge.Surface.PAVED;
+        this.floorTransitionProjection = hw != null && hw.unpavedCorridor
+                ? Long.MIN_VALUE : Long.MAX_VALUE;
         this.lastReport = IntegrityReport.insufficient();
         this.ticksSinceLastSample = SAMPLE_INTERVAL; // force sample next tick
     }
@@ -65,11 +72,20 @@ public final class HighwayVerifier {
         travelDz = 0;
         verifiedFloorY = Integer.MIN_VALUE;
         verifiedWidth = 0;
+        floorTransitionProjection = Long.MAX_VALUE;
         surface = HighwayDetectorBridge.Surface.PAVED;
     }
 
     // Return the last integrity report.
     public IntegrityReport lastReport() { return lastReport; }
+
+    public boolean hasUnpavedSurface() {
+        return surface != HighwayDetectorBridge.Surface.PAVED;
+    }
+
+    public int verifiedFloorY() { return verifiedFloorY; }
+
+    public long floorTransitionProjection() { return floorTransitionProjection; }
 
     // Refresh integrity before a movement handoff.
     public IntegrityReport sampleNow(BlockPos playerPos) {
@@ -93,7 +109,6 @@ public final class HighwayVerifier {
         if (highway == null || highway.floorY == Integer.MIN_VALUE)
             return IntegrityReport.insufficient();
 
-        HighwayDetectorBridge bridge = HighwayDetectorBridge.get();
         int floorY = verifiedFloorY == Integer.MIN_VALUE
                 ? highway.floorY
                 : verifiedFloorY;
@@ -130,11 +145,18 @@ public final class HighwayVerifier {
             int bz = oz + travelDz * step;
 
             // Floor-only: checkCell also needs air above, but nether netherrack causes FP grief.
-            HighwayDetectorBridge.CellStatus status =
-                    surface == HighwayDetectorBridge.Surface.TUNNEL
-                            ? bridge.checkTunnelCorridor(
-                                    bx, floorY, bz, highway.axis, verifiedWidth)
-                            : bridge.checkFloorOnly(bx, floorY, bz);
+            HighwayDetectorBridge.CellStatus status = surface == HighwayDetectorBridge.Surface.PAVED
+                    ? bridge.checkFloorOnly(bx, floorY, bz)
+                    : bridge.checkTunnelCorridor(bx, floorY, bz, highway.axis, verifiedWidth);
+            // A paved section can step into an unpaved road at another Y level.
+            // Keep accepting the original paving during the transition window.
+            if (status == HighwayDetectorBridge.CellStatus.GRIEFED
+                    && surface != HighwayDetectorBridge.Surface.PAVED
+                    && floorY != highway.floorY) {
+                HighwayDetectorBridge.CellStatus paved =
+                        bridge.checkFloorOnly(bx, highway.floorY, bz);
+                if (paved == HighwayDetectorBridge.CellStatus.OK) status = paved;
+            }
             total++;
             switch (status) {
                 case GRIEFED -> {
@@ -175,21 +197,27 @@ public final class HighwayVerifier {
             int probeStep = longestNearRun >= NEAR_GRIEF_RUN
                     ? longestNearStart
                     : griefStart;
-            BlockPos probe = new BlockPos(
-                    ox + travelDx * Math.max(1, probeStep),
-                    playerPos.getY(),
-                    oz + travelDz * Math.max(1, probeStep));
-            Optional<HighwayDetectorBridge.ScanResult> scan =
-                    bridge.scanAt(probe, highway.axis);
-            if (scan.isPresent()
-                    && scan.get().surface() == HighwayDetectorBridge.Surface.TUNNEL) {
-                HighwayDetectorBridge.ScanResult tunnel = scan.get();
-                surface = HighwayDetectorBridge.Surface.TUNNEL;
-                verifiedFloorY = tunnel.floorY();
-                verifiedWidth = tunnel.width();
-                LOGGER.info("[Travel] integrity switched to unpaved tunnel floorY={} width={} conf={}",
-                        tunnel.floorY(), tunnel.width(),
-                        String.format("%.2f", tunnel.blockConfidence()));
+            // Scan inside the suspect section first. A scan centred on the
+            // pavement boundary includes too little of the new surface to pass
+            // the detector's continuity threshold.
+            int[] probes = {Math.min(sampleLimit, probeStep + 12), Math.max(1, probeStep)};
+            for (int step : probes) {
+                BlockPos probe = new BlockPos(
+                        ox + travelDx * step, playerPos.getY(), oz + travelDz * step);
+                Optional<HighwayDetectorBridge.ScanResult> scan =
+                        bridge.scanAt(probe, highway.axis);
+                if (scan.isEmpty() || scan.get().surface() == HighwayDetectorBridge.Surface.PAVED) {
+                    continue;
+                }
+                HighwayDetectorBridge.ScanResult unpaved = scan.get();
+                surface = unpaved.surface();
+                verifiedFloorY = unpaved.floorY();
+                verifiedWidth = unpaved.width();
+                floorTransitionProjection = findFloorTransitionProjection(
+                        ox, oz, sampleLimit, unpaved);
+                LOGGER.info("[Travel] integrity switched to unpaved {} floorY={} width={} conf={}",
+                        unpaved.surface(), unpaved.floorY(), unpaved.width(),
+                        String.format("%.2f", unpaved.blockConfidence()));
                 return sample(playerPos);
             }
         }
@@ -206,5 +234,20 @@ public final class HighwayVerifier {
         }
         return new IntegrityReport(IntegrityReport.Status.OK, confidence,
                 total, griefed, unloaded, -1, -1);
+    }
+
+    private long findFloorTransitionProjection(int ox, int oz, int sampleLimit,
+                                               HighwayDetectorBridge.ScanResult unpaved) {
+        for (int step = 1; step <= sampleLimit; step++) {
+            int x = ox + travelDx * step;
+            int z = oz + travelDz * step;
+            if (bridge.checkFloorOnly(x, highway.floorY, z) == HighwayDetectorBridge.CellStatus.OK
+                    || bridge.checkTunnelCorridor(x, unpaved.floorY(), z, highway.axis,
+                            unpaved.width()) != HighwayDetectorBridge.CellStatus.OK) {
+                continue;
+            }
+            return (long) x * travelDx + (long) z * travelDz;
+        }
+        return (long) ox * travelDx + (long) oz * travelDz;
     }
 }

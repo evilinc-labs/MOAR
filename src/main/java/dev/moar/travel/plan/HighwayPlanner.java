@@ -404,7 +404,7 @@ public final class HighwayPlanner {
                 scan.map(HighwayDetectorBridge.ScanResult::width).orElse(0),
                 scan.map(HighwayDetectorBridge.ScanResult::hasLeftRail).orElse(false),
                 scan.map(HighwayDetectorBridge.ScanResult::hasRightRail).orElse(false),
-                scan.map(result -> result.surface() == HighwayDetectorBridge.Surface.TUNNEL)
+                scan.map(result -> result.surface() != HighwayDetectorBridge.Surface.PAVED)
                         .orElse(false));
 
         int[] travelDir = travelDirection(best, point(primary.entry), point(primary.exit));
@@ -420,7 +420,7 @@ public final class HighwayPlanner {
                     primary.axis, primary.category, primary.floorY, directionalEntry, primary.exit, primary.confidence,
                     primary.ringOrDiamondDist, primary.ringSide, primary.diamondSegment,
                     primary.width, primary.hasLeftRail, primary.hasRightRail,
-                    primary.unpavedTunnel);
+                    primary.unpavedCorridor);
         }
 
         List<HighwayRoute.Leg> legs = new ArrayList<>();
@@ -687,6 +687,13 @@ public final class HighwayPlanner {
         if (originRing == 0 || destinationRing <= originRing
                 || isWithinSafeRing(origin) || isWithinSafeRing(destination)) return null;
 
+        RoutePlan diagonal = buildDiagonalTwoRingTransferRoute(
+                origin, destination, opts, floorY, originHighway, originRing, destinationRing);
+        if (diagonal != null && (!inspectRouteSafety(origin, diagonal).safe()
+                || hasExcessiveFlightLeg(origin, diagonal.legs()))) {
+            diagonal = null;
+        }
+
         BlockPos transfer = Math.abs(destination.getZ()) >= Math.abs(destination.getX())
                 ? new BlockPos(0, floorY, Integer.signum(destination.getZ()) * originRing)
                 : new BlockPos(Integer.signum(destination.getX()) * originRing, floorY, 0);
@@ -695,7 +702,7 @@ public final class HighwayPlanner {
         RoutePlan destinationRingRoute = buildSafeRingRoute(transfer, destination, opts,
                 floorY, null, destinationRing, true, false);
         if (ingressRing == null || destinationRingRoute == null
-                || ingressRing.legs().isEmpty() || destinationRingRoute.legs().isEmpty()) return null;
+                || ingressRing.legs().isEmpty() || destinationRingRoute.legs().isEmpty()) return diagonal;
 
         List<HighwayRoute.Leg> legs = new ArrayList<>(ingressRing.legs());
         HighwayRoute.Leg previous = legs.get(legs.size() - 1);
@@ -708,9 +715,58 @@ public final class HighwayPlanner {
                     transfer, second.travelDx(), second.travelDz())));
         }
         legs.addAll(destinationRingRoute.legs());
-        return new RoutePlan(ingressRing.primary(), legs,
+        RoutePlan cardinal = new RoutePlan(ingressRing.primary(), legs,
                 ingressRing.totalCost() + destinationRingRoute.totalCost(),
                 ingressRing.travelDx(), ingressRing.travelDz());
+        if (!inspectRouteSafety(origin, cardinal).safe()
+                || hasExcessiveFlightLeg(origin, cardinal.legs())) return diagonal;
+        return diagonal != null && diagonal.totalCost() < cardinal.totalCost() ? diagonal : cardinal;
+    }
+
+    private RoutePlan buildDiagonalTwoRingTransferRoute(BlockPos origin,
+                                                        BlockPos destination,
+                                                        Options opts,
+                                                        int floorY,
+                                                        OriginHighway originHighway,
+                                                        int originRing,
+                                                        int destinationRing) {
+        int xSign = Integer.compare(destination.getX(), 0);
+        int zSign = Integer.compare(destination.getZ(), 0);
+        if (xSign == 0 || zSign == 0) return null;
+
+        BlockPos innerCorner = new BlockPos(xSign * originRing, floorY, zSign * originRing);
+        BlockPos outerCorner = new BlockPos(xSign * destinationRing, floorY, zSign * destinationRing);
+        RoutePlan innerRing = buildSafeRingRoute(origin, innerCorner, opts,
+                floorY, originHighway, originRing, true, true);
+        RoutePlan outerRing = buildSafeRingRoute(outerCorner, destination, opts,
+                floorY, null, destinationRing, true, true);
+        if (innerRing == null || outerRing == null || outerRing.legs().isEmpty()) return null;
+
+        HighwayCandidate.Axis diagonalAxis = xSign == zSign
+                ? (xSign > 0 ? HighwayCandidate.Axis.DIAG_PX_PZ : HighwayCandidate.Axis.DIAG_MX_MZ)
+                : (xSign > 0 ? HighwayCandidate.Axis.DIAG_PX_MZ : HighwayCandidate.Axis.DIAG_MX_PZ);
+        BlockPos diagonalEntry = directionalAnchor(innerCorner, xSign, zSign);
+        HighwayCandidate diagonalHighway = syntheticCandidate(
+                diagonalAxis, HighwayCandidate.Category.DIAGONAL, floorY,
+                diagonalEntry, outerCorner, null, 0.0);
+        List<HighwayRoute.Leg> legs = new ArrayList<>(innerRing.legs());
+        appendBounceLeg(legs, diagonalHighway, xSign, zSign);
+
+        HighwayRoute.Leg firstOuterLeg = outerRing.legs().get(0);
+        if (firstOuterLeg instanceof HighwayRoute.BounceLeg bounce
+                && (bounce.travelDx() != xSign || bounce.travelDz() != zSign)) {
+            legs.add(new HighwayRoute.TurnLeg(directionalAnchor(
+                    outerCorner, bounce.travelDx(), bounce.travelDz())));
+        }
+        legs.addAll(outerRing.legs());
+        HighwayCandidate primary = innerRing.legs().isEmpty() ? diagonalHighway : innerRing.primary();
+        int primaryDx = innerRing.legs().isEmpty() ? xSign : innerRing.travelDx();
+        int primaryDz = innerRing.legs().isEmpty() ? zSign : innerRing.travelDz();
+        double diagonalLength = HighwayGeometry.horizontalDistance(
+                diagonalEntry.getX(), diagonalEntry.getZ(), outerCorner.getX(), outerCorner.getZ());
+        return new RoutePlan(primary, legs,
+                innerRing.totalCost() + diagonalLength + outerRing.totalCost(),
+                primaryDx, primaryDz);
     }
 
     private RoutePlan buildRingTransferRoute(BlockPos origin,
@@ -757,7 +813,7 @@ public final class HighwayPlanner {
                 originEntry, originJunction, originHighway.scan().blockConfidence(),
                 0.0, null, null, originHighway.scan().width(),
                 originHighway.scan().hasLeftRail(), originHighway.scan().hasRightRail(),
-                originHighway.scan().surface() == HighwayDetectorBridge.Surface.TUNNEL);
+                originHighway.scan().surface() != HighwayDetectorBridge.Surface.PAVED);
         if (HighwayGeometry.horizontalDistance(
                 originEntry.getX(), originEntry.getZ(), originJunction.getX(), originJunction.getZ()) > 2.0) {
             appendBounceLeg(legs, primary, originDir[0], originDir[1]);
@@ -960,9 +1016,9 @@ public final class HighwayPlanner {
                 best = new OriginHighway(axis, result);
             }
         }
-        if (best != null && best.scan().surface() == HighwayDetectorBridge.Surface.TUNNEL) {
-            LOGGER.info("[Travel] detected unpaved tunnel highway axis={} floorY={} width={} conf={}",
-                    best.axis(), best.scan().floorY(), best.scan().width(),
+        if (best != null && best.scan().surface() != HighwayDetectorBridge.Surface.PAVED) {
+            LOGGER.info("[Travel] detected unpaved highway axis={} surface={} floorY={} width={} conf={}",
+                    best.axis(), best.scan().surface(), best.scan().floorY(), best.scan().width(),
                     String.format("%.2f", best.scan().blockConfidence()));
         }
         return best;
