@@ -7,6 +7,7 @@
     <img src="https://img.shields.io/github/downloads/evilinc-labs/MOAR/total" alt="GitHub Downloads">
     <img src="https://img.shields.io/github/contributors/evilinc-labs/MOAR?color=blue" alt="GitHub Contributors">
     <img src="https://img.shields.io/github/stars/evilinc-labs/MOAR" alt="GitHub Repo Stars">
+    <a href="https://github.com/evilinc-labs/MOAR"><img src="https://img.shields.io/badge/GitHub-Repository-181717?logo=github&logoColor=white" alt="View MOAR on GitHub"></a>
     <a href="https://discord.gg/D6nrkMGybA"><img src="https://img.shields.io/badge/Discord-Join-5865F2?logo=discord&logoColor=white" alt="Join the MOAR Discord"></a>
     <a href="https://buymeacoffee.com/poseidonscave"><img src="https://img.shields.io/badge/Buy%20Me%20a%20Coffee-Support-FFDD00?logo=buymeacoffee&logoColor=black" alt="Support MOAR on Buy Me a Coffee"></a>
     <img src="https://img.shields.io/github/license/evilinc-labs/MOAR" alt="GitHub License">
